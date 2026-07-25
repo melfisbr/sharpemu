@@ -1513,7 +1513,6 @@ public sealed partial class DirectExecutionBackend
 		// wake another cooperative thread, but the scheduler drain is independent
 		// of the caller's import-boundary bookkeeping.
 		return nid is
-			"tn3VlD0hG60" or // scePthreadMutexUnlock
 			"2Z+PpY6CaJg" or // pthread_mutex_unlock
 			"EgmLo6EWgso" or // scePthreadRwlockUnlock
 			"+L98PIbGttk" or // pthread_rwlock_unlock

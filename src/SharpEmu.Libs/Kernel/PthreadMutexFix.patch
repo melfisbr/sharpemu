@@ -1,0 +1,21 @@
+# Fix for scePthreadMutexUnlock stub incorrectly marked as leaf operation
+#
+# Root cause: The ELF from libKernel only exports pthread_mutex_unlock (NID: 2Z+PpY6CaJg),
+# NOT scePthreadMutexUnlock (NID: tn3VlD0hG60). However, DirectExecutionBackend.Imports.cs
+# incorrectly listed "tn3VlD0hG60" in the IsLeafImport check.
+#
+# This causes the import stub to return early without properly resolving the symbol via
+# dlsym when scePthreadMutexUnlock is called, resulting in a stall/import loop error.
+
+diff --git a/src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs b/src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs
+index ****..**** 100644 100644
+--- a/src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs
++++ b/src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs
+@@ -1513,7 +1513,6 @@ namespace SharpEmu.Core.Cpu.Native
+ 		// wake another cooperative thread, but the scheduler drain is independent
+ 		// of the caller's import-boundary bookkeeping.
+ 		return nid is
+-			"tn3VlD0hG60" or // scePthreadMutexUnlock - NOT EXPORTED BY ELF
+ 			"2Z+PpY6CaJg" or // pthread_mutex_unlock
+ 			"EgmLo6EWgso" or // scePthreadRwlockUnlock
+
