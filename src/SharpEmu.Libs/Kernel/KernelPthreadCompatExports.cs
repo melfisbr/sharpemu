@@ -1006,10 +1006,10 @@ public static class KernelPthreadCompatExports
 
             if (state.TryReleaseUncontended(currentThreadId))
             {
-                if (state.QueuedWaiterCount != 0)
-                {
-                    WakeFirstMutexWaiter(state);
-                }
+                // Always wake the first waiter after release, regardless of recursion count.
+                // If there are waiters but owner becomes 0 (e.g. single-owner unlock), this
+                // wakes a waiter instead of leaving them hanging forever in WaitForHostMutexLock.
+                WakeFirstMutexWaiter(state);
 
                 TracePthreadMutex(ctx, "unlock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_OK);
                 return (int)OrbisGen2Result.ORBIS_GEN2_OK;
@@ -1062,8 +1062,8 @@ public static class KernelPthreadCompatExports
                             nextWaiterToWake.HostSignal!.Set();
                         }
 
-                        // If grant succeeded, waiter is removed from Waiters chain.
-                        Debug.Assert(state.Waiters.Count == 0);
+                        // TryGrantMutexWaiterLocked already removed the waiter from the queue
+                        // and incremented the owner count. No additional removal needed.
                     }
                     else if (state.OwnerThreadId == 0 && state.Waiters.Count > 0)
                     {
@@ -1076,8 +1076,14 @@ public static class KernelPthreadCompatExports
                         // Drain spurious waiters - remove from head until we find one that
                         // can advance or queue is empty. After grant failed, headNode may
                         // no longer be valid, so re-evaluate the new head.
-                        while (state.Waiters.Count > 0)
+                        while (true)
                         {
+                            if (state.Waiters.Count == 0)
+                            {
+                                // Queue is empty - nothing to drain
+                                break;
+                            }
+
                             var currentHead = state.Waiters.First;
                             if (!ReferenceEquals(currentHead, headNode))
                             {
@@ -1615,10 +1621,14 @@ public static class KernelPthreadCompatExports
             state.Waiters++;
             TracePthreadCond("wait-enter", condAddress, mutexAddress, state, timed, (int)OrbisGen2Result.ORBIS_GEN2_OK);
 
+            // Remove from cond queue before unlock to prevent waiter inconsistency.
+            // The waiter will be re-queued in CompleteCondWaiter when the mutex is reacquired.
+            RemoveCondWaiterLocked(state, waiter);
+            state.Waiters = Math.Max(0, state.Waiters - 1);
+
             var unlockResult = PthreadMutexUnlockCore(ctx, mutexAddress, requireOwner: true);
             if (unlockResult != (int)OrbisGen2Result.ORBIS_GEN2_OK)
             {
-                RemoveCondWaiterLocked(state, waiter);
                 TracePthreadCond("wait-unlock-fail", condAddress, mutexAddress, state, timed, unlockResult);
                 return unlockResult;
             }
@@ -1846,19 +1856,15 @@ public static class KernelPthreadCompatExports
         PthreadMutexWaiter? nextWaiter;
         lock (state.SyncRoot)
         {
-            if (state.OwnerThreadId != 0)
-            {
-                return;
-            }
-
-            // Double-check: waiter must still exist at head of queue
-            // and the mutex state is not in inconsistent state.
+            // Don't wake if there's no waiter at head of queue.
             nextWaiter = state.Waiters.First?.Value;
             if (nextWaiter is null)
             {
                 return;
             }
 
+            // Wake the waiter regardless of owner state. Owner might be 0 after unlock,
+            // or the waiter might already have been granted ownership by another path.
             if (nextWaiter is { Cooperative: false })
             {
                 nextWaiter.HostSignal!.Set();

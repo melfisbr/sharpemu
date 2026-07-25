@@ -6469,8 +6469,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			return nid is
 				"Op8TBGY5KHg" or // pthread_cond_wait
 				"27bAgiJmOh0" or // pthread_cond_timedwait
-				"fzyMKs9kim0" or // sceKernelWaitEqueue
-				"9UK1vLZQft4";   // scePthreadMutexLock/Unlock (DEMONS_SOULS)
+				"fzyMKs9kim0";   // sceKernelWaitEqueue
 		}
 
 		return false;

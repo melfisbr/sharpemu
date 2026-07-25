@@ -1397,6 +1397,9 @@ public sealed partial class DirectExecutionBackend
 			"a8uLzYY--tM" or // sceAmprAprCommandBufferConstructor
 			"Qs1xtplKo0U" or // sceAmprAprCommandBufferDestructor
 			"GuchCTefuZw" or // sceAmprCommandBufferDestructor
+			"NpMatchingSystemInitialize" or // Np matching system init stub
+			"NpMatchingSystemGetFriendsInfoListByUserType" or // Np matching get friends by type stub
+			"NpMatchingSystemGetFriendsInfoListByStatus" or // Np matching get friends by status stub
 			"N-FSPA4S3nI" or // sceAmprCommandBufferSetBuffer
 			"baQO9ez2gL4" or // sceAmprCommandBufferReset
 			"ULvXMDz56po" or // sceAmprCommandBufferClearBuffer
