@@ -4,7 +4,7 @@
 using System.Collections.Generic;
 using System.Linq;
 
-namespace SharpEmu.ShaderCompiler.Ir;
+namespace SharpEmu.ShaderCompiler.IR;
 
 public enum IrScalarState
 {

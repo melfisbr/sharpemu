@@ -1,9 +1,9 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Collections.Generic;
 using SharpEmu.ShaderCompiler;
-using SharpEmu.ShaderCompiler.Ir;
+using SharpEmu.ShaderCompiler.IR;
 using Xunit;
 
 namespace SharpEmu.ShaderCompiler.Tests;
@@ -31,6 +31,8 @@ public sealed class IrControlFlowTests
             targetPc = 0;
             return false;
         }
+
+        public bool Resolve(IRInstruction instruction) => false;
     }
 
     private static Gen5ShaderInstruction Instruction(uint pc) =>
@@ -125,3 +127,4 @@ public sealed class IrControlFlowTests
         Assert.Equal(2, cfg.Predecessors[merge].Count);
     }
 }
+

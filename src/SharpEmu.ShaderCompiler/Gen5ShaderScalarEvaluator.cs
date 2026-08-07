@@ -13,116 +13,118 @@ namespace SharpEmu.ShaderCompiler;
 
 public static class Gen5ShaderScalarEvaluator
 {
-    // When a scalar POINTER load can't be resolved statically (its descriptor
-    // register read back garbage — e.g. 0 or 0xFFFFFFFF, a per-draw descriptor
-    // setup race), abort-and-drop-the-draw loses the whole pass. Demon's Souls'
-    // deferred-lighting / composite pixel shaders hit this intermittently, so
-    // the passes that would produce the composite's feeder targets get dropped
-    // and the frame stays black. Degrading instead (feed 0, keep translating,
-    // like the buffer-load path already does) lets the pass render with the
-    // unresolved resource missing rather than not at all. STRICT reverts.
     private static readonly bool _strictScalarLoad =
         string.Equals(
             Environment.GetEnvironmentVariable("SHARPEMU_STRICT_SCALAR_LOAD"),
             "1",
             StringComparison.Ordinal);
 
-    // A stale buffer descriptor should not discard an otherwise valid shader
-    // pass.  Treat it as an all-zero buffer by default; callers that need
-    // strict diagnostics can restore the old failure behaviour explicitly.
     private static readonly bool _strictBufferLoad =
         string.Equals(
             Environment.GetEnvironmentVariable("SHARPEMU_STRICT_BUFFER_LOAD"),
             "1",
             StringComparison.Ordinal);
+
     private static readonly object _scalarFallbackTraceGate = new();
     private static readonly HashSet<(ulong Shader, uint Pc)> _tracedScalarFallbacks = [];
     private static readonly HashSet<(ulong Shader, uint Pc)> _tracedDivergentDescriptors = [];
-
-    private static readonly ConditionalWeakTable<Gen5ShaderProgram, Ir.Gen5ScalarSsa> _scalarSsaCache = [];
 
     private static readonly bool _divergentDescriptorGuard = !string.Equals(
         Environment.GetEnvironmentVariable("SHARPEMU_IR_DESCRIPTOR_GUARD"),
         "0",
         StringComparison.Ordinal);
 
-    private static Ir.Gen5ScalarSsa GetScalarSsa(Gen5ShaderState state) =>
-        _scalarSsaCache.GetValue(
-            state.Program,
-            program => Ir.Gen5ScalarSsa.Build(program.Instructions, state.UserData));
-
-    /// <summary>
-    /// The byte offset comes from an SGPR. When the instruction that produced that
-    /// register is one the scalar evaluator cannot reproduce — a vector compare
-    /// writing VCC, say, whose value depends on per-lane data — the register still
-    /// holds whatever the linear walk left in it. Adding that to an otherwise valid
-    /// base address is how descriptors turned into addresses far out of range.
-    /// </summary>
+    // The current ShaderCompiler keeps the decoded Gen5 model in this namespace
+    // and does not expose the experimental Gen5ScalarSsa/IrReachingState layer.
+    // Keep the descriptor guard functional with a conservative local analysis.
     private static bool IsOffsetFromUnmodelledWriter(
         Gen5ShaderState state,
         Gen5ShaderInstruction instruction,
         Gen5ScalarMemoryControl control)
     {
-        if (!_divergentDescriptorGuard || control.DynamicOffsetRegister is not { } offsetRegister)
+        if (!_divergentDescriptorGuard ||
+            control.DynamicOffsetRegister is not { } offsetRegister)
         {
             return false;
         }
 
-        var ssa = GetScalarSsa(state);
-        var reaching = ssa.GetReachingDefinitionAt(instruction.Pc, offsetRegister);
-        if (reaching.State == Ir.IrReachingState.Multiple)
+        for (var index = state.Program.Instructions.Count - 1; index >= 0; index--)
         {
-            return true;
+            var candidate = state.Program.Instructions[index];
+            if (candidate.Pc >= instruction.Pc)
+            {
+                continue;
+            }
+
+            var writesOffset = candidate.Destinations.Any(destination =>
+                destination.Kind == Gen5OperandKind.ScalarRegister &&
+                destination.Value == offsetRegister);
+            if (!writesOffset)
+            {
+                continue;
+            }
+
+            return WritesVccImplicitly(candidate);
         }
 
-        if (reaching.State != Ir.IrReachingState.Single ||
-            reaching.DefinitionPc == uint.MaxValue)
-        {
-            return false;
-        }
-
-        var writer = state.Program.Instructions
-            .FirstOrDefault(candidate => candidate.Pc == reaching.DefinitionPc);
-        return writer is not null && Ir.Gen5ScalarSsa.WritesVccImplicitly(writer);
+        return false;
     }
 
-    /// <summary>
-    /// A descriptor assembled from registers that differ per incoming path is not a
-    /// descriptor, it is whichever path the linear walk happened to take last.
-    /// </summary>
     private static bool IsDescriptorFromDivergentMerge(
         Gen5ShaderState state,
         uint pc,
         uint scalarBase,
         uint registerCount)
     {
-        if (!_divergentDescriptorGuard)
+        if (!_divergentDescriptorGuard || registerCount == 0)
         {
             return false;
         }
 
-        var ssa = GetScalarSsa(state);
-        if (!ssa.Graph.HasControlFlow)
+        // Without the experimental SSA graph, detect the unsafe case that can be
+        // established locally: the same descriptor SGPR has distinct reaching
+        // writers in different regions before the use. This intentionally avoids
+        // rejecting ordinary sequential rewrites in straight-line code.
+        var hasControlFlow = state.Program.Instructions.Any(candidate =>
+            candidate.Pc < pc &&
+            candidate.Encoding == Gen5ShaderEncoding.Sopp &&
+            candidate.Opcode.Contains("Branch", StringComparison.Ordinal));
+        if (!hasControlFlow)
         {
             return false;
         }
 
         for (var offset = 0u; offset < registerCount; offset++)
         {
-            var reaching = ssa.GetReachingDefinitionAt(pc, scalarBase + offset);
-            if (reaching.State == Ir.IrReachingState.Multiple)
+            var register = scalarBase + offset;
+            var writerCount = 0;
+            foreach (var candidate in state.Program.Instructions)
             {
-                return true;
-            }
+                if (candidate.Pc >= pc)
+                {
+                    break;
+                }
 
-            if (ssa.GetScalarAt(pc, scalarBase + offset).State == Ir.IrScalarState.Merged)
-            {
-                return true;
+                if (candidate.Destinations.Any(destination =>
+                        destination.Kind == Gen5OperandKind.ScalarRegister &&
+                        destination.Value == register))
+                {
+                    writerCount++;
+                    if (writerCount > 1)
+                    {
+                        return true;
+                    }
+                }
             }
         }
 
         return false;
     }
+
+    private static bool WritesVccImplicitly(Gen5ShaderInstruction instruction) =>
+        instruction.Opcode.StartsWith("VCmp", StringComparison.Ordinal) ||
+        instruction.Opcode.StartsWith("VCmpx", StringComparison.Ordinal) ||
+        instruction.Opcode.Contains("Vcc", StringComparison.OrdinalIgnoreCase);
 
     private static void TraceDivergentDescriptor(
         Gen5ShaderState state,
@@ -133,9 +135,7 @@ public static class Gen5ShaderScalarEvaluator
         lock (_scalarFallbackTraceGate)
         {
             if (!_tracedDivergentDescriptors.Add((state.Program.Address, instruction.Pc)))
-            {
                 return;
-            }
         }
 
         Console.Error.WriteLine(
@@ -144,46 +144,28 @@ public static class Gen5ShaderScalarEvaluator
             $"op={instruction.Opcode} base=s{scalarBase} " +
             $"linear_base_addr=0x{baseAddress:X16} (unbound instead of dereferenced)");
     }
-    // Shaders whose empty SRT/EUD caused a null-base scalar pointer load.
-    // Host submit of those translations has lost the Vulkan device; Agc skips
-    // them before QueueSubmit.
-    private static readonly ConcurrentDictionary<ulong, byte> _emptySrtScalarPointerFallbacks =
-        new();
+
+    private static readonly ConcurrentDictionary<ulong, byte> _emptySrtScalarPointerFallbacks = new();
 
     public static bool WasEmptySrtScalarPointerFallback(ulong shaderAddress) =>
         _emptySrtScalarPointerFallbacks.ContainsKey(shaderAddress);
 
-    // Uniform forward branches select material/resource bodies that remain
-    // statically present in the translated shader. Discover the skipped body's
-    // descriptors by default; SHARPEMU_CFG_RESOURCE_DISCOVERY=0 is a diagnostic
-    // opt-out. Conditional branches are deliberately not forked because their
-    // fall-through is already scanned and forking vector-mask conditions grows
-    // exponentially without adding descriptor coverage.
     private static readonly bool _cfgResourceDiscovery =
         !string.Equals(
             Environment.GetEnvironmentVariable("SHARPEMU_CFG_RESOURCE_DISCOVERY"),
             "0",
             StringComparison.Ordinal);
 
-    /// <summary>
-    /// Optional fallback for global-memory reads that ctx.Memory cannot satisfy (the
-    /// emulator installs the HLE-tracked libc heap reader here at module load). Kept as
-    /// a hook so this project never depends on the HLE module implementations.
-    /// </summary>
     public static Gen5FallbackMemoryReader? FallbackMemoryReader { get; set; }
-
     public delegate bool Gen5FallbackMemoryReader(ulong baseAddress, Span<byte> destination);
 
-    /// <summary>
-    /// Pool used for large draw-time guest-memory snapshots. The HLE host installs
-    /// its bounded transfer pool; standalone compiler tools use the shared pool.
-    /// </summary>
     public static ArrayPool<byte> GlobalMemoryPool { get; set; } = ArrayPool<byte>.Shared;
 
     private const int ScalarRegisterCount = 256;
     private const int ImageDescriptorDwords = 8;
     private const int SamplerDescriptorDwords = 4;
     private const int MaxGlobalMemoryBindingBytes = 16 * 1024 * 1024;
+
     public static long GlobalMemoryReadCount;
     public static long GlobalMemoryReadBytes;
     public static long GlobalMemoryReadCacheHits;
@@ -223,9 +205,7 @@ public static class Gen5ShaderScalarEvaluator
         const ulong prime = 1099511628211UL;
         var hash = 14695981039346656037UL;
         foreach (var value in registers)
-        {
             hash = (hash ^ value) * prime;
-        }
 
         hash = (hash ^ execMask) * prime;
         return (hash ^ (scalarConditionCode ? 1UL : 0UL)) * prime;
@@ -1339,12 +1319,24 @@ public static class Gen5ShaderScalarEvaluator
 
         if (instruction.Opcode == "SMovkI32")
         {
+            if (instruction.Sources.Count == 0)
+            {
+                error = $"scalar-source0 pc=0x{instruction.Pc:X} op={instruction.Opcode} source=<missing>";
+                return false;
+            }
+
             registers[destination.Value] = unchecked((uint)(short)instruction.Sources[0].Value);
             return true;
         }
 
         if (instruction.Opcode is "SAddkI32" or "SMulkI32")
         {
+            if (instruction.Sources.Count == 0)
+            {
+                error = $"scalar-source0 pc=0x{instruction.Pc:X} op={instruction.Opcode} source=<missing>";
+                return false;
+            }
+
             var immediate = unchecked((uint)(short)instruction.Sources[0].Value);
             registers[destination.Value] = instruction.Opcode == "SAddkI32"
                 ? registers[destination.Value] + immediate
@@ -1501,6 +1493,7 @@ public static class Gen5ShaderScalarEvaluator
             "SXnorB64")
         {
             if (instruction.Sources.Count < 2 ||
+                destination.Value >= ScalarRegisterCount - 1 ||
                 !TryEvaluateScalarOperand64(
                     instruction.Sources[0],
                     registers,
@@ -1799,6 +1792,22 @@ public static class Gen5ShaderScalarEvaluator
                 return false;
             }
 
+            if (instruction.Opcode is not (
+                "SAndSaveexecB32" or
+                "SOrSaveexecB32" or
+                "SXorSaveexecB32" or
+                "SAndn1SaveexecB32" or
+                "SAndn2SaveexecB32" or
+                "SOrn1SaveexecB32" or
+                "SOrn2SaveexecB32" or
+                "SNandSaveexecB32" or
+                "SNorSaveexecB32" or
+                "SXnorSaveexecB32"))
+            {
+                error = $"unsupported-saveexec32 pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+                return false;
+            }
+
             var oldExec32 = (uint)execMask;
             var newExec32 = instruction.Opcode switch
             {
@@ -1979,7 +1988,7 @@ public static class Gen5ShaderScalarEvaluator
             return true;
         }
 
-        scalarConditionCode = instruction.Opcode switch
+        bool? comparison = instruction.Opcode switch
         {
             "SCmpEqI32" => (int)left == (int)right,
             "SCmpLgI32" => (int)left != (int)right,
@@ -1993,14 +2002,15 @@ public static class Gen5ShaderScalarEvaluator
             "SCmpGeU32" => left >= right,
             "SCmpLtU32" => left < right,
             "SCmpLeU32" => left <= right,
-            _ => false,
+            _ => null,
         };
-        if (!instruction.Opcode.StartsWith("SCmp", StringComparison.Ordinal))
+        if (!comparison.HasValue)
         {
             error = $"unsupported-scalar-compare pc=0x{instruction.Pc:X} op={instruction.Opcode}";
             return false;
         }
 
+        scalarConditionCode = comparison.Value;
         return true;
     }
 
@@ -2023,9 +2033,15 @@ public static class Gen5ShaderScalarEvaluator
             return false;
         }
 
+        if (instruction.Sources.Count == 0)
+        {
+            error = $"scalar-comparek-source pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+            return false;
+        }
+
         var left = registers[destination.Value];
         var right = unchecked((uint)(short)instruction.Sources[0].Value);
-        scalarConditionCode = instruction.Opcode switch
+        bool? comparison = instruction.Opcode switch
         {
             "SCmpkEqI32" => (int)left == (int)right,
             "SCmpkLgI32" => (int)left != (int)right,
@@ -2039,14 +2055,15 @@ public static class Gen5ShaderScalarEvaluator
             "SCmpkGeU32" => left >= right,
             "SCmpkLtU32" => left < right,
             "SCmpkLeU32" => left <= right,
-            _ => false,
+            _ => null,
         };
-        if (!instruction.Opcode.StartsWith("SCmpk", StringComparison.Ordinal))
+        if (!comparison.HasValue)
         {
             error = $"unsupported-scalar-comparek pc=0x{instruction.Pc:X} op={instruction.Opcode}";
             return false;
         }
 
+        scalarConditionCode = comparison.Value;
         return true;
     }
 
@@ -2135,7 +2152,7 @@ public static class Gen5ShaderScalarEvaluator
                 dynamicOffset);
         }
         var bufferSize = ulong.MaxValue;
-        if (recordBinding && isBufferLoad)
+        if (recordBinding && isBufferLoad && hasBufferDescriptor && !bufferUnbound)
         {
             bufferSize = hasBufferDescriptor ? bufferDescriptor.SizeBytes : ulong.MaxValue;
 
@@ -2170,7 +2187,7 @@ public static class Gen5ShaderScalarEvaluator
                 globalMemoryBindings.Add(binding);
             }
         }
-        else if (recordBinding && baseAddress != 0)
+        else if (recordBinding && !isBufferLoad && baseAddress != 0)
         {
             var key = (scalarBase.Value, baseAddress);
             if (globalMemoryByAddress.TryGetValue(key, out var existingBinding))

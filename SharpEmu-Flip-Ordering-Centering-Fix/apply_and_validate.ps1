@@ -1,0 +1,60 @@
+param(
+    [Parameter(Mandatory = $false)]
+    [string]$RepositoryRoot = (Get-Location).Path
+)
+
+$ErrorActionPreference = "Stop"
+$packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repo = (Resolve-Path $RepositoryRoot).Path
+$relative = "src\SharpEmu.Libs\VideoOut\VulkanVideoPresenter.cs"
+$source = Join-Path $packageRoot $relative
+$destination = Join-Path $repo $relative
+$stamp = Get-Date -Format "yyyy-MM-dd-HHmmss"
+$backup = Join-Path $repo "artifacts\backup-flip-order-$stamp\$relative"
+
+if (-not (Test-Path -LiteralPath $source)) {
+    throw "Arquivo do pacote nao encontrado: $source"
+}
+if (-not (Test-Path -LiteralPath $destination)) {
+    throw "Arquivo do repositorio nao encontrado: $destination"
+}
+
+New-Item -ItemType Directory -Force `
+    -Path (Split-Path -Parent $backup) | Out-Null
+Copy-Item -LiteralPath $destination -Destination $backup -Force
+Copy-Item -LiteralPath $source -Destination $destination -Force
+
+$requiredTokens = @(
+    "_orderedGuestFlipWorkSequences",
+    "work is VulkanOrderedGuestFlipWait flipWait",
+    "_orderedGuestFlipWorkSequences[version] = workSequence"
+)
+foreach ($token in $requiredTokens) {
+    if (-not (Select-String -LiteralPath $destination -SimpleMatch $token)) {
+        throw "Verificacao falhou; token ausente: $token"
+    }
+}
+
+Get-Process SharpEmu -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
+$cli = Join-Path $repo "src\SharpEmu.CLI\SharpEmu.CLI.csproj"
+Write-Host "Compilando o runtime..."
+dotnet build $cli -c Debug -r win-x64 --no-incremental
+if ($LASTEXITCODE -ne 0) {
+    throw "Falha no build do CLI."
+}
+
+$tests = Join-Path $repo `
+    "tests\SharpEmu.Libs.Tests\SharpEmu.Libs.Tests.csproj"
+if (Test-Path -LiteralPath $tests) {
+    Write-Host "Executando SharpEmu.Libs.Tests..."
+    dotnet test $tests -c Debug --no-restore
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha nos testes de Libs."
+    }
+}
+
+Write-Host ""
+Write-Host "Correcao de ordenacao Flip/Wait aplicada."
+Write-Host "Backup: $backup"

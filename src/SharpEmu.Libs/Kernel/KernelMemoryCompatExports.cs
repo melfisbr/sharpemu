@@ -2485,16 +2485,30 @@ public static partial class KernelMemoryCompatExports
 
         if (fd == 1 || fd == 2)
         {
-            var text = Encoding.UTF8.GetString(payload);
-            if (fd == 1)
+            // Do not explicitly flush the process-wide Console writers here.
+            // Console.Out/Error use global synchronized writers; flushing them
+            // from a native guest worker can wait behind diagnostic output from
+            // the watchdog or another worker and leave the guest parked inside
+            // the import stub. The write itself preserves normal console output,
+            // while the host/runtime owns the eventual stream flush.
+            try
             {
-                Console.Out.Write(text);
-                Console.Out.Flush();
+                var text = Encoding.UTF8.GetString(payload);
+                if (fd == 1)
+                {
+                    Console.Out.Write(text);
+                }
+                else
+                {
+                    Console.Error.Write(text);
+                }
             }
-            else
+            catch (IOException)
             {
-                Console.Error.Write(text);
-                Console.Error.Flush();
+                return PosixFailure(
+                    ctx,
+                    (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT,
+                    notFoundErrno: Ebadf);
             }
 
             ctx[CpuRegister.Rax] = unchecked((ulong)requested);
