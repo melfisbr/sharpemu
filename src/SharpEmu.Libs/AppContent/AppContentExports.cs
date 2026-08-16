@@ -146,6 +146,28 @@ public static class AppContentExports
 
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+    // SHARPEMU_DBFZ_APPCONTENT_TEMP_SPACE_V1_6_1
+    // Dragon Ball FighterZ imports this Gen5 libSceAppContent capacity query.
+    // The existing DownloadData capacity path already owns the emulator's
+    // writable-space policy and output ABI. Reuse it rather than fabricating a
+    // second capacity or writing an assumed pointer manually.
+    [SysAbiExport(
+        Nid = "SaKib2Ug0yI",
+        ExportName = "sceAppContentTemporaryDataGetAvailableSpaceKb",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceAppContent")]
+    public static int AppContentTemporaryDataGetAvailableSpaceKb(CpuContext ctx)
+    {
+        var rdi = ctx[CpuRegister.Rdi];
+        var rsi = ctx[CpuRegister.Rsi];
+        var rdx = ctx[CpuRegister.Rdx];
+        var result = AppContentDownloadDataGetAvailableSpaceKb(ctx);
+        Console.Error.WriteLine(
+            $"[LOADER][TRACE] appcontent.temp_available_space_kb " +
+            $"rdi=0x{rdi:X16} rsi=0x{rsi:X16} rdx=0x{rdx:X16} " +
+            $"result=0x{unchecked((uint)result):X8} rax=0x{ctx[CpuRegister.Rax]:X16}");
+        return result;
     }
 
     private static bool TryReadUserDefinedParam(uint paramId, out int value)

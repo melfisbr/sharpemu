@@ -1,0 +1,6 @@
+﻿22.7s main_loop guest_seconds=17.3391
+22.7s first_guest_frame size=3840x2160
+29.1s array_baseline logged=1
+35.4s stale_source_refresh count=1
+74.5s stale_source_refresh count=3
+94.4s stale_source_refresh count=4

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
@@ -98,7 +98,7 @@ public static class Ngs2Exports
     // The only signature difference is the caller-supplied buffer info in rsi
     // (vs an allocator callback); the system option (rdi) and out-handle (rdx)
     // sit at the same argument positions, so we reuse the same implementation.
-    // Dead Cells uses these variants — leaving sceNgs2SystemCreate unresolved
+    // Dead Cells uses these variants â€” leaving sceNgs2SystemCreate unresolved
     // gave the game a garbage system handle, so every later rack/voice call
     // failed and it polled sceNgs2VoiceGetState forever, freezing at FLIP 0.
     [SysAbiExport(
@@ -330,7 +330,7 @@ public static class Ngs2Exports
             if (Voices.TryGetValue(voiceHandle, out var existing) &&
                 existing.SourceAddr == dataAddr && existing.Pcm is not null)
             {
-                // Same waveform already armed — don't restart it every frame.
+                // Same waveform already armed â€” don't restart it every frame.
                 return;
             }
         }
@@ -516,7 +516,7 @@ public static class Ngs2Exports
 
                 // SceNgs2RenderBufferInfo: {ptr@0, size@8, waveformType@16,
                 // channelsCount@20}. Mix the armed voices into the leading grain
-                // as interleaved float32 — this is what the game copies to
+                // as interleaved float32 â€” this is what the game copies to
                 // sceAudioOutOutput, so it is where NGS2 audio must appear.
                 var channels = 2;
                 if (ctx.TryReadUInt32(entryAddress + 20, out var declaredChannels) &&
@@ -938,4 +938,123 @@ public static class Ngs2Exports
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libSceNgs2")]
     public static int Ngs2GeomResetListenerParam(CpuContext ctx) => ctx.SetReturn(0);
+
+// SHARPEMU_DBFZ_NGS2_PARTIAL_V1_8_12_3 AQkj7C0f3PY
+    [SysAbiExport(Nid = "AQkj7C0f3PY", ExportName = "sceNgs2SystemResetOption", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNgs2")]
+    public static int Ngs2SystemResetOptionV18123(CpuContext ctx)
+    {
+        var optionAddress = ctx[CpuRegister.Rdi];
+        if (optionAddress == 0) return ctx.SetReturn(unchecked((int)0x80020016));
+        Span<byte> probe = stackalloc byte[1];
+        if (!ctx.Memory.TryRead(optionAddress, probe)) return ctx.SetReturn(unchecked((int)0x8002000E));
+        return ctx.SetReturn(0);
+    }
+    // SHARPEMU_DBFZ_NGS2_PARSE_WAVEFORM_ABI_PROBE_V1_8_13_1
+    private static long _dbfzV18131ParseWaveformProbeCount;
+
+    [SysAbiExport(
+        Nid = "hyVLT2VlOYk",
+        ExportName = "sceNgs2ParseWaveformData",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceNgs2")]
+    public static int Ngs2ParseWaveformDataV18131(CpuContext ctx)
+    {
+        var dataAddress = ctx[CpuRegister.Rdi];
+        var dataSize = ctx[CpuRegister.Rsi];
+        var outputAddress = ctx[CpuRegister.Rdx];
+        var arg3 = ctx[CpuRegister.Rcx];
+        var arg4 = ctx[CpuRegister.R8];
+        var arg5 = ctx[CpuRegister.R9];
+
+        var call = Interlocked.Increment(ref _dbfzV18131ParseWaveformProbeCount);
+        var shouldDump = call <= 16 || (call & (call - 1)) == 0;
+
+        Span<byte> inputHead = stackalloc byte[64];
+        Span<byte> outputBefore = stackalloc byte[96];
+        inputHead.Clear();
+        outputBefore.Clear();
+
+        var readLength = dataSize > (ulong)inputHead.Length ? inputHead.Length : (int)dataSize;
+        var inputReadable = dataAddress > 0x10000 && readLength > 0 &&
+                            ctx.Memory.TryRead(dataAddress, inputHead[..readLength]);
+        var outputReadable = outputAddress > 0x10000 &&
+                             ctx.Memory.TryRead(outputAddress, outputBefore);
+
+        var isVag = inputReadable && readLength >= Ngs2VagDecoder.VagHeaderSize &&
+                    Ngs2VagDecoder.IsVag(inputHead);
+        uint vagDeclaredBytes = 0;
+        uint vagSampleRate = 0;
+        if (isVag && readLength >= 0x14)
+        {
+            vagDeclaredBytes = BinaryPrimitives.ReadUInt32BigEndian(inputHead[0x0C..0x10]);
+            vagSampleRate = BinaryPrimitives.ReadUInt32BigEndian(inputHead[0x10..0x14]);
+        }
+
+        if (shouldDump)
+        {
+            Console.Error.WriteLine(
+                $"[DBFZ-NGS2-18131][PARSE] call={call} data=0x{dataAddress:X16} size=0x{dataSize:X} out=0x{outputAddress:X16} " +
+                $"rcx=0x{arg3:X16} r8=0x{arg4:X16} r9=0x{arg5:X16} input_read={inputReadable} out_read={outputReadable} " +
+                $"vag={isVag} vag_bytes=0x{vagDeclaredBytes:X} vag_rate={vagSampleRate} " +
+                $"in_head={Convert.ToHexString(inputHead)} out_before={Convert.ToHexString(outputBefore)}");
+        }
+
+        if (outputAddress == 0 || !outputReadable)
+        {
+            return SetReturn(ctx, OrbisNgs2ErrorInvalidOutAddress);
+        }
+
+                // SHARPEMU_DBFZ_RIFF_ATRAC9_PRESERVE_V1_8_15_1_1
+        // DBFZ supplies RIFF/WAVE_EXTENSIBLE ATRAC9. The caller already
+        // initializes the 0x240 output descriptor, so preserve it verbatim.
+        if (string.Equals(
+                SharpEmu.Libs.Kernel.KernelMemoryCompatExports.CurrentApplicationTitleId,
+                "PPSA09790",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Span<byte> riff = stackalloc byte[68];
+            if (dataAddress != 0 &&
+                dataSize >= 68 &&
+                ctx.Memory.TryRead(dataAddress, riff) &&
+                riff[0] == (byte)'R' && riff[1] == (byte)'I' &&
+                riff[2] == (byte)'F' && riff[3] == (byte)'F' &&
+                riff[8] == (byte)'W' && riff[9] == (byte)'A' &&
+                riff[10] == (byte)'V' && riff[11] == (byte)'E')
+            {
+                var formatTag = BinaryPrimitives.ReadUInt16LittleEndian(riff[20..22]);
+                var channels = BinaryPrimitives.ReadUInt16LittleEndian(riff[22..24]);
+                var sampleRate = BinaryPrimitives.ReadUInt32LittleEndian(riff[24..28]);
+                var blockAlign = BinaryPrimitives.ReadUInt16LittleEndian(riff[32..34]);
+                var bitsPerSample = BinaryPrimitives.ReadUInt16LittleEndian(riff[34..36]);
+                var cbSize = BinaryPrimitives.ReadUInt16LittleEndian(riff[36..38]);
+
+                var atrac9 =
+                    formatTag == 0xFFFE &&
+                    riff[44] == 0xD2 && riff[45] == 0x42 &&
+                    riff[46] == 0xE1 && riff[47] == 0x47 &&
+                    riff[48] == 0xBA && riff[49] == 0x36 &&
+                    riff[50] == 0x8D && riff[51] == 0x4D &&
+                    riff[52] == 0x88 && riff[53] == 0xFC &&
+                    riff[54] == 0x61 && riff[55] == 0x65 &&
+                    riff[56] == 0x4F && riff[57] == 0x8C &&
+                    riff[58] == 0x83 && riff[59] == 0x6C;
+
+                if (shouldDump)
+                {
+                    Console.Error.WriteLine(
+                        $"[DBFZ-NGS2-18151][RIFF] call={call} size=0x{dataSize:X} " +
+                        $"fmt=0x{formatTag:X4} ch={channels} rate={sampleRate} " +
+                        $"align={blockAlign} bits={bitsPerSample} cb={cbSize} " +
+                        $"atrac9={atrac9} out=0x{outputAddress:X16} preserved=1");
+                }
+
+                return SetReturn(ctx, 0);
+            }
+        }
+return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+    }
+
 }
+
+
+

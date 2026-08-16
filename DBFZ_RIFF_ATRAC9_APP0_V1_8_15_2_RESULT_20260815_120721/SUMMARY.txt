@@ -1,0 +1,11 @@
+﻿Dragon Ball FighterZ RIFF/ATRAC9 + App0 V1.8.15.2
+RuntimeSurvivedWindow=True
+RiffParseLines=21
+Atrac9ConfirmedLines=21
+MkdirPermissionDenied=0
+OpenPermissionDenied=0
+AprResolveMiss=9
+UnresolvedImportCount=2
+FatalOrDeviceLost=0
+VideoOutFlipEvidence=5
+LastImportProgress=[LOADER][TRACE] dbfz.import_progress.v1892 import=92274688 nid=2Of0f+3mhhE

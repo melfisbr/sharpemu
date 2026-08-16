@@ -1,0 +1,29 @@
+V73.11 timing diagnosis
+
+V73.11 was stopped before it could test the menu:
+- entry_samples=117
+- boot_milestones=0
+- auto_options_press=0
+- stderr reached only bink2.direct_frame n=3 for ps_studios_logo.bk2
+- no bink2.direct_boot_completed
+- no Starting main loop
+- no uistartmenu read in that run
+
+Therefore V73.11 does not contradict the complete V73.7.1 proof.
+
+The complete V73.7.1 run proved:
+- /app0/ui/scripts/_cmn/uistartmenu.cgpr resolved successfully
+- file id = 0xB54A744D
+- file size = 1,550,288 bytes (0x17A7D0)
+- sceAmprAprCommandBufferReadFile copied 0x17A7D0 bytes
+- result = 0
+- cp11main.cgpr started
+- main loop started
+- resource gathering completed
+- zero AMPR failures
+- zero kernel script IO failures
+- zero disposed/io_error
+
+V73.11.1 is a diagnostic timing repair. It makes no source changes.
+It waits for the actual menu read event and then keeps a post-menu observation
+window instead of imposing a short process-launch-relative window.

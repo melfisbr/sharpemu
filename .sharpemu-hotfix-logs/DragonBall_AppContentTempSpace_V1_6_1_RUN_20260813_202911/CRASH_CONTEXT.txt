@@ -1,0 +1,182 @@
+﻿[LOADER][INFO] bink2.nihav_auto_discovered tool='C:\Users\Edpo\Documents\GitHub\sharpemu\artifacts\bin\Debug\net10.0\win-x64\plugins\bink2\nihav-tool.exe'
+[OPTIONS-SKIP][V61.13.26.2] bridge_ready vk=0x09
+[DEBUG] SharpEmu starting with 1 args
+[DEBUG] dotnet_child_args_rebuild argc=1 entry='C:\Users\Edpo\Documents\GitHub\sharpemu\artifacts\bin\Debug\net10.0\win-x64\SharpEmu.dll'
+[DEBUG] mitigated_relaunch_dotnet_muxer entry='C:\Users\Edpo\Documents\GitHub\sharpemu\artifacts\bin\Debug\net10.0\win-x64\SharpEmu.dll'
+[OPTIONS-SKIP][V61.13.26.2] bridge_ready vk=0x09
+[DEBUG] SharpEmu starting with 1 args
+[INFO][SharpEmu.CLI] Program.cs:273#RunEmulator SharpEmu UNOFFICIAL — https://github.com/sharpemu/sharpemu
+
+Local build (not produced by CI).
+[INFO][SharpEmu.CLI] Program.cs:274#RunEmulator Host hardware: CPU: AMD Ryzen 9 3900; GPU: NVIDIA GeForce RTX 5060 Ti; RAM: 32.701 MB (31,9 GB).
+[DEBUG] Full path: F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app\eboot.bin
+[DEBUG] Creating runtime...
+[LOADER][INFO] Kernel TSC frequency: 3094207652 Hz (calibrated-rdtsc)
+[HLE] Warmed 3892 type initializers (0 threw) + JIT-compiled 53753 methods (129 skipped) across 11 HLE assemblies, plus 3421 framework type initializers.
+[INFO][Aerolib] Aerolib.cs:150#LoadFromEmbeddedBinary Loaded 154458 NID entries from binary resource
+[DEBUG] Running: F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app\eboot.bin
+[RUNTIME] Loading: F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app\eboot.bin
+[LOADER][INFO] ampr.app0_index_cache_hit root=F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app files=57 ids=228 elapsed_ms=21,2
+[LOADER] Loading param.json at F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app/sce_sys/param.json
+[LOADER] Title: DRAGON BALL FighterZ, TitleId: PPSA09790, Version: 01.000.010
+[LOADER][ELF] type=0xFE10 (SceDynExec) machine=0x003E abi=9 abi_ver=2 phnum=14
+[LOADER][ELF][PH] index=0 type=0x00000001(Load) flags=0x00000001 off=0x4000 vaddr=0x0 filesz=0x450CABC memsz=0x450CABC align=0x4000
+[LOADER][ELF][PH] index=1 type=0x00000001(Load) flags=0x00000004 off=0x4514000 vaddr=0x4510000 filesz=0x17E3106 memsz=0x17E3106 align=0x4000
+[LOADER][ELF][PH] index=2 type=0x6474E550(GnuEhFrame) flags=0x00000004 off=0x4514000 vaddr=0x4510000 filesz=0x3CD0EC memsz=0x3CD0EC align=0x4
+[LOADER][ELF][PH] index=3 type=0x00000001(Load) flags=0x00000006 off=0x5CF8000 vaddr=0x5CF4000 filesz=0x4721E0 memsz=0x4721E0 align=0x4000
+[LOADER][ELF][PH] index=4 type=0x6474E552(GnuRelro) flags=0x00000004 off=0x5CF8000 vaddr=0x5CF4000 filesz=0x4721E0 memsz=0x474000 align=0x1
+[LOADER][ELF][PH] index=5 type=0x00000007(Tls) flags=0x00000004 off=0x5CF7108 vaddr=0x5CF4000 filesz=0x0 memsz=0xC align=0x8
+[LOADER][ELF][PH] index=6 type=0x61000001(SceProcParam) flags=0x00000004 off=0x616A180 vaddr=0x6166180 filesz=0x60 memsz=0x60 align=0x8
+[LOADER][ELF][PH] index=7 type=0x00000001(Load) flags=0x00000006 off=0x616C000 vaddr=0x6168000 filesz=0x22F24 memsz=0x9555B8 align=0x4000
+[LOADER][ELF][PH] index=8 type=0x00000001(Load) flags=0x00000000 off=0x61915C0 vaddr=0x6ABD5C0 filesz=0xB7A5B8 memsz=0xB7A5B8 align=0x4000
+[LOADER][ELF][PH] index=9 type=0x00000004(Note) flags=0x00000000 off=0x6D0AB60 vaddr=0x7636B60 filesz=0x24 memsz=0x24 align=0x4
+[LOADER][ELF][PH] index=10 type=0x00000002(Dynamic) flags=0x00000006 off=0x6D0AB88 vaddr=0x7636B88 filesz=0xFF0 memsz=0xFF0 align=0x8
+[LOADER][ELF][PH] index=11 type=0x6FFFFF00(SceComment) flags=0x00000000 off=0x6D0BB80 vaddr=0x0 filesz=0x40 memsz=0x0 align=0x10
+[LOADER][ELF][PH] index=12 type=0x6FFFFF01(SceVersion) flags=0x00000000 off=0x6D0BBC0 vaddr=0x0 filesz=0x1E52 memsz=0x1E52 align=0x1
+[LOADER][ELF][PH] index=13 type=0x00000004(Note) flags=0x00000000 off=0x6D0DA14 vaddr=0x0 filesz=0x18 memsz=0x0 align=0x4
+[LOADER][TLS] load_start clear=True next=1 assigned=1 has_pt_tls=True
+Total image size needed: 0x7638000 (123961344 bytes)
+[LOADER][ELF] required_load_alignment=0x4000
+[LOADER] Segment 0: VAddr=0x0000000800000000, FileSize=0x450CABC, MemSize=0x450CABC, Align=0x4000
+[LOADER] Segment 1: VAddr=0x0000000804510000, FileSize=0x17E3106, MemSize=0x17E3106, Align=0x4000
+[LOADER] Segment 3: VAddr=0x0000000805CF4000, FileSize=0x4721E0, MemSize=0x4721E0, Align=0x4000
+[LOADER] Segment 7: VAddr=0x0000000806168000, FileSize=0x22F24, MemSize=0x9555B8, Align=0x4000
+[LOADER] Segment 8: VAddr=0x0000000806ABD5C0, FileSize=0xB7A5B8, MemSize=0xB7A5B8, Align=0x4000
+[LOADER][TLS] Module 1 TLS template: memsz=0xC filesz=0x0 align=0x8 static_offset=0x10 total_static=0x10
+[LOADER] TryLoadTableBytes: trying location=0x7636B88, size=0xFF0, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x807636B88
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x807636B88
+[LOADER] Dynamic Info: StrTab=0x6ABD5C0, StrTabSize=0xB579
+[LOADER] Dynamic Info: SymTab=0x6AC8B40, SymTabSize=0x10380
+[LOADER] Dynamic Info: Rela=0x6AE9030, RelaSize=0xB484A8
+[LOADER] Dynamic Info: JmpRel=0x6AD8EC0, JmpRelSize=0x10170
+[LOADER] Dynamic Info: PltGot=0x615EEA0
+[LOADER] TLS module id: 1
+[LOADER] HasImportMetadata: True
+[LOADER] TryLoadTableBytes: trying location=0x6AE9030, size=0xB484A8, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806AE9030
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806AE9030
+[LOADER] TryLoadTableBytes: trying location=0x6AD8EC0, size=0x10170, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806AD8EC0
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806AD8EC0
+[LOADER] ImageBase runtime: 0x0000000800000000
+[LOADER] Processing 495681 relocations...
+[LOADER] TryLoadTableBytes: trying location=0x6ABD5C0, size=0xB579, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806ABD5C0
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806ABD5C0
+[LOADER] TryLoadTableBytes: trying location=0x6AC8B40, size=0x10380, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806AC8B40
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806AC8B40
+[LOADER] SCE import metadata: libraries=0 modules=0
+[LOADER] Found 2766 unique NIDs, 495681 descriptors
+[LOADER] CreateImportStubMapping: nids=2766, required=0xACE0, map_size=0xB000
+[LOADER] Created 2766 import stubs
+[LOADER] TryLoadTableBytes: trying location=0x7636B88, size=0xFF0, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x807636B88
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x807636B88
+[LOADER] TryLoadTableBytes: trying location=0x6ABD5C0, size=0xB579, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806ABD5C0
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806ABD5C0
+[LOADER] TryLoadTableBytes: trying location=0x6AC8B40, size=0x10380, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806AC8B40
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806AC8B40
+[LOADER] TryLoadTableBytes: trying location=0x7636B88, size=0xFF0, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x807636B88
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x807636B88
+[LOADER] Initializers discovered: preinit=0, init=1
+[LOADER] TryLoadTableBytes: trying location=0x7636B88, size=0xFF0, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x807636B88
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x807636B88
+[LOADER] TryLoadTableBytes: trying location=0x6ABD5C0, size=0xB579, imageBase=0x800000000
+[LOADER] TryLoadTableBytes: trying guest address 0x806ABD5C0
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x806ABD5C0
+[LOADER] Needed modules discovered: libSceAgcDriver.prx, libSceAgc.prx, libSceRtc.prx, libScePad.prx, libSceNet.prx, libSceNetCtl.prx, libSceNgs2.prx, libSceAudioOut.prx, libSceAjm.native.prx, libSceSysmodule.prx, libSceVideoOut.prx, libSceUserService.prx, libkernel.prx, libSceSsl.prx, libSceHttp.prx, libScePlayGo.prx, libSceNpManager.prx, libSceAppContent.prx, libSceSaveData.native.prx, libSceSaveDataDialog.native.prx, libSceCommonDialog.prx, libSceGameLiveStreaming.prx, libSceSystemService.prx, libSceIme.prx, libSceImeDialog.prx, libSceMsgDialog.native.prx, libSceNpCommerce.prx, libSceShare.prx, libSceMouse.prx, libSceRandom.prx, libSceContentExport.prx, libSceNpGameIntent.prx, libSceAvPlayer.native.prx, libSceVoiceQoS.prx, libSceHttp2.prx, libSceNpAuth.prx, libSceNpCppWebApi.prx, libSceNpWebApi2.prx, libSceNpSessionSignaling.prx, libSceJson2.prx, libSceNpUniversalDataSystem.prx, libSceNpTrophy2.prx, libSceErrorDialog.prx, libSceWebBrowserDialog.prx, libSceGameUpdate.prx, libScePlayerInvitationDialog.prx, libSceFont-module.prx, libSceFontFt-module.prx, libSceAudioIn.prx, libSceVoice.prx, libSceNpUtility.prx, libSceSigninDialog.prx, libSceSharePlay.prx, libSceNpEntitlementAccess.prx, libc.prx, libSceAmpr.prx
+[LOADER] ELF type: 0xFE10 (SceDynExec)
+[LOADER] ELF e_entry: 0x0000000000000070
+[LOADER] Generation: Gen5 (PS5)
+[LOADER] Using image base: 0x0000000800000000
+[LOADER] Final entry point: 0x0000000800000070
+[LOADER] ProcParam: 0x0000000806166180
+[LOADER] PH[0]: type=Load, vaddr=0x0000000000000000 -> 0x0000000800000000, memsz=0x450CABC
+[LOADER] PH[1]: type=Load, vaddr=0x0000000004510000 -> 0x0000000804510000, memsz=0x17E3106
+[LOADER] PH[2]: type=GnuEhFrame, vaddr=0x0000000004510000 -> 0x0000000804510000, memsz=0x3CD0EC
+[LOADER][TLS] load_done assigned=1 next=2
+[RUNTIME] Registered module handle=1 name=eboot.bin base=0x0000000800000000 size=0x0000000007637B78
+[RUNTIME] Entry: 0x0000000800000070
+[RUNTIME] Module search directories: F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app\sce_module
+[RUNTIME] Loading 7 module(s)...
+[LOADER][ELF] type=0xFE18 (SceDynamic) machine=0x003E abi=9 abi_ver=2 phnum=14
+[LOADER][ELF][PH] index=0 type=0x00000001(Load) flags=0x00000001 off=0x4000 vaddr=0x0 filesz=0xCA020 memsz=0xCA020 align=0x4000
+[LOADER][ELF][PH] index=1 type=0x00000001(Load) flags=0x00000004 off=0xD0000 vaddr=0xCC000 filesz=0x40D06 memsz=0x40D06 align=0x4000
+[LOADER][ELF][PH] index=2 type=0x6474E550(GnuEhFrame) flags=0x00000004 off=0xD0000 vaddr=0xCC000 filesz=0x6F14 memsz=0x6F14 align=0x4
+[LOADER][ELF][PH] index=3 type=0x00000001(Load) flags=0x00000006 off=0x114000 vaddr=0x110000 filesz=0x3CD8 memsz=0x3CD8 align=0x4000
+[LOADER][ELF][PH] index=4 type=0x6474E552(GnuRelro) flags=0x00000004 off=0x114000 vaddr=0x110000 filesz=0x3CD8 memsz=0x4000 align=0x1
+[LOADER][ELF][PH] index=5 type=0x00000007(Tls) flags=0x00000004 off=0x114000 vaddr=0x110000 filesz=0x188 memsz=0x478 align=0x10
+[LOADER][ELF][PH] index=6 type=0x61000002(SceModuleParam) flags=0x00000004 off=0x117CB8 vaddr=0x113CB8 filesz=0x20 memsz=0x20 align=0x8
+[LOADER][ELF][PH] index=7 type=0x00000001(Load) flags=0x00000006 off=0x118000 vaddr=0x114000 filesz=0x3B88 memsz=0x7828 align=0x4000
+[LOADER][ELF][PH] index=8 type=0x00000001(Load) flags=0x00000000 off=0x11F830 vaddr=0x11B830 filesz=0x2A7A8 memsz=0x2A7A8 align=0x4000
+[LOADER][ELF][PH] index=9 type=0x00000004(Note) flags=0x00000000 off=0x149D00 vaddr=0x145D00 filesz=0x24 memsz=0x24 align=0x4
+[LOADER][ELF][PH] index=10 type=0x00000002(Dynamic) flags=0x00000006 off=0x149D28 vaddr=0x145D28 filesz=0x2B0 memsz=0x2B0 align=0x8
+[LOADER][ELF][PH] index=11 type=0x6FFFFF00(SceComment) flags=0x00000000 off=0x149FE0 vaddr=0x0 filesz=0x58 memsz=0x0 align=0x10
+[LOADER][ELF][PH] index=12 type=0x6FFFFF01(SceVersion) flags=0x00000000 off=0x14A050 vaddr=0x0 filesz=0x1A memsz=0x20 align=0x10
+[LOADER][ELF][PH] index=13 type=0x00000004(Note) flags=0x00000000 off=0x14A038 vaddr=0x0 filesz=0x18 memsz=0x0 align=0x4
+[LOADER][TLS] load_start clear=False next=2 assigned=2 has_pt_tls=True
+Total image size needed: 0x146000 (1335296 bytes)
+[LOADER][ELF] required_load_alignment=0x4000
+[LOADER] Segment 0: VAddr=0x0000000807838000, FileSize=0xCA020, MemSize=0xCA020, Align=0x4000
+[LOADER] Segment 1: VAddr=0x0000000807904000, FileSize=0x40D06, MemSize=0x40D06, Align=0x4000
+[LOADER] Segment 3: VAddr=0x0000000807948000, FileSize=0x3CD8, MemSize=0x3CD8, Align=0x4000
+[LOADER] Segment 7: VAddr=0x000000080794C000, FileSize=0x3B88, MemSize=0x7828, Align=0x4000
+[LOADER] Segment 8: VAddr=0x0000000807953830, FileSize=0x2A7A8, MemSize=0x2A7A8, Align=0x4000
+[LOADER][TLS] Module 2 TLS template: memsz=0x478 filesz=0x188 align=0x10 static_offset=0x490 total_static=0x490
+[LOADER] TryLoadTableBytes: trying location=0x145D28, size=0x2B0, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80797DD28
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80797DD28
+[LOADER] Dynamic Info: StrTab=0x11B830, StrTabSize=0xA8F3
+[LOADER] Dynamic Info: SymTab=0x126128, SymTabSize=0xFC30
+[LOADER] Dynamic Info: Rela=0x1366E8, RelaSize=0xA200
+[LOADER] Dynamic Info: JmpRel=0x135D58, JmpRelSize=0x990
+[LOADER] Dynamic Info: PltGot=0x1138F8
+[LOADER] TLS module id: 2
+[LOADER] HasImportMetadata: True
+[LOADER] TryLoadTableBytes: trying location=0x1366E8, size=0xA200, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80796E6E8
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80796E6E8
+[LOADER] TryLoadTableBytes: trying location=0x135D58, size=0x990, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80796DD58
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80796DD58
+[LOADER] ImageBase runtime: 0x0000000807838000
+[LOADER] Processing 1830 relocations...
+[LOADER] TryLoadTableBytes: trying location=0x11B830, size=0xA8F3, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x807953830
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x807953830
+[LOADER] TryLoadTableBytes: trying location=0x126128, size=0xFC30, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80795E128
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80795E128
+[LOADER] SCE import metadata: libraries=0 modules=0
+[LOADER] Found 104 unique NIDs, 1830 descriptors
+[LOADER] CreateImportStubMapping: nids=104, required=0x680, map_size=0x1000
+[LOADER] Created 104 import stubs
+[LOADER][TLS] Patching DTPMOD64 at 0x80794B880 with module id 0x2
+[LOADER][TLS] Patching DTPMOD64 at 0x80794B8C0 with module id 0x2
+[LOADER][TLS] Patching DTPMOD64 at 0x80794B8D0 with module id 0x2
+[LOADER] TryLoadTableBytes: trying location=0x145D28, size=0x2B0, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80797DD28
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80797DD28
+[LOADER] TryLoadTableBytes: trying location=0x11B830, size=0xA8F3, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x807953830
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x807953830
+[LOADER] TryLoadTableBytes: trying location=0x126128, size=0xFC30, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80795E128
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80795E128
+[LOADER] Runtime symbol index populated: section=0, dynamic=2584, total=5168
+[LOADER] TryLoadTableBytes: trying location=0x145D28, size=0x2B0, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80797DD28
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80797DD28
+[LOADER] TryLoadTableBytes: trying location=0x113CB0, size=0x8, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80794BCB0
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80794BCB0
+[LOADER] Initializers discovered: preinit=1, init=1
+[LOADER] TryLoadTableBytes: trying location=0x145D28, size=0x2B0, imageBase=0x807838000
+[LOADER] TryLoadTableBytes: trying guest address 0x80797DD28
+[LOADER] TryLoadTableBytes: loaded from guest memory at 0x80797DD28

@@ -1,0 +1,24 @@
+                    var sumU =
+                        payload[uRow0 + chromaX] +
+                        payload[uRow0 + chromaX + 1] +
+                        payload[uRow0 + chromaX + 2] +
+                        payload[uRow1 + chromaX] +
+                        payload[uRow1 + chromaX + 1] +
+                        payload[uRow1 + chromaX + 2] +
+                        payload[uRow2 + chromaX] +
+                        payload[uRow2 + chromaX + 1] +
+                        payload[uRow2 + chromaX + 2];
+
+                    var sumV =
+                        payload[vRow0 + chromaX] +
+                        payload[vRow0 + chromaX + 1] +
+                        payload[vRow0 + chromaX + 2] +
+                        payload[vRow1 + chromaX] +
+                        payload[vRow1 + chromaX + 1] +
+                        payload[vRow1 + chromaX + 2] +
+                        payload[vRow2 + chromaX] +
+                        payload[vRow2 + chromaX + 1] +
+                        payload[vRow2 + chromaX + 2];
+
+                    var uValue = (sumU + 4) / 9;
+                    var vValue = (sumV + 4) / 9;

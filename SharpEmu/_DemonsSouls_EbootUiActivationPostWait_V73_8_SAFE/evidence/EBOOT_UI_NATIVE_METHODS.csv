@@ -1,0 +1,10 @@
+﻿String,SELF_FileOffsets
+bool UIManager::HasOpenMenus() const,0x2476163
+void UIManager::PrintSceneState(),0x2476188
+uiShowHudScene,0x24761AA;0x24924A4
+UITransition_ShowHUDScene.cpp,0x2476228
+virtual bool uiManagerPrivate::TransitionShowHUDScene::Transition_Validate(TransitionEntry &),0x2476246
+"void CComponentUIBehaviorStartMenuInputHandler::Think(GameManager &, const float)",0x2505FD8
+uiElement::EHandleInputFocusResult CComponentUIBehaviorStartMenuInputHandler::HandleInputFocus(uiElement::HandleInputFocusParams &),0x249405D
+ShowLegacyMenu,0x24A6B78;0x24B0622;0x24D6188;0x24D627F;0x2505FC9;0x2521BD3;0x2564337;0x258AE37
+Start Menu Closed,0x24FC4D4

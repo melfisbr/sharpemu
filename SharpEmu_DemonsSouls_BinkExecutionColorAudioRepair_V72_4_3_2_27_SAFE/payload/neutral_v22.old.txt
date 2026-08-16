@@ -1,0 +1,67 @@
+    // V72.4.3.2.21 REFERENCE_NEUTRAL_GATE_HELPER
+    //
+    // V20 improved highlight tone but still burned too much CPU because it
+    // corrected every output RGB triple after conversion. V21 moves the tweak
+    // earlier into the YCbCr domain and only for bright, near-neutral pixels.
+    // Saturated Demon's Souls blue effects remain untouched.
+    private static void ApplyV7243221ReferenceNeutralGate(
+        ref byte yy,
+        ref int cbValue,
+        ref int crValue)
+    {
+        // V72.4.3.2.21.1 BUILD_FIX_REF_BYTE_YY
+        // Converter luma is a byte. Promote to int only inside the helper.
+        var yyValue = (int)yy;
+        var cbDelta = cbValue - 128;
+        var crDelta = crValue - 128;
+        var chromaMagnitude =
+            Math.Abs(cbDelta) +
+            Math.Abs(crDelta);
+
+        // V72.4.3.2.22 REFERENCE_NEUTRAL_GATE_V2
+        // V21.1 barely touched the PlayStation Studios panel because the
+        // luma threshold started at 160 with zero strength there. Start the
+        // gate earlier and allow a wider near-neutral chroma envelope.
+        if (yyValue < 128 ||
+            chromaMagnitude > 48)
+        {
+            return;
+        }
+
+        var lumaStrength =
+            Math.Clamp(
+                (yyValue - 112) * 4,
+                0,
+                255);
+        var neutralStrength =
+            (Math.Clamp(48 - chromaMagnitude, 0, 48) * 255 + 24) /
+            48;
+        var strength =
+            (lumaStrength * neutralStrength + 127) /
+            255;
+
+        if (strength <= 0)
+        {
+            return;
+        }
+
+        // V22: stronger but confidence-gated lift. Saturated blue stays out
+        // through the chromaMagnitude test above.
+        yyValue +=
+            ((255 - yyValue) * strength + 127) /
+            255;
+
+        // Pull near-neutral chroma toward zero tint.
+        cbValue =
+            128 +
+            ((cbDelta * (255 - strength) + 127) / 255);
+        crValue =
+            128 +
+            ((crDelta * (255 - strength) + 127) / 255);
+
+        yy = (byte)Math.Clamp(yyValue, 0, 255);
+        cbValue = Math.Clamp(cbValue, 0, 255);
+        crValue = Math.Clamp(crValue, 0, 255);
+    }
+
+    private static void TryDumpV7243213PackedFrameTruth(

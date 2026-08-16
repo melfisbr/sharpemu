@@ -151,9 +151,62 @@ public static class KernelAprCompatExports
         ExportName = "sceKernelAprGetFileSize",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
+    // V33: resolve APR file id/path to an actual 64-bit file size.
+    // The runtime resolver already publishes stable APR ids through
+    // AmprFileRegistry. For compatibility with callers that pass a path
+    // directly, a readable guest UTF-8 path is also accepted.
     public static int KernelAprGetFileSize(CpuContext ctx)
     {
-        return ctx.SetReturn(0);
+        var fileOrPath = ctx[CpuRegister.Rdi];
+        var sizeAddress = ctx[CpuRegister.Rsi];
+        if (fileOrPath == 0 || sizeAddress == 0)
+        {
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        string? hostPath = null;
+        if (fileOrPath <= uint.MaxValue &&
+            AmprFileRegistry.TryGetHostPath(unchecked((uint)fileOrPath), out var registeredPath))
+        {
+            hostPath = registeredPath;
+        }
+        else if (KernelMemoryCompatExports.TryReadNullTerminatedUtf8(
+                     ctx,
+                     fileOrPath,
+                     4096,
+                     out var guestPath))
+        {
+            hostPath = KernelMemoryCompatExports.ResolveGuestPath(guestPath);
+        }
+
+        if (string.IsNullOrEmpty(hostPath) || !File.Exists(hostPath))
+        {
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
+        }
+
+        ulong fileSize;
+        try
+        {
+            fileSize = checked((ulong)new FileInfo(hostPath).Length);
+        }
+        catch
+        {
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
+        }
+
+        if (!ctx.TryWriteUInt64(sizeAddress, fileSize))
+        {
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (_traceApr)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] apr_get_file_size key=0x{fileOrPath:X16} " +
+                $"size={fileSize} host='{hostPath}'");
+        }
+
+        return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK);
     }
 
     private static bool TryWriteAprResult(CpuContext ctx, ulong resultAddress)

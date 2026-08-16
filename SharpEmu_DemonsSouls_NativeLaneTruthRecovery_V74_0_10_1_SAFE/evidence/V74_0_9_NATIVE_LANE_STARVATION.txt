@@ -1,0 +1,37 @@
+V74.0.9 evidence
+
+Core.Res.TaskManager:
+- Running + ExecutorActive in 413 snapshots
+- imports stayed exactly 4
+- last import scePthreadCondWait
+- host executor remained present
+
+NexusRevolution Event:
+- Running throughout
+- imports 28 -> 12102
+
+NexusRevolution Surveillance:
+- Running throughout
+- imports 152 -> 70557
+
+All three are RequiresNativeGuestWorker() names.
+Pre-V74.0.10 RunGuestEntryStub acquired the same global limiter before renting
+a raw worker. NativeWorkerMaxConcurrent default = 2.
+
+This explains why TaskManager is scheduler-Running but guest-instruction
+stalled: the host executor can be blocked in SemaphoreSlim.Wait() while the
+guest thread state has already been claimed as Running.
+
+V74.0.9 downstream state:
+- GPU utilization falls to 0 and remains 0 while CPU remains ~45%
+- presenter timeline stops at 1318/1318
+- EVENT_FASTPATH log max n=2048
+- 0x45D writer=0
+- natural Bink=0
+- compute failures=0
+- FailFast=0
+- device lost=0
+- memory stable
+
+V74.0.10 isolates renderer/resource concurrency without changing TBB's
+historical two-slot protection.

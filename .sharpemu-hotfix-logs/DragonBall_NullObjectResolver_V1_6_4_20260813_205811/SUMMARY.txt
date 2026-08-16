@@ -1,0 +1,14 @@
+﻿Dragon Ball FighterZ Null Object Resolver Evidence V1.6.4
+EbootSHA256=106b594c4e84401b096ec8b41a088fbf4e3862aee2faf030e4e6767df5cd1018
+SegmentBias=0x233F0
+BiasMode=signature-derived
+KnownProducerFingerprint=True
+CrashFact=0x800C222F0 computes RAX=RDI+0x40; observed RAX=0x40 therefore input RDI=0.
+CallerFact=0x800C7F1E0 writes caller local [rbp-0x30], then caller loads it into RDI.
+Resolver1=0x0000000800C7F1E0
+Resolver2=0x0000000800C7F220
+Release=0x00000008001CB300
+RESOLVERS_C7F: guest_start=0x0000000800C7E000 file_start=0xCA13F0 bytes=0x4000 sha256=5a737ddd3ad7b776f7d11cb4bfe6fcb0f3448406bd710b45a1f0a9c433e20775
+RESOLVER1_C7F1E0: guest_start=0x0000000800C7EFE0 file_start=0xCA23D0 bytes=0xC00 sha256=ac63c3b19b8af3cf5a951fd74ca8a230288f0e6b090467747ea2aee33c58650f
+RESOLVER2_C7F220: guest_start=0x0000000800C7F020 file_start=0xCA2410 bytes=0xC00 sha256=2ee316495a884f1759655a43e39301f6e9391aba43b9ea48e6fe916ebed007d0
+SHARED_RELEASE_1CB300: guest_start=0x00000008001CB100 file_start=0x1EE4F0 bytes=0x800 sha256=2d5a4d877231e5f8cb0f647c0d522e9abb3654cb4852d25644c9150e69b9bcdc

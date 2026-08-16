@@ -1,0 +1,22 @@
+V73.0.20.4 exact source capture findings
+
+Presenter SHA256=0CEE6F0F7BF74E90B9B74603F947D5BB52782426BEEA1959C9B1B6CC2EB66BD8
+AGC SHA256=7FFC81332D6C0CFDA2D03AF9B9A7A347F22B1A8190FA9AB4BBB9C34D010569CE
+
+VulkanVideoPresenter.cs:
+- MaxTrackedGuestImageBytes = 128 MiB.
+- TryBuildUntrackedTextureProbe returns false when byteCount > MaxTrackedGuestImageBytes.
+- MarkTextureContentCached removes the probe when TryBuildUntrackedTextureProbe returns false.
+- IsTextureContentCached then emits reason=missing-baseline, marks identity stale and returns false.
+- GetOrCreateCachedTextureResource consumes the stale identity and emits TEXTURE_CACHE_REFRESH.
+- ComputeSparseGuestContentProbe itself reads only 8 x 64 bytes = 512 bytes regardless of byteCount.
+
+V74.0.22 runtime evidence for addr 0x102A400000:
+- 1024x1024, 80 layers, 335544320 bytes.
+- missing-baseline logs=26.
+- texture refresh logs=26.
+- single-flight owner max=16; reuse max=384.
+- max alloc2s=1562 MiB.
+- natural guest Bink requests=0 during 173.95 s.
+
+Conclusion: the cache baseline gate, not AGC cache identity, is the direct cause of repeated 320 MiB refresh cycles.

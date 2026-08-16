@@ -1,0 +1,9 @@
+﻿Name,Start,EndExclusive,Size,Evidence,StringXref
+HasOpenMenus,0xDC2500,0xDC2580,0x80,bool UIManager::HasOpenMenus() const,0xDC2525
+PrintSceneState,0xDC4DE0,0xDC5750,0x970,void UIManager::PrintSceneState(),0xDC4E02
+ShowHudSceneRegion,0xDCF210,0xDD0C80,0x1A70,uiShowHudScene,0xDCFD7D
+TransitionShowHUDValidate,0xDDAD30,0xDDAEB0,0x180,TransitionShowHUDScene::Transition_Validate,0xDDADC7
+ShowLegacyMenuA,0x1488C20,0x1488C30,0x10,ShowLegacyMenu xref A,0x1488C20
+ShowLegacyMenuB,0x14893F0,0x1489410,0x20,ShowLegacyMenu xref B,0x14893FC
+StartMenuThink,0x148ED10,0x148F350,0x640,CComponentUIBehaviorStartMenuInputHandler::Think,0x148EE1F
+StartMenuHandleInputFocus,0x148F350,0x148F8C0,0x570,CComponentUIBehaviorStartMenuInputHandler::HandleInputFocus,0x148F6F6

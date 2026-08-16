@@ -1,0 +1,14 @@
+version=73.5
+exit_code=
+wait_targets=5
+write_data_packet_lines=10
+write_data_applied=5
+wait_resumed=14
+wait_suspended=5
+ordered_fence_sample_lines=11
+backpressure_sample_lines=1
+runtime_unresolved=0
+device_lost=0
+metadata=[LOADER] SCE import metadata: libraries=53 modules=49
+metadata=[LOADER] SCE import metadata: libraries=3 modules=3
+metadata=[LOADER] SCE import metadata: libraries=6 modules=6

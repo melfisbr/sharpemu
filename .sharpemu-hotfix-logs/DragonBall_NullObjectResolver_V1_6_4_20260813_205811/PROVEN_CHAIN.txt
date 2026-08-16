@@ -1,0 +1,23 @@
+﻿Confirmed execution chain:
+
+0x800C6BEC5  mov rsi,[rbx+0x10]
+0x800C6BEC9  lea r14,[rbp-0x30]
+0x800C6BECD  mov rdi,r14
+0x800C6BED0  call 0x800C7F1E0
+0x800C6BED5  mov rdi,[rbp-0x30]
+0x800C6BED9  call 0x800C222F0
+
+0x800C222F0:
+  push rbp
+  mov  rbp,rsp
+  lea  rax,[rdi+0x40]
+  pop  rbp
+  ret
+
+At the crash RAX=RSI=0x40. Therefore the input RDI to 0x800C222F0 was zero,
+which means [rbp-0x30] was zero after 0x800C7F1E0.
+
+The sibling path uses 0x800C7F220 and then the same +0x40 getter.
+
+The next correction must target whatever resolver dependency causes this out pointer
+to be null. It must not patch the +0x40 getter or the copy routine.

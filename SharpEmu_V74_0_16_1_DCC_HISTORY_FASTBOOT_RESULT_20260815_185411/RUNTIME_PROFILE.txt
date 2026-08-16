@@ -1,0 +1,15 @@
+﻿version=74.0.16.1.1
+runtime=Release
+render_scale=0.25
+native_worker_max_concurrent=2
+renderer_resource_native_max_concurrent=8
+sampled_guest_image_cache_mb=256
+standalone_texture_cache_mb=768
+guest_buffer_cache_mb=192
+device_buffer_cache_mb=384
+bink_auto_boot=0
+startup_completion_shim=1
+gpu_detile=1
+process_telemetry=aggregate_process_tree
+dcc_alias_history_ms=2000
+large_snapshot_reuse_ms=10000

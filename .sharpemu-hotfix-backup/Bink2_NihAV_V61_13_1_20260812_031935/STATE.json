@@ -1,0 +1,10 @@
+﻿[
+    {
+        "Relative":  "src\\SharpEmu.Libs\\Media\\HostMovieBridge.cs",
+        "Existed":  true
+    },
+    {
+        "Relative":  "src\\SharpEmu.Libs\\Media\\NihavBink2Decoder.cs",
+        "Existed":  false
+    }
+]

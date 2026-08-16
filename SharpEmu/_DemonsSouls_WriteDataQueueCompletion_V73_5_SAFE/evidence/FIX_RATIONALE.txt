@@ -1,0 +1,19 @@
+V73.5 rationale
+
+V73.4 proved that all five watched 0->1 labels have explicit PM4 WRITE_DATA
+producers and that none overlaps the compute/global storage buffers observed
+after the waits were registered.
+
+The current ordered WRITE_DATA path performs:
+1. logical-queue completion/fence;
+2. dirty GPU storage-buffer readback for that queue;
+3. the immediate WRITE_DATA packet write;
+4. RecordProduced + wait-monitor wake.
+
+The WRITE_DATA payload was already copied from PM4 command memory before the
+ordered callback was enqueued. Step 2 is therefore not an input to the packet.
+V73.5 preserves step 1 and removes only step 2 for WRITE_DATA.
+
+RELEASE_MEM, DMA, global visibility probes, shader writeback, ACQUIRE_MEM,
+WAIT comparison semantics, label values, producer history, canonical-empty
+dispatch handling, loader/NID behavior and the V73.3 direction fix are unchanged.

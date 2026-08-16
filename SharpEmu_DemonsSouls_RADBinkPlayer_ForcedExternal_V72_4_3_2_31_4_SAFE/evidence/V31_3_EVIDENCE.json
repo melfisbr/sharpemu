@@ -1,0 +1,23 @@
+{
+  "version": "V72.4.3.2.31.4",
+  "trigger": "V31.2 runtime still rendered Bink through NIHAV rather than the official RAD player",
+  "observed_result": {
+    "RAD_AVAILABLE": false,
+    "RAD_STARTED": 0,
+    "RAD_ATTACHED": 0,
+    "RAD_COMPLETED": 0,
+    "NIHAV_FALLBACK_ATTACHES": 3,
+    "EXTERNAL_INTRO_AUDIO_STARTS": 2
+  },
+  "root_cause": "V31.2 intentionally preserved native->NIHAV->FFmpeg when RAD was absent, so the test could not prove or exercise RAD playback.",
+  "repair": [
+    "require radvideo64.exe before apply or test",
+    "deep-discover RAD through env/config/PATH/registry/file association/install records/shortcuts/user folders",
+    "force SHARPEMU_BINK_MODE=rad",
+    "remove NIHAV/FFmpeg fallback from the MovieMode.Rad switch branch",
+    "do not start SharpEmu sidecar WAV/audio in RAD mode",
+    "launch official command radvideo64.exe binkplay <movie.bk2> /#",
+    "runtime diagnostic fails unless RAD starts+attaches with zero internal fallback hits"
+  ],
+  "rad_binary_redistributed": false
+}

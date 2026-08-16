@@ -1,0 +1,11 @@
+version=73.1
+exit_code=
+metadata_line=[LOADER] SCE import metadata: libraries=53 modules=49
+metadata_libraries=53
+metadata_modules=49
+expected_demons_libraries=53
+expected_demons_modules=49
+metadata_expected_match=True
+runtime_unresolved_distinct=0
+runtime_unresolved_calls=0
+selfloader_sha256=D03BFE285C48986928081D4A8D847803CB1520EC7A1664E252C26A8611BFFEA0

@@ -1,0 +1,22 @@
+Demon's Souls PPSA01341 eboot.bin — V73.0 audit fingerprint
+SHA256=22dd832bae21abeb57fc66074d2bfa5f4c53f6efed4544a9be6b9e0d0316130e
+file_size=46575201
+embedded_elf_offset=0x1A0
+elf_type=0xFE10
+machine=0x003E
+entry=0x70
+program_headers=14
+needed_modules=49
+module_id_records=49
+library_id_records=53
+dynsym_named_imports=1174
+relocation_referenced_imports=1173
+regular_rela=172228
+plt_rela=1149
+relocations_total=173377
+import_functions=1152
+import_objects=22
+gnu_eh_frame_fde_entries=132353
+unique_unwind_function_starts=132353
+first_function_start=0x70
+last_function_start=0x1EFFDA0

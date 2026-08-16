@@ -19,9 +19,11 @@ public sealed class SelfImage
         IReadOnlyList<ImportedSymbolRelocation>? importedRelocations = null,
         IReadOnlyList<ulong>? preInitializerFunctions = null,
         IReadOnlyList<ulong>? initializerFunctions = null,
+        IReadOnlyList<string>? neededModuleNames = null,
         ulong initFunctionEntryPoint = 0,
         ulong imageBase = 0,
         ulong procParamAddress = 0,
+        ulong moduleParamAddress = 0,
         string? title = null,
         string? titleId = null,
         string? version = null,
@@ -41,9 +43,11 @@ public sealed class SelfImage
         ImportedRelocations = importedRelocations ?? Array.Empty<ImportedSymbolRelocation>();
         PreInitializerFunctions = preInitializerFunctions ?? Array.Empty<ulong>();
         InitializerFunctions = initializerFunctions ?? Array.Empty<ulong>();
+        NeededModuleNames = neededModuleNames ?? Array.Empty<string>();
         InitFunctionEntryPoint = initFunctionEntryPoint;
         _imageBase = imageBase;
         ProcParamAddress = procParamAddress;
+        ModuleParamAddress = moduleParamAddress;
         Title = title;
         TitleId = titleId;
         Version = version;
@@ -70,11 +74,25 @@ public sealed class SelfImage
 
     public IReadOnlyList<ulong> InitializerFunctions { get; }
 
+    /// <summary>
+    /// Dynamic-loader dependency names declared by DT_NEEDED / DT_SCE_NEEDED_MODULE.
+    /// The runtime uses these names only for dependency-first initializer ordering;
+    /// absence of metadata preserves the stable preload order.
+    /// </summary>
+    public IReadOnlyList<string> NeededModuleNames { get; }
+
     public ulong InitFunctionEntryPoint { get; }
 
     public ulong EntryPoint => ElfHeader.EntryPoint + _imageBase;
 
     public ulong ProcParamAddress { get; }
+
+    /// <summary>
+    /// Address of PT_SCE_MODULE_PARAM (0x61000002), when the image exposes one.
+    /// Kept separate from ProcParamAddress because the two program-header types
+    /// have distinct roles in SCE ELF layouts.
+    /// </summary>
+    public ulong ModuleParamAddress { get; }
 
     public string? Title { get; }
 

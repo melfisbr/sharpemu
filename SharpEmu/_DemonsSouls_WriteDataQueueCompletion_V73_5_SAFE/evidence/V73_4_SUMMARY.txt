@@ -1,0 +1,20 @@
+version=73.4
+exit_code=
+classification=pm4-producer-overlap-observed
+provenance_lines=42
+wait_targets=5
+compute_overlaps=0
+compute_scan_samples=32
+range_overlaps=5
+pm4_producer_overlaps=5
+gpu_writeback_overlaps=0
+addressed_event_writes=0
+wait_suspended_lines=5
+queue_resumed_lines=0
+ordered_fence_sample_lines=11
+backpressure_sample_lines=1
+runtime_unresolved_lines=0
+device_lost_true_lines=0
+metadata=[LOADER] SCE import metadata: libraries=53 modules=49
+metadata=[LOADER] SCE import metadata: libraries=3 modules=3
+metadata=[LOADER] SCE import metadata: libraries=6 modules=6

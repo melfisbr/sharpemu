@@ -1,0 +1,6 @@
+[LOADER][WARN] agc.rt_sampled#1 addr=0x463810000 first=True gpu_resident=False fmt=5/7 known_targets=3
+[LOADER][WARN] agc.rt_sampled#2 addr=0x467E00000 first=True gpu_resident=False fmt=4/4 known_targets=3
+[LOADER][WARN] agc.rt_sampled#8 addr=0x45BC00000 first=True gpu_resident=False fmt=12/7 known_targets=3
+[LOADER][WARN] agc.rt_sampled#23 addr=0x4677F0000 first=True gpu_resident=False fmt=12/7 known_targets=7
+[LOADER][WARN] agc.rt_sampled#25 addr=0x467F70000 first=True gpu_resident=False fmt=12/7 known_targets=8
+[LOADER][WARN] agc.rt_sampled#27 addr=0x465AB0000 first=True gpu_resident=False fmt=12/7 known_targets=8

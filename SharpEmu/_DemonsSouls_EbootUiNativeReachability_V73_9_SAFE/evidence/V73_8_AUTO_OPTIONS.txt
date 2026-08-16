@@ -1,0 +1,3 @@
+[STARTMENU][AUTO_OPTIONS][V2.1.0] press index=0 scheduled_s=90 observed_s=133,235 sample_sequence=6
+[STARTMENU][AUTO_OPTIONS][V2.1.0] press index=1 scheduled_s=105 observed_s=142,636 sample_sequence=8
+[STARTMENU][AUTO_OPTIONS][V2.1.0] release index=0 sample_sequence=7 observed_s=137,938

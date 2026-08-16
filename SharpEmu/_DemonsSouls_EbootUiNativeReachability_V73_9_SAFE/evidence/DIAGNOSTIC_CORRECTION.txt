@@ -1,0 +1,16 @@
+V73.9 diagnostic correction
+
+The V73.8 field guest_frames=1 was based on the INFO line
+"Vulkan VideoOut presented guest frame". VulkanVideoPresenter emits this line
+only while _firstGuestDrawPresented is false. It is a one-time milestone, not
+a frame counter.
+
+V73.9 enables SHARPEMU_LOG_VIDEOOUT_FPS=1. ReportPresentedFrame increments the
+real _presentedFrameCount after successful vkQueuePresentKHR calls.
+
+V73.8 did prove:
+- Options reached the scePad guest path: 2 presses / 1 release.
+- 8 watched waits later matched 13 PM4 producer overlaps.
+- 13 WRITE_DATA callbacks wrote visible=1 / latched=1.
+- 95 wait-resume trace events occurred.
+- runtime unresolved=0 and deviceLost=0.

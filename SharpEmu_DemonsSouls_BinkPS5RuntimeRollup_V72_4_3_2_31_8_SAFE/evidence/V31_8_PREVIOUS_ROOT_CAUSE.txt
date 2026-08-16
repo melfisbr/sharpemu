@@ -1,0 +1,46 @@
+V72.4.3.2.31.8 RUNTIME ROOT CAUSE / REPAIR
+
+Observed V31.7.2 result:
+  ACTIVE_BINK_MODE=rad
+  RAD_STARTED=1
+  RAD_HOST_ATTACHED=0
+  RAD_BRIDGE_ATTACHED=0
+  RAD_EMBEDDED_HOST_FAILURES=0
+  STRICT_RAD_EMBEDDED_PROOF=False
+
+BINK_RELEVANT.log stops immediately after:
+  bink2.rad_required_started pid=8088 file='ps_studios_logo.bk2'
+
+There is no:
+  bink2.rad_host_attached
+  bink2.rad_host_window_missing
+  bink2.rad_host_setparent_failed
+  bink2.rad_embedded_host_required_failed
+
+This proves V31.7.2 did not reach SetParent or its timeout/failure path; its
+window-discovery routine stalled before it could report a result.
+
+Root cause:
+  FindSharpEmuHostWindow called GetWindowTextLengthW/GetWindowTextW on a
+  top-level window owned by the current SharpEmu process.  Win32 implements
+  these same-process calls by synchronously sending WM_GETTEXTLENGTH/WM_GETTEXT
+  to the target window thread.  The movie startup thread can therefore block
+  behind the SDL/Vulkan presenter instead of reaching the 10-second timeout.
+  This matches the result: external RAD window visible, but no attach success
+  or failure marker for 176 seconds.
+
+V31.8 repair:
+  - removes GetWindowText/GetWindowTextLength from the host attach path;
+  - resolves the SharpEmu HWND by current PID + visible client area + SDL class;
+  - resolves RAD renderer HWND through Process.Refresh/MainWindowHandle first;
+  - detects a separately spawned binkplay.exe by PID/process name;
+  - has a safe new-HWND fallback filtered by RAD process identity, not caption;
+  - emits attach-begin/wait/host-ready/renderer-ready markers;
+  - verifies GetParent/IsChild after SetParent;
+  - reduces strict attach timeout to 6 seconds;
+  - kills newly spawned RAD/BinkPlay processes on attach failure, so an
+    independent external player is not left running;
+  - playback completion follows the actual renderer process when RADVideo
+    delegates to binkplay.exe.
+
+No proprietary RAD/Bink binary is redistributed.

@@ -1,0 +1,636 @@
+SelfLoader SHA256=AAF46BE2F59940DB7CF806F437D503E03E08B018F6D0F2D2A52F34310E53684D
+
+=== SCE import metadata ===
+   762:             if (!TryLoadTableBytes(
+   763:                     elfData,
+   764:                     virtualMemory,
+   765:                     imageBase,
+   766:                     dynamicInfo.SymTabOffset,
+   767:                     symTableSize,
+   768:                     out symbolTable))
+   769:             {
+   770:                 return EmptyImportStubs;
+   771:             }
+   772:         }
+   773: 
+   774:         var sceImportMetadata = ParseSceImportMetadata(
+   775:             dynamicTable,
+   776:             stringTable);
+   777:         Console.WriteLine(
+   778:             $"[LOADER] SCE import metadata: " +
+   779:             $"libraries={sceImportMetadata.Libraries.Count} " +
+   780:             $"modules={sceImportMetadata.Modules.Count}");
+   781: 
+   782:         var descriptors = new List<RelocationDescriptor>(256);
+   783:         var orderedImportNids = new List<string>(128);
+   784:         var seenImportNids = new HashSet<string>(StringComparer.Ordinal);
+   785:         AppendRelocationDescriptors(
+   786:             relocations,
+   787:             symbolTable,
+   788:             stringTable,
+   789:             virtualMemory,
+   790:             imageBase,
+   791:             tlsModuleId,
+   792:             descriptors,
+   793:             orderedImportNids,
+   794:             seenImportNids,
+---
+
+=== HasImportMetadata ===
+   677:                 dynamicHeaderIndex,
+   678:                 out var dynamicTable))
+   679:         {
+   680:             return EmptyImportStubs;
+   681:         }
+   682: 
+   683:         var elfData = imageData;
+   684: 
+   685:         var dynamicInfo = ParseDynamicInfo(dynamicTable);
+   686: 
+   687:         Console.WriteLine($"[LOADER] Dynamic Info: StrTab=0x{dynamicInfo.StrTabOffset:X}, StrTabSize=0x{dynamicInfo.StrTabSize:X}");
+   688:         Console.WriteLine($"[LOADER] Dynamic Info: SymTab=0x{dynamicInfo.SymTabOffset:X}, SymTabSize=0x{dynamicInfo.SymTabSize:X}");
+   689:         Console.WriteLine($"[LOADER] Dynamic Info: Rela=0x{dynamicInfo.RelaOffset:X}, RelaSize=0x{dynamicInfo.RelaSize:X}");
+   690:         Console.WriteLine($"[LOADER] Dynamic Info: JmpRel=0x{dynamicInfo.JmpRelOffset:X}, JmpRelSize=0x{dynamicInfo.JmpRelSize:X}");
+   691:         Console.WriteLine($"[LOADER] Dynamic Info: PltGot=0x{dynamicInfo.PltGotOffset:X}");
+   692:         Console.WriteLine($"[LOADER] TLS module id: {tlsModuleId}");
+   693:         Console.WriteLine($"[LOADER] HasImportMetadata: {dynamicInfo.HasImportMetadata}");
+   694: 
+   695:         var relocations = new List<ElfRelocation>(512);
+   696: 
+   697:         if (dynamicInfo.RelaSize != 0 &&
+   698:             TryLoadTableBytes(elfData, virtualMemory, imageBase, dynamicInfo.RelaOffset, dynamicInfo.RelaSize, out var relaBytes))
+   699:         {
+   700:             CollectRelocations(relaBytes, relocations);
+   701:         }
+   702: 
+   703:         if (dynamicInfo.JmpRelSize != 0 &&
+   704:             TryLoadTableBytes(elfData, virtualMemory, imageBase, dynamicInfo.JmpRelOffset, dynamicInfo.JmpRelSize, out var jmpRelBytes))
+   705:         {
+   706:             CollectRelocations(jmpRelBytes, relocations);
+   707:         }
+   708: 
+   709:         if (!dynamicInfo.HasImportMetadata)
+---
+   693:         Console.WriteLine($"[LOADER] HasImportMetadata: {dynamicInfo.HasImportMetadata}");
+   694: 
+   695:         var relocations = new List<ElfRelocation>(512);
+   696: 
+   697:         if (dynamicInfo.RelaSize != 0 &&
+   698:             TryLoadTableBytes(elfData, virtualMemory, imageBase, dynamicInfo.RelaOffset, dynamicInfo.RelaSize, out var relaBytes))
+   699:         {
+   700:             CollectRelocations(relaBytes, relocations);
+   701:         }
+   702: 
+   703:         if (dynamicInfo.JmpRelSize != 0 &&
+   704:             TryLoadTableBytes(elfData, virtualMemory, imageBase, dynamicInfo.JmpRelOffset, dynamicInfo.JmpRelSize, out var jmpRelBytes))
+   705:         {
+   706:             CollectRelocations(jmpRelBytes, relocations);
+   707:         }
+   708: 
+   709:         if (!dynamicInfo.HasImportMetadata)
+   710:         {
+   711:             Console.WriteLine($"[LOADER] No import metadata found in ELF!");
+   712:         }
+   713: 
+   714:         if (relocations.Count != 0)
+   715:         {
+   716:             Console.WriteLine($"[LOADER] ImageBase runtime: 0x{imageBase:X16}");
+   717:             Console.WriteLine($"[LOADER] Processing {relocations.Count} relocations...");
+   718:         }
+   719: 
+   720:         uint maxSymbolIndex = 0;
+   721:         foreach (var relocation in relocations)
+   722:         {
+   723:             if (relocation.Type == RelocationTypeNone)
+   724:             {
+   725:                 continue;
+---
+  3306:     private readonly record struct DynamicInfo(
+  3307:         ulong StrTabOffset,
+  3308:         ulong StrTabSize,
+  3309:         ulong SymTabOffset,
+  3310:         ulong SymTabSize,
+  3311:         ulong InitOffset,
+  3312:         ulong RelaOffset,
+  3313:         ulong RelaSize,
+  3314:         ulong JmpRelOffset,
+  3315:         ulong JmpRelSize,
+  3316:         ulong PltGotOffset,
+  3317:         ulong InitArrayOffset,
+  3318:         ulong InitArraySize,
+  3319:         ulong PreInitArrayOffset,
+  3320:         ulong PreInitArraySize)
+  3321:     {
+  3322:         public bool HasImportMetadata =>
+  3323:             StrTabOffset != 0 &&
+  3324:             StrTabSize != 0 &&
+  3325:             SymTabOffset != 0 &&
+  3326:             (RelaSize != 0 || JmpRelSize != 0);
+  3327:     }
+  3328: 
+  3329:     private readonly record struct ElfSectionHeader(
+  3330:         uint NameOffset,
+  3331:         uint Type,
+  3332:         ulong Flags,
+  3333:         ulong Address,
+  3334:         ulong Offset,
+  3335:         ulong Size,
+  3336:         uint Link,
+  3337:         uint Info,
+  3338:         ulong AddressAlign,
+---
+
+=== 61000045 ===
+<not-found>
+
+=== 61000049 ===
+<not-found>
+
+=== 610000 ===
+    36: 
+    37:     private const long DtNull = 0;
+    38:     private const long DtNeeded = 0x01;
+    39:     private const long DtPltRelSize = 0x02;
+    40:     private const long DtPltGot = 0x03;
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+---
+    37:     private const long DtNull = 0;
+    38:     private const long DtNeeded = 0x01;
+    39:     private const long DtPltRelSize = 0x02;
+    40:     private const long DtPltGot = 0x03;
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+---
+    38:     private const long DtNeeded = 0x01;
+    39:     private const long DtPltRelSize = 0x02;
+    40:     private const long DtPltGot = 0x03;
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+    70:     private const uint RelocationTypeJumpSlot = 7;
+---
+    39:     private const long DtPltRelSize = 0x02;
+    40:     private const long DtPltGot = 0x03;
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+    70:     private const uint RelocationTypeJumpSlot = 7;
+    71:     private const uint RelocationTypeRelative = 8;
+---
+    40:     private const long DtPltGot = 0x03;
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+    70:     private const uint RelocationTypeJumpSlot = 7;
+    71:     private const uint RelocationTypeRelative = 8;
+    72:     private const uint RelocationTypeUnsigned32 = 10;
+---
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+    70:     private const uint RelocationTypeJumpSlot = 7;
+    71:     private const uint RelocationTypeRelative = 8;
+    72:     private const uint RelocationTypeUnsigned32 = 10;
+    73:     private const uint RelocationTypeSigned32 = 11;
+---
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+    70:     private const uint RelocationTypeJumpSlot = 7;
+    71:     private const uint RelocationTypeRelative = 8;
+    72:     private const uint RelocationTypeUnsigned32 = 10;
+    73:     private const uint RelocationTypeSigned32 = 11;
+    74:     private const uint RelocationTypeTlsModuleId = 16;   // R_X86_64_DTPMOD64
+---
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+    70:     private const uint RelocationTypeJumpSlot = 7;
+    71:     private const uint RelocationTypeRelative = 8;
+    72:     private const uint RelocationTypeUnsigned32 = 10;
+    73:     private const uint RelocationTypeSigned32 = 11;
+    74:     private const uint RelocationTypeTlsModuleId = 16;   // R_X86_64_DTPMOD64
+    75:     private const uint RelocationTypeTlsDtpOff64 = 17;    // R_X86_64_DTPOFF64
+---
+
+=== ImportLibrary ===
+<not-found>
+
+=== ImportLibraries ===
+<not-found>
+
+=== ImportModules ===
+<not-found>
+
+=== NeededModule ===
+    37:     private const long DtNull = 0;
+    38:     private const long DtNeeded = 0x01;
+    39:     private const long DtPltRelSize = 0x02;
+    40:     private const long DtPltGot = 0x03;
+    41:     private const long DtStrTab = 0x05;
+    42:     private const long DtSymTab = 0x06;
+    43:     private const long DtRela = 0x07;
+    44:     private const long DtRelaSize = 0x08;
+    45:     private const long DtInit = 0x0C;
+    46:     private const long DtStrSize = 0x0A;
+    47:     private const long DtJmpRel = 0x17;
+    48:     private const long DtInitArray = 0x19;
+    49:     private const long DtInitArraySize = 0x1B;
+    50:     private const long DtPreInitArray = 0x20;
+    51:     private const long DtPreInitArraySize = 0x21;
+    52:     private const long DtSceModuleInfo = 0x6100000D;
+    53:     private const long DtSceNeededModule = 0x6100000F;
+    54:     private const long DtSceExportLib = 0x61000013;
+    55:     private const long DtSceImportLib = 0x61000015;
+    56:     private const long DtSceJmpRel = 0x61000029;
+    57:     private const long DtScePltRelSize = 0x6100002D;
+    58:     private const long DtSceRela = 0x6100002F;
+    59:     private const long DtSceRelaSize = 0x61000031;
+    60:     private const long DtSceStrTab = 0x61000035;
+    61:     private const long DtSceStrSize = 0x61000037;
+    62:     private const long DtSceSymTab = 0x61000039;
+    63:     private const long DtSceSymTabSize = 0x6100003F;
+    64: 
+    65:     private const uint RelocationTypeNone = 0;
+    66:     private const uint RelocationTypeAbsolute64 = 1;
+    67:     private const uint RelocationTypePc32 = 2;
+    68:     private const uint RelocationTypePlt32 = 4;
+    69:     private const uint RelocationTypeGlobalData = 6;
+---
+   295:             runtimeSymbols);
+   296:         var finalizedImportStubs = effectiveImportStubs.Count == 0
+   297:             ? EmptyImportStubs
+   298:             : effectiveImportStubs;
+   299:         var finalizedRuntimeSymbols = runtimeSymbols.Count == 0
+   300:             ? EmptyRuntimeSymbols
+   301:             : runtimeSymbols;
+   302:         CollectInitializerFunctions(
+   303:             imageData,
+   304:             loadContext,
+   305:             programHeaders,
+   306:             virtualMemory,
+   307:             imageBase,
+   308:             out var initFunctionEntryPoint,
+   309:             out var preInitializerFunctions,
+   310:             out var initializerFunctions);
+   311:         var neededModuleNames = CollectNeededModuleNames(
+   312:             imageData,
+   313:             loadContext,
+   314:             programHeaders,
+   315:             virtualMemory,
+   316:             imageBase);
+   317:         var procParamAddress = ResolveProcParamAddress(programHeaders, imageBase);
+   318:         var moduleParamAddress = ResolveModuleParamAddress(programHeaders, imageBase);
+   319: 
+   320:         Console.WriteLine($"[LOADER] ELF type: 0x{elfHeader.Type:X4} ({elfHeader.ImageType})");
+   321:         Console.WriteLine($"[LOADER] ELF e_entry: 0x{elfHeader.EntryPoint:X16}");
+   322:         Console.WriteLine($"[LOADER] Generation: {(isNextGen ? "Gen5 (PS5)" : "Gen4 (PS4)")}");
+   323:         Console.WriteLine($"[LOADER] Using image base: 0x{imageBase:X16}");
+   324:         Console.WriteLine($"[LOADER] Final entry point: 0x{elfHeader.EntryPoint + imageBase:X16}");
+   325:         if (procParamAddress != 0)
+   326:         {
+   327:             Console.WriteLine($"[LOADER] ProcParam: 0x{procParamAddress:X16}");
+---
+   343:         if (tlsModuleId != 0 && _nextTlsModuleId == tlsModuleId && _nextTlsModuleId < uint.MaxValue)
+   344:         {
+   345:             _nextTlsModuleId++;
+   346:         }
+   347:         Console.Error.WriteLine($"[LOADER][TLS] load_done assigned={tlsModuleId} next={_nextTlsModuleId}");
+   348: 
+   349:         return new SelfImage(
+   350:             loadContext.IsSelf,
+   351:             elfHeader,
+   352:             programHeaders,
+   353:             virtualMemory.SnapshotRegions(),
+   354:             finalizedImportStubs,
+   355:             finalizedRuntimeSymbols,
+   356:             importedRelocations,
+   357:             preInitializerFunctions,
+   358:             initializerFunctions,
+   359:             neededModuleNames,
+   360:             initFunctionEntryPoint,
+   361:             imageBase,
+   362:             procParamAddress,
+   363:             moduleParamAddress,
+   364:             applicationInfo.Title,
+   365:             applicationInfo.TitleId,
+   366:             applicationInfo.Version,
+   367:             tlsModuleId,
+   368:             tlsInfo.MemorySize,
+   369:             tlsInfo.StaticOffset);
+   370:     }
+   371: 
+   372:     private static (string? Title, string? TitleId, string? Version) TryLoadParamJson(
+   373:         IFileSystem? fs,
+   374:         string? mountRoot)
+   375:     {
+---
+  1555:             var start = imageBase + header.VirtualAddress;
+  1556:             if (header.MemorySize > ulong.MaxValue - start)
+  1557:             {
+  1558:                 continue;
+  1559:             }
+  1560: 
+  1561:             var end = start + header.MemorySize;
+  1562:             if (address >= start && address < end)
+  1563:             {
+  1564:                 return true;
+  1565:             }
+  1566:         }
+  1567: 
+  1568:         return false;
+  1569:     }
+  1570: 
+  1571:     private static IReadOnlyList<string> CollectNeededModuleNames(
+  1572:         ReadOnlySpan<byte> imageData,
+  1573:         LoadContext loadContext,
+  1574:         IReadOnlyList<ProgramHeader> programHeaders,
+  1575:         IVirtualMemory virtualMemory,
+  1576:         ulong imageBase)
+  1577:     {
+  1578:         if (!TryGetProgramHeader(programHeaders, ProgramHeaderType.Dynamic, out var dynamicHeader, out var dynamicHeaderIndex) ||
+  1579:             dynamicHeader.FileSize == 0 ||
+  1580:             !TryLoadDynamicTableBytes(
+  1581:                 imageData,
+  1582:                 loadContext,
+  1583:                 virtualMemory,
+  1584:                 imageBase,
+  1585:                 dynamicHeader,
+  1586:                 dynamicHeaderIndex,
+  1587:                 out var dynamicTable))
+---
+  1617:                 dynamicTable.Slice(offset + sizeof(long), sizeof(ulong)));
+  1618: 
+  1619:             if (tag == DtNull)
+  1620:             {
+  1621:                 break;
+  1622:             }
+  1623: 
+  1624:             string name;
+  1625:             if (tag == DtNeeded)
+  1626:             {
+  1627:                 if (value > uint.MaxValue ||
+  1628:                     !TryReadNullTerminatedAscii(stringTable, unchecked((uint)value), out name))
+  1629:                 {
+  1630:                     continue;
+  1631:                 }
+  1632:             }
+  1633:             else if (tag == DtSceNeededModule)
+  1634:             {
+  1635:                 if (!TryDecodeSceMetadataName(
+  1636:                         stringTable,
+  1637:                         value,
+  1638:                         out _,
+  1639:                         out name,
+  1640:                         out _))
+  1641:                 {
+  1642:                     continue;
+  1643:                 }
+  1644:             }
+  1645:             else
+  1646:             {
+  1647:                 continue;
+  1648:             }
+  1649: 
+---
+  2178:                     }
+  2179: 
+  2180:                     if (usedLegacy)
+  2181:                     {
+  2182:                         legacyOffsetEntries++;
+  2183:                     }
+  2184: 
+  2185:                     var version = usedLegacy
+  2186:                         ? unchecked((ushort)((value >> 32) & 0x0F))
+  2187:                         : unchecked((ushort)((value >> 32) & ushort.MaxValue));
+  2188:                     var id = unchecked((ushort)(value >> 48));
+  2189:                     libraries[EncodeSceId(id)] =
+  2190:                         new SceLibraryMetadata(name, version);
+  2191:                     break;
+  2192:                 }
+  2193: 
+  2194:                 case DtSceNeededModule:
+  2195:                 case DtSceModuleInfo:
+  2196:                 {
+  2197:                     observedModuleEntries++;
+  2198:                     if (!TryDecodeSceMetadataName(
+  2199:                             stringTable,
+  2200:                             value,
+  2201:                             out var nameOffset,
+  2202:                             out var name,
+  2203:                             out var usedLegacy))
+  2204:                     {
+  2205:                         rejectedModuleEntries++;
+  2206:                         break;
+  2207:                     }
+  2208: 
+  2209:                     if (usedLegacy)
+  2210:                     {
+---

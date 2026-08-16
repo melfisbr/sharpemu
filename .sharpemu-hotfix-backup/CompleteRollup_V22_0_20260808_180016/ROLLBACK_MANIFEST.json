@@ -1,0 +1,67 @@
+﻿{
+    "Version":  "22.0",
+    "Created":  "2026-08-08T18:00:16.2381120-03:00",
+    "Repository":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu",
+    "Entries":  [
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\VideoOut\\VulkanVideoPresenter.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "36E2BD569568F8280DC8368407EBA1362B08821C36015F815F8318A8014C834A",
+                        "AfterSha256":  "36E2BD569568F8280DC8368407EBA1362B08821C36015F815F8318A8014C834A"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\Agc\\AgcExports.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "3904FEFECD5ECC667EB75E59F51407992B161CBD99185049EA607AE5045D4F7C",
+                        "AfterSha256":  "36C8274EA4E9628E60C771714040A077EC994D3AA968C1179C764F61CF29A4B5"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\Agc\\GpuWaitRegistry.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "BA5AEDC432FC168AB3E6C1C2F2354E5A8AC84AD4227A95C37C6793CC896326D6",
+                        "AfterSha256":  "BA5AEDC432FC168AB3E6C1C2F2354E5A8AC84AD4227A95C37C6793CC896326D6"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler\\Gen5ShaderTranslator.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "C8E2B4FD852A2277FCBE11EFABCEC4A90E0881A57B0371ABF309DE89D7406595",
+                        "AfterSha256":  "C8E2B4FD852A2277FCBE11EFABCEC4A90E0881A57B0371ABF309DE89D7406595"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\VideoOut\\VulkanDeviceBufferPool.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "318C90B91B1A4685CE0ED1243785D9A1528060F7C1E2EA9B9CF7C2F5BE1921A2",
+                        "AfterSha256":  "318C90B91B1A4685CE0ED1243785D9A1528060F7C1E2EA9B9CF7C2F5BE1921A2"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "0FFCD70BCE3683D53E4A1744D30B67E9C0E08E7CE59EFF7B68916103D66E7F2F",
+                        "AfterSha256":  "0FFCD70BCE3683D53E4A1744D30B67E9C0E08E7CE59EFF7B68916103D66E7F2F"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.Alu.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "67C13799C6B27DAA5A4FC54A0FBDDA8D8C7FF2EF89536587FFE87D7C3517BBBD",
+                        "AfterSha256":  "67C13799C6B27DAA5A4FC54A0FBDDA8D8C7FF2EF89536587FFE87D7C3517BBBD"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler\\Gen5ShaderIr.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "533EEA0914BD430FCB859E8677A612FE597E4E86A6E4ED90AD379996920C71CC",
+                        "AfterSha256":  "533EEA0914BD430FCB859E8677A612FE597E4E86A6E4ED90AD379996920C71CC"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler\\Gen5ShaderScalarEvaluator.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "28815064FEF87C9012A523A8A743D68BB133EB3DA65BB49FFA7BF5287AA2F20C",
+                        "AfterSha256":  "28815064FEF87C9012A523A8A743D68BB133EB3DA65BB49FFA7BF5287AA2F20C"
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\Gpu\\GuestGpuTypes.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "D1DA3541E166CF7565BEAA439D85E6D8B0F88DEA564A1775EED9A621088BBF7E",
+                        "AfterSha256":  "D1DA3541E166CF7565BEAA439D85E6D8B0F88DEA564A1775EED9A621088BBF7E"
+                    }
+                ]
+}

@@ -1,0 +1,21 @@
+V74.0.25 -> V74.0.26 decision record
+
+Confirmed by V74.0.25:
+1. WRITE_DATA packet-position scheduling is effective.
+   Seven previously persistent startup labels all produced real WAIT_RESUME markers.
+2. No labels were force-written and HostMovieBridge remained unchanged.
+3. V74.0.23.1 large-array sparse baseline and V74.0.24 fresh-stale-source remained stable.
+4. Natural guest Bink still did not occur within the 107 s observation.
+5. Long-latency synchronization remains: among 258 printed WAIT_RESUME samples,
+   26 were >1 s, 24 were >4 s, maximum 7160.489 ms.
+6. The log schedules BPE JobWorkerThread CPU0..CPU12. The current source states
+   this Demon's Souls job pool can run ~90% busy on an empty queue and intentionally
+   maps guest affinity to preserve host lanes for emulator GPU translation/present.
+7. The source's documented 16-lane benchmark had best performance with 6 reserved
+   lanes -> 10 guest-usable lanes. On ProcessorCount=24 the current proportional
+   default reserves 9 -> 15 usable lanes, so the 13 BPE workers need not be packed.
+
+V74.0.26 changes NO source. It sets the existing environment override so that
+10 lanes remain guest-usable and records process-tree normalized CPU usage,
+core-equivalent consumption, memory, wait latency, synchronization counters,
+and natural Bink milestones.

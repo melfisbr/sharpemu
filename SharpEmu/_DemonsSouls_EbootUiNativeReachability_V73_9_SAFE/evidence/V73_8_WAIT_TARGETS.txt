@@ -1,0 +1,8 @@
+[V73.4][LABEL] wait_target label=0x0000000456CFF100 queue=dcb.graphics submission=13 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000456CFF360 queue=acb.compute[56] submission=18 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000456CFF580 queue=acb.compute[72] submission=20 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000456CFF700 queue=acb.compute[32] submission=22 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000456CFF4C0 queue=acb.compute[40] submission=23 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000442FFF0E0 queue=acb.compute[56] submission=42 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000442FFF300 queue=acb.compute[72] submission=44 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0
+[V73.4][LABEL] wait_target label=0x0000000442FFF200 queue=acb.compute[40] submission=47 current=0x0000000000000000 ref=0x0000000000000001 mask=0x00000000FFFFFFFF cmp=3 observed_producer=0

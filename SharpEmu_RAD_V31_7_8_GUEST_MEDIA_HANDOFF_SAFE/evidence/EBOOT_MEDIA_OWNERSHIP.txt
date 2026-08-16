@@ -1,0 +1,34 @@
+Demon's Souls EBOOT media ownership evidence
+============================================
+
+Static strings already extracted from PPSA01341 eboot SHA256
+22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E include:
+
+- CComponentBinkSimpleMovie::Think(GameManager &, const float)
+- CCPLdrBinkSimpleMovie
+- CCPLdrUIBehaviorBinkMovieTextureDataSource
+- StartIntro
+- CCPLdrStateMachineOneShotMusicSkipIntroAnimation
+- GameObjects\Bink\CCPLdrBinkSimpleMovie.cpp
+- BinkGPU
+
+The old HostMovieBridge startup method explicitly states that main_menu,
+main_menu_ngp, attract_movie, story movies and credits are guest-driven.
+
+V31.7.7 runtime regression:
+  bink2.ds_boot_attract_injected
+  bink2.auto_boot_order movies=3 sequence='ps_studios_logo.bk2 -> logo_intro.bk2 -> attract_movie.bk2'
+
+V31.7.8 correction:
+- host fallback only discovers:
+    ps_studios_logo.bk2
+    logo_intro.bk2
+    logo_intro_loop.bk2
+- attract_movie.bk2 is never inserted by host auto boot.
+- natural guest opens remain observable through bink2.natural_guest_movie_observed.
+- RUN_4 enables narrowly filtered I/O tracing only for pr_demons_souls_intro
+  so the real guest audio asset timing can be identified without broad I/O tracing.
+
+V31.7.8 does NOT yet claim that the sidecar audio clock is guest-owned.  The
+host sidecar is preserved as a compatibility fallback until the guest's real
+audio start/read sequence is observed and can replace it without losing sound.

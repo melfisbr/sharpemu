@@ -1,0 +1,10 @@
+SharpEmu V74.0.13.1 package-path repair
+
+Purpose:
+- Same V74.0.13 runtime/performance/handoff correction.
+- Short top-level folder: SharpEmu_V74_0_13_1_SAFE
+- Avoids command/path mismatch from the previous long package directory name.
+- No additional source behavior beyond the V74.0.13 correction.
+
+Expected repository extraction location:
+C:\Users\Edpo\Documents\GitHub\sharpemu\SharpEmu_V74_0_13_1_SAFE

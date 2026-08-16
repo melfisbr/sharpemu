@@ -28,9 +28,11 @@ public static class NetExports
     private static readonly ConcurrentDictionary<int, NetPool> _pools = new();
     private static readonly ConcurrentDictionary<int, ResolverContext> _resolvers = new();
     private static readonly ConcurrentDictionary<int, Socket> _sockets = new();
+    private static readonly ConcurrentDictionary<int, ConcurrentDictionary<int, byte[]>> _epolls = new();
     private static int _nextPoolId;
     private static int _nextResolverId = 0x2000;
     private static int _nextSocketId = 0x4000;
+    private static int _nextEpollId = 0x6000;
     // The platform networking module is usable immediately after it is loaded.
     // Games and middleware (notably FMOD) can create internal sockets before an
     // explicit sceNetInit call reaches application code.
@@ -70,6 +72,7 @@ public static class NetExports
             socket.Dispose();
         }
         _sockets.Clear();
+        _epolls.Clear();
         TraceNet("term", 0, 0, 0, 0);
         return ctx.SetReturn(0);
     }
@@ -660,6 +663,57 @@ public static class NetExports
         return ctx.Memory.TryWrite(statusAddress, status)
             ? ctx.SetReturn(0)
             : ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(Nid = "SF47kB2MNTo", ExportName = "sceNetEpollCreate", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNet")]
+    public static int NetEpollCreate(CpuContext ctx)
+    {
+        if (!_initialized) return SetNetError(ctx, NetErrorNotInitialized, NetErrnoNotInitialized);
+        var flags = unchecked((int)ctx[CpuRegister.Rsi]); if (flags != 0) return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        var id = Interlocked.Increment(ref _nextEpollId); _epolls[id] = new ConcurrentDictionary<int, byte[]>();
+        TraceNet("epoll.create", id, ctx[CpuRegister.Rdi], 0, 0); return ctx.SetReturn(id);
+    }
+
+    [SysAbiExport(Nid = "ZVw46bsasAk", ExportName = "sceNetEpollControl", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNet")]
+    public static int NetEpollControl(CpuContext ctx)
+    {
+        var epollId = unchecked((int)ctx[CpuRegister.Rdi]); var operation = unchecked((int)ctx[CpuRegister.Rsi]); var targetId = unchecked((int)ctx[CpuRegister.Rdx]); var eventAddress = ctx[CpuRegister.Rcx];
+        if (!_epolls.TryGetValue(epollId, out var registrations)) return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        if (!_sockets.ContainsKey(targetId) && !_resolvers.ContainsKey(targetId)) return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        if (operation == 2) return registrations.TryRemove(targetId, out _) ? ctx.SetReturn(0) : SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        if (operation is not (1 or 3) || eventAddress == 0) return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        var descriptor = new byte[16]; if (!ctx.Memory.TryRead(eventAddress, descriptor)) return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        if (operation == 1 && !registrations.TryAdd(targetId, descriptor)) return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        if (operation == 3 && !registrations.ContainsKey(targetId)) return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        registrations[targetId] = descriptor; TraceNet("epoll.control", epollId, unchecked((ulong)operation), unchecked((ulong)targetId), eventAddress); return ctx.SetReturn(0);
+    }
+
+    [SysAbiExport(Nid = "Apb4YDxKsRI", ExportName = "sceNetResolverStartAton", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNet")]
+    public static int NetResolverStartAton(CpuContext ctx)
+    {
+        var id = unchecked((int)ctx[CpuRegister.Rdi]); var nameAddress = ctx[CpuRegister.Rsi]; var output = ctx[CpuRegister.Rdx];
+        if (!_resolvers.TryGetValue(id, out var resolver)) return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        if (output == 0 || !TryReadUtf8Z(ctx, nameAddress, MaxNameLength, out var name) || string.IsNullOrWhiteSpace(name)) return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        try
+        {
+            IPAddress? address = null; if (IPAddress.TryParse(name, out var parsed) && parsed.AddressFamily == AddressFamily.InterNetwork) address = parsed;
+            address ??= Dns.GetHostAddresses(name).FirstOrDefault(static value => value.AddressFamily == AddressFamily.InterNetwork);
+            if (address is null || !ctx.Memory.TryWrite(output, address.GetAddressBytes())) { _resolvers[id] = resolver with { LastError = NetErrnoInvalidArgument }; return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument); }
+            _resolvers[id] = resolver with { LastError = 0 }; TraceNet("resolver.aton", id, nameAddress, output, 0); return ctx.SetReturn(0);
+        }
+        catch (SocketException) { _resolvers[id] = resolver with { LastError = NetErrnoInvalidArgument }; return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument); }
+    }
+
+    [SysAbiExport(Nid = "Nd91WaWmG2w", ExportName = "sceNetResolverStartNtoa", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNet")]
+    public static int NetResolverStartNtoa(CpuContext ctx)
+    {
+        var id = unchecked((int)ctx[CpuRegister.Rdi]); var addressPointer = ctx[CpuRegister.Rsi]; var output = ctx[CpuRegister.Rdx]; var capacity = unchecked((int)ctx[CpuRegister.Rcx]);
+        if (!_resolvers.TryGetValue(id, out var resolver)) return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        if (addressPointer == 0 || output == 0 || capacity <= 1) return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        Span<byte> raw = stackalloc byte[4]; if (!ctx.Memory.TryRead(addressPointer, raw)) return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        var host = new IPAddress(raw).ToString(); var bytes = Encoding.ASCII.GetBytes(host + "\0");
+        if (bytes.Length > capacity || !ctx.Memory.TryWrite(output, bytes)) { _resolvers[id] = resolver with { LastError = NetErrnoInvalidArgument }; return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument); }
+        _resolvers[id] = resolver with { LastError = 0 }; TraceNet("resolver.ntoa", id, addressPointer, output, unchecked((ulong)capacity)); return ctx.SetReturn(0);
     }
 
     private static int SetNetError(CpuContext ctx, int result, int errno)

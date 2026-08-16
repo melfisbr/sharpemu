@@ -1,0 +1,54 @@
+                    var uValue = (sumU + 4) / 9;
+                    var vValue = (sumV + 4) / 9;
+
+                    if (swapUv)
+                    {
+                        (uValue, vValue) =
+                            (vValue, uValue);
+                    }
+
+                    var cbValue = uValue - 128;
+                    var crValue = vValue - 128;
+
+                    // V72.4.3.2.17 REFERENCE_CHROMA_Q14_EXACT
+                    // Model: [Cb, Cr, Y] -> [Cb_ref, Cr_ref].
+                    // Q14 coefficients fitted to aligned reference frames:
+                    // Cb' = 0.735107 Cb - 0.893982 Cr - 0.046509 Y
+                    // Cr' = -0.133484 Cb + 0.504089 Cr + 0.048767 Y
+                    if (v7243217ReferenceCalibration && fullRange)
+                    {
+                        var cbAccumulator =
+                            12044 * cbValue -
+                            14647 * crValue -
+                            762 * yy;
+                        var crAccumulator =
+                            -2187 * cbValue +
+                            8259 * crValue +
+                            799 * yy;
+
+                        cbValue =
+                            cbAccumulator >= 0
+                                ? (cbAccumulator + 8192) >> 14
+                                : -(((-cbAccumulator) + 8192) >> 14);
+                        crValue =
+                            crAccumulator >= 0
+                                ? (crAccumulator + 8192) >> 14
+                                : -(((-crAccumulator) + 8192) >> 14);
+
+                        cbValue = Math.Clamp(cbValue, -128, 127);
+                        crValue = Math.Clamp(crValue, -128, 127);
+                    }
+
+                    // V72.4.3.2.21 REFERENCE_NEUTRAL_PRECONVERT
+                    ApplyV7243221ReferenceNeutralGate(
+                        ref yy,
+                        ref cbValue,
+                        ref crValue);
+                    ConvertBt709Sample(
+                        yy,
+                        cbValue,
+                        crValue,
+                        fullRange,
+                        out var red,
+                        out var green,
+                        out var blue);

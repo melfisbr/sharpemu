@@ -39,6 +39,13 @@ public static class AjmExports
     private static readonly ConcurrentDictionary<uint, AjmContextState> Contexts = new();
     private static int _nextContextId;
     private static int _nextBatchId;
+    // V61.21.0_AJM_DECODE_SUMMARY
+    private static long _summaryModuleRegisterCount;
+    private static long _summaryInstanceCreateCount;
+    private static long _summaryDecodeZeroCount;
+    private static long _summaryDecodeNonZeroCount;
+    private static long _summaryRunZeroCount;
+    private static long _summaryRunNonZeroCount;
 
     private const uint AjmCodecMp3 = 0;
 
@@ -71,6 +78,14 @@ public static class AjmExports
         }
     }
 
+    private sealed class AjmBatchState
+    {
+        public required uint Id { get; init; }
+        public required ulong InfoAddress { get; init; }
+        public required int Priority { get; init; }
+        public bool Completed { get; init; } = true;
+    }
+
     private sealed class AjmContextState
     {
         public object Gate { get; } = new();
@@ -80,6 +95,8 @@ public static class AjmExports
         public Dictionary<uint, AjmInstanceState> InstancesBySlot { get; } = new();
 
         public Dictionary<ulong, ulong> RegisteredMemoryPages { get; } = new();
+
+        public Dictionary<uint, AjmBatchState> Batches { get; } = new();
 
         public int NextInstanceIndex { get; set; }
     }
@@ -217,6 +234,10 @@ public static class AjmExports
                 $"[LOADER][TRACE] ajm.module_register context={contextId} codec={codecType} reserved={reserved}");
         }
 
+        TraceSummary(
+            ref _summaryModuleRegisterCount,
+            "module-register",
+            $"context={contextId} codec={codecType}");
         ctx[CpuRegister.Rax] = 0;
         return 0;
     }
@@ -297,6 +318,10 @@ public static class AjmExports
         }
 
         Trace($"instance_create context={contextId} codec={codecType} flags=0x{flags:X} instance=0x{instanceId:X8}");
+        TraceSummary(
+            ref _summaryInstanceCreateCount,
+            "instance-create",
+            $"context={contextId} codec={codecType} flags=0x{flags:X} instance=0x{instanceId:X8}");
         return ctx.SetReturn(0);
     }
 
@@ -334,8 +359,30 @@ public static class AjmExports
         LibraryName = "libSceAjm")]
     public static int AjmModuleUnregister(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return 0;
+        var contextId = unchecked((uint)ctx[CpuRegister.Rdi]);
+        var codecType = unchecked((uint)ctx[CpuRegister.Rsi]);
+        var reserved = ctx[CpuRegister.Rdx];
+
+        if (codecType >= MaxCodecType || reserved != 0)
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        }
+
+        if (!Contexts.TryGetValue(contextId, out var state))
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidContext);
+        }
+
+        lock (state.Gate)
+        {
+            if (!state.RegisteredCodecs.Remove(codecType))
+            {
+                return ctx.SetReturn(OrbisAjmErrorCodecNotRegistered);
+            }
+        }
+
+        Trace($"module_unregister context={contextId} codec={codecType} reserved={reserved}");
+        return ctx.SetReturn(0);
     }
 
     [SysAbiExport(
@@ -404,6 +451,23 @@ public static class AjmExports
         {
             return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
         }
+    }
+
+    [SysAbiExport(Nid = "eDFeTyi+G3Y", ExportName = "sceAjmDecMp3ParseFrame", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceAjm")]
+    public static int AjmDecMp3ParseFrame(CpuContext ctx)
+    {
+        var frameAddress = ctx[CpuRegister.Rdi]; var frameSize = ctx[CpuRegister.Rsi]; var outputAddress = ctx[CpuRegister.Rdx];
+        if (frameAddress == 0 || frameSize < 4 || outputAddress == 0) return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        Span<byte> headerBytes = stackalloc byte[4]; if (!ctx.Memory.TryRead(frameAddress, headerBytes)) return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        var header = BinaryPrimitives.ReadUInt32BigEndian(headerBytes); if ((header & 0xFFE00000u) != 0xFFE00000u) return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        var version = (header >> 19) & 3; var layer = (header >> 17) & 3; var bitrateIndex = (header >> 12) & 15; var rateIndex = (header >> 10) & 3; var padding = (header >> 9) & 1;
+        if (version == 1 || layer != 1 || bitrateIndex is 0 or 15 || rateIndex == 3) return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        ReadOnlySpan<int> rates = [44100, 48000, 32000]; var sampleRate = rates[(int)rateIndex]; if (version == 2) sampleRate /= 2; else if (version == 0) sampleRate /= 4;
+        ReadOnlySpan<int> mpeg1Bitrates = [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320]; ReadOnlySpan<int> mpeg2Bitrates = [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
+        var bitrate = (version == 3 ? mpeg1Bitrates[(int)bitrateIndex] : mpeg2Bitrates[(int)bitrateIndex]) * 1000; var samples = version == 3 ? 1152 : 576; var frameBytes = ((version == 3 ? 144 : 72) * bitrate / sampleRate) + (int)padding; var channels = ((header >> 6) & 3) == 3 ? 1 : 2;
+        if ((ulong)frameBytes > frameSize) return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        Span<byte> info = stackalloc byte[20]; info.Clear(); BinaryPrimitives.WriteUInt32LittleEndian(info, (uint)channels); BinaryPrimitives.WriteUInt32LittleEndian(info[4..], (uint)sampleRate); BinaryPrimitives.WriteUInt32LittleEndian(info[8..], (uint)samples); BinaryPrimitives.WriteUInt32LittleEndian(info[12..], (uint)frameBytes); BinaryPrimitives.WriteUInt32LittleEndian(info[16..], (uint)bitrate);
+        return ctx.SetReturn(ctx.Memory.TryWrite(outputAddress, info) ? 0 : OrbisAjmErrorInvalidParameter);
     }
 
     [SysAbiExport(
@@ -708,6 +772,11 @@ public static class AjmExports
         var errorAddress = ctx[CpuRegister.Rcx];
         var batchOutAddress = ctx[CpuRegister.R8];
 
+        if (!Contexts.TryGetValue(contextId, out var state))
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidContext);
+        }
+
         if (infoAddress == 0 || batchOutAddress == 0)
         {
             return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
@@ -715,17 +784,38 @@ public static class AjmExports
 
         ClearAjmBatchError(ctx, errorAddress);
 
-        var batchId = unchecked((uint)Interlocked.Increment(ref _nextBatchId));
+        uint batchId;
+        do
+        {
+            batchId = unchecked((uint)Interlocked.Increment(ref _nextBatchId));
+        }
+        while (batchId == 0);
+
+        lock (state.Gate)
+        {
+            state.Batches[batchId] = new AjmBatchState
+            {
+                Id = batchId,
+                InfoAddress = infoAddress,
+                Priority = priority,
+            };
+        }
+
         Span<byte> batchValue = stackalloc byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(batchValue, batchId);
         if (!ctx.Memory.TryWrite(batchOutAddress, batchValue))
         {
+            lock (state.Gate)
+            {
+                state.Batches.Remove(batchId);
+            }
+
             return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
         }
 
         Trace(
             $"batch_start context={contextId} info=0x{infoAddress:X16} " +
-            $"priority={priority} batch={batchId} error=0x{errorAddress:X16}");
+            $"priority={priority} batch={batchId} error=0x{errorAddress:X16} state=completed");
         return ctx.SetReturn(0);
     }
 
@@ -736,13 +826,34 @@ public static class AjmExports
         LibraryName = "libSceAjm")]
     public static int AjmBatchWait(CpuContext ctx)
     {
-        // Batches complete synchronously in Start; Wait is a no-op success.
+        var contextId = unchecked((uint)ctx[CpuRegister.Rdi]);
+        var batchId = unchecked((uint)ctx[CpuRegister.Rsi]);
+        var timeout = unchecked((uint)ctx[CpuRegister.Rdx]);
         var errorAddress = ctx[CpuRegister.Rcx];
+
+        if (!Contexts.TryGetValue(contextId, out var state))
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidContext);
+        }
+
+        if (batchId == 0)
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        }
+
+        AjmBatchState? batch;
+        lock (state.Gate)
+        {
+            if (!state.Batches.Remove(batchId, out batch))
+            {
+                return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+            }
+        }
+
         ClearAjmBatchError(ctx, errorAddress);
         Trace(
-            $"batch_wait context={unchecked((uint)ctx[CpuRegister.Rdi])} " +
-            $"batch={unchecked((uint)ctx[CpuRegister.Rsi])} " +
-            $"timeout={unchecked((uint)ctx[CpuRegister.Rdx])}");
+            $"batch_wait context={contextId} batch={batchId} timeout={timeout} " +
+            $"completed={(batch.Completed ? 1 : 0)} info=0x{batch.InfoAddress:X16}");
         return ctx.SetReturn(0);
     }
 
@@ -753,9 +864,28 @@ public static class AjmExports
         LibraryName = "libSceAjm")]
     public static int AjmBatchCancel(CpuContext ctx)
     {
-        Trace(
-            $"batch_cancel context={unchecked((uint)ctx[CpuRegister.Rdi])} " +
-            $"batch={unchecked((uint)ctx[CpuRegister.Rsi])}");
+        var contextId = unchecked((uint)ctx[CpuRegister.Rdi]);
+        var batchId = unchecked((uint)ctx[CpuRegister.Rsi]);
+
+        if (!Contexts.TryGetValue(contextId, out var state))
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidContext);
+        }
+
+        if (batchId == 0)
+        {
+            return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+        }
+
+        lock (state.Gate)
+        {
+            if (!state.Batches.Remove(batchId))
+            {
+                return ctx.SetReturn(OrbisAjmErrorInvalidParameter);
+            }
+        }
+
+        Trace($"batch_cancel context={contextId} batch={batchId} state=cancelled");
         return ctx.SetReturn(0);
     }
 
@@ -828,6 +958,12 @@ public static class AjmExports
             $"batch_job_decode instance=0x{instanceId:X8} in=0x{inputAddress:X16}+0x{inputSize:X} " +
             $"out=0x{outputAddress:X16}+0x{outputSize:X} consumed={result.InputConsumed} " +
             $"produced={result.OutputWritten} frames={result.Frames} status=0x{result.Status:X8}");
+        TraceDecodeSummary(
+            "decode",
+            instanceId,
+            inputSize,
+            outputSize,
+            result);
         return ctx.SetReturn(0);
     }
 
@@ -910,6 +1046,12 @@ public static class AjmExports
             $"in=0x{inputAddress:X16}#{inputCountOrSize} out=0x{outputAddress:X16}#{outputCountOrSize} " +
             $"sideband=0x{sidebandAddress:X16}+0x{sidebandSize:X} consumed={result.InputConsumed} " +
             $"produced={result.OutputWritten} frames={result.Frames} status=0x{result.Status:X8}");
+        TraceDecodeSummary(
+            split ? "run-split" : "run",
+            instanceId,
+            inputCountOrSize,
+            outputCountOrSize,
+            result);
         TraceBufferDescriptors(ctx, split, "in", inputAddress, inputCountOrSize);
         TraceBufferDescriptors(ctx, split, "out", outputAddress, outputCountOrSize);
         return ctx.SetReturn(0);
@@ -1379,6 +1521,63 @@ public static class AjmExports
         Span<byte> buffer = stackalloc byte[sizeof(ulong)];
         BinaryPrimitives.WriteUInt64LittleEndian(buffer, value);
         return ctx.Memory.TryWrite(address, buffer);
+    }
+
+    // V61.21.0_AJM_DECODE_SUMMARY
+    private static void TraceDecodeSummary(
+        string kind,
+        uint instanceId,
+        ulong inputSize,
+        ulong outputSize,
+        Atrac9DecodeResult result)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_LOG_AJM_SUMMARY"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var isRun = kind.StartsWith("run", StringComparison.Ordinal);
+        long n;
+        if (isRun)
+        {
+            n = result.OutputWritten > 0
+                ? Interlocked.Increment(ref _summaryRunNonZeroCount)
+                : Interlocked.Increment(ref _summaryRunZeroCount);
+        }
+        else
+        {
+            n = result.OutputWritten > 0
+                ? Interlocked.Increment(ref _summaryDecodeNonZeroCount)
+                : Interlocked.Increment(ref _summaryDecodeZeroCount);
+        }
+        if (n <= 8 || n % 1000 == 0)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] ajm.summary.{kind}#{n} instance=0x{instanceId:X8} " +
+                $"in={inputSize} out_capacity={outputSize} produced={result.OutputWritten} " +
+                $"consumed={result.InputConsumed} frames={result.Frames} status=0x{result.Status:X8}");
+        }
+    }
+
+    private static void TraceSummary(ref long counter, string kind, string details)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_LOG_AJM_SUMMARY"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var n = Interlocked.Increment(ref counter);
+        if (n <= 8 || n % 1000 == 0)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] ajm.summary.{kind}#{n} {details}");
+        }
     }
 
     private static void Trace(string message)

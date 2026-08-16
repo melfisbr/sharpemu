@@ -1,0 +1,9 @@
+﻿Offset,Reference,Meaning
+0x24776DA,Core.Res.FileLoader,Async resource loading thread/name embedded in eboot
+0x2476168,UIManager::HasOpenMenus() const,UI manager code/data exists in title
+0x2476228,UITransition_ShowHUDScene,HUD transition exists in title
+0x24761AA,uiShowHudScene,HUD scene control exists in title
+0x2478188,CCPLdrUIBehaviorStartMenuInputHandler,Start-menu behavior registered in title
+multiple,*_ui.cgpr,UI resource variants embedded throughout title resource references
+runtime,$/scripts/cp11/_cmn/cp11main.cgpr,Startup CGPR successfully reaches Starting Script
+runtime,$/workspaces/...dependencies,Resource dependency file successfully loads

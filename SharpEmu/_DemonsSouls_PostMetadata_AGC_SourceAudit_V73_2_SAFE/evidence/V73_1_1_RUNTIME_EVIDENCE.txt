@@ -1,0 +1,80 @@
+V73.1.1 runtime evidence carried into V73.2
+
+[LOADER] SCE import metadata: libraries=53 modules=49
+[LOADER] SCE import metadata: libraries=3 modules=3
+[LOADER] SCE import metadata: libraries=6 modules=6
+
+runtime_unresolved=0
+agc.wait_suspended=7
+agc.dispatch_reject=43
+agc.dispatch_noop=15
+vk.guest_queue_backpressure=8
+vk.ordered_action_fence_wait=14
+event_fastpath=23
+guest_frame_presented=1
+device_lost_true=0
+unsupported_vector_opcode=0
+
+WAIT_REG_MEM / suspended labels:
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF100 queue=dcb.graphics submission=13 command=0x0000000441400000 packet=0x00000004414007F4 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000113 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF360 queue=acb.compute[56] submission=18 command=0x000000060A1E1B00 packet=0x000000060A1E1D68 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF580 queue=acb.compute[72] submission=20 command=0x000000060A221D00 packet=0x000000060A221D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF700 queue=acb.compute[32] submission=22 command=0x000000060A261F00 packet=0x000000060A261F80 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF4C0 queue=acb.compute[40] submission=23 command=0x000000060A26A000 packet=0x000000060A26A0A4 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442FFF300 queue=acb.compute[72] submission=44 command=0x000000060A493D00 packet=0x000000060A493D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442FFF200 queue=acb.compute[40] submission=47 command=0x000000060A4DC000 packet=0x000000060A4DC064 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+
+canonical-empty-fastpath samples:
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7A0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7AC raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7B8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7C4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7D0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7DC raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7E8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F7F4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F800 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F80C raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F818 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F824 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F830 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F83C raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F848 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F854 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F860 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F86C raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F878 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F884 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F890 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F89C raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8A8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8B4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8C0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8CC raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8D8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8E4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8F0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F8FC raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F908 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F914 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F92C raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F938 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F944 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F950 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F95C raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F968 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F974 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x00000004BF67F980 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=base-indirect dims=0x0000000447E7FEC0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=absolute-indirect dims=0x000000044F67FEC0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+[LOADER][WARN] agc.dispatch_reject source=absolute-indirect dims=0x000000044EB7FB80 raw=00000000/00000001/00000001 initiator=0x00000041 reason=canonical-empty-fastpath
+
+backpressure samples:
+[LOADER][TRACE] vk.guest_queue_backpressure count=1 queued=25 payload=7/192 sync=18/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:18,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:3,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=2 queued=26 payload=7/192 sync=19/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:19,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:4,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=3 queued=25 payload=7/192 sync=18/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:18,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:3,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=4 queued=26 payload=7/192 sync=19/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:19,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:4,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=5 queued=26 payload=7/192 sync=19/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:19,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:4,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=6 queued=25 payload=7/192 sync=18/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:18,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:3,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=7 queued=25 payload=7/192 sync=18/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:18,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:3,write_data:2]
+[LOADER][TRACE] vk.guest_queue_backpressure count=8 queued=26 payload=7/192 sync=19/4096 logical_queues=1 retained_mb=80 incoming_mb=16 budget_mb=96 work=VulkanComputeGuestDispatch textures_mb=0 globals_mb=16 global_lengths=[15728640,1028] types=[VulkanOrderedGuestAction:19,VulkanComputeGuestDispatch:7] ordered=[event_write:8,acquire_mem_flush:5,release_mem:4,write_data:2]

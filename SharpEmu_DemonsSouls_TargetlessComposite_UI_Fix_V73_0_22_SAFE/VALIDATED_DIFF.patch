@@ -1,0 +1,70 @@
+--- AgcExports.cs.7FFC8133
++++ AgcExports.cs.V73.0.22
+@@ -399,10 +399,32 @@
+     // Opt-in diagnostic: V1.5 proved that replacing the scanout source
+     // does not reveal the menu. Preserve the default suppression policy
+     // unless the V1.6 diagnostic explicitly replays targetless composites.
++    private static readonly string? _targetlessCompositeReplayOverride =
++        Environment.GetEnvironmentVariable("SHARPEMU_REPLAY_TARGETLESS_COMPOSITES");
+     private static readonly bool _replayTargetlessComposites = string.Equals(
+-        Environment.GetEnvironmentVariable("SHARPEMU_REPLAY_TARGETLESS_COMPOSITES"),
++        _targetlessCompositeReplayOverride,
+         "1",
+         StringComparison.Ordinal);
++    private static long _v73022DemonCompositeReplayTraceCount;
++
++    // SHARPEMU_DEMONSSOULS_TARGETLESS_COMPOSITE_REQUIRED_V73_0_22
++    // V73.0.21.2 A/B: suppressing these sampled targetless draws leaves the
++    // 4K scanout nearly black; replaying them produced the real LANGUAGE SELECT
++    // UI for PPSA01341 across >120 flips without device loss.
++    private static bool ShouldReplayTargetlessComposites()
++    {
++        if (string.Equals(
++                _targetlessCompositeReplayOverride,
++                "0",
++                StringComparison.Ordinal))
++        {
++            return false;
++        }
++
++        return _replayTargetlessComposites ||
++               KernelMemoryCompatExports.IsConfiguredApplicationTitle(
++                   "PPSA01341");
++    }
+     private static readonly bool _traceVertexRanges = string.Equals(
+         Environment.GetEnvironmentVariable("SHARPEMU_TRACE_VERTEX_RANGES"),
+         "1",
+@@ -4954,7 +4976,7 @@
+                             out var directDisplayWriter) &&
+                         directDisplayWriter.Sequence > state.LastFlipWorkSequence;
+ 
+-                    if (hasCurrentFrameDisplayWriter && !_replayTargetlessComposites)
++                    if (hasCurrentFrameDisplayWriter && !ShouldReplayTargetlessComposites())
+                     {
+                         TraceAgcShader(
+                             $"agc.scanout_writer_validated " +
+@@ -5035,8 +5057,23 @@
+                                 $"size={pendingDisplayTarget.Width}x{pendingDisplayTarget.Height}");
+                         }
+ 
+-                        if (_replayTargetlessComposites && hasCurrentFrameDisplayWriter)
++                        if (ShouldReplayTargetlessComposites() &&
++                            hasCurrentFrameDisplayWriter)
+                         {
++                            var v73022ReplayCount = Interlocked.Increment(
++                                ref _v73022DemonCompositeReplayTraceCount);
++                            if (v73022ReplayCount <= 8 ||
++                                (v73022ReplayCount & (v73022ReplayCount - 1)) == 0)
++                            {
++                                Console.Error.WriteLine(
++                                    $"[V73.0.22][DS_COMPOSITE_REPLAY] " +
++                                    $"frame={v73022ReplayCount} " +
++                                    $"count={deferredCompositeCount} " +
++                                    $"dst=0x{pendingDisplayTarget.Address:X16} " +
++                                    $"direct_writer={directDisplayWriter.Sequence} " +
++                                    $"frame_floor={state.LastFlipWorkSequence}");
++                            }
++
+                             TraceAgcShader(
+                                 $"agc.deferred_composite_replayed_after_direct_writer " +
+                                 $"count={deferredCompositeCount} " +

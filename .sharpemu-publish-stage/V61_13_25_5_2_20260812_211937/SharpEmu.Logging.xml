@@ -1,0 +1,136 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>SharpEmu.Logging</name>
+    </assembly>
+    <members>
+        <member name="T:SharpEmu.Logging.BuildInfo">
+            <summary>
+            Build provenance for the running emulator, populated at compile time from
+            GitHub Actions environment variables via <c>[AssemblyMetadata]</c> and
+            surfaced as a touchHLE-style banner at the top of the log.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.CommitSha">
+            <summary>Short commit hash the build was produced from, or <c>null</c>.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.Branch">
+            <summary>Branch the build was produced from, or <c>null</c>.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.Repository">
+            <summary>Repository slug (<c>owner/name</c>) the build came from, or <c>null</c>.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.WorkflowRunUrl">
+            <summary>URL of the GitHub Actions workflow run that produced the build, or <c>null</c>.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.Configuration">
+            <summary>Build configuration (e.g. <c>Debug</c> or <c>Release</c>), or <c>null</c>.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.IsOfficialRelease">
+            <summary>
+            Whether this build is an official release: a Release-configuration CI build
+            from the canonical repository, produced by a push to <c>main</c> or a manual
+            workflow dispatch (matching the CI <c>release</c> job). All other builds
+            (pull requests, forks, feature branches, and local/Debug builds) are
+            considered unofficial.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Logging.BuildInfo.Banner">
+             <summary>
+             The multi-line banner, e.g.
+             <code>
+             SharpEmu UNOFFICIAL f11ac59 — https://github.com/sharpemu/sharpemu
+            
+             Built from branch "main" of "sharpemu/sharpemu" by GitHub Actions workflow run https://github.com/sharpemu/sharpemu/actions/runs/123.
+             </code>
+             Official release builds drop the <c>UNOFFICIAL</c> tag. Falls back to a
+             local-build line when no CI provenance is present.
+             </summary>
+        </member>
+        <member name="T:SharpEmu.Logging.CompositeLogSink">
+            <summary>
+            Dispatches each <see cref="T:SharpEmu.Logging.LogEntry"/> to every child sink.
+            Exceptions thrown by a child are swallowed so one failing sink
+            (e.g. a closed file) cannot silence the others.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Logging.ConsoleLogSink.IncludeExecutionContext">
+            <summary>
+            Console stays compact by default. Set SHARPEMU_LOG_CONSOLE_CONTEXT=1
+            to show sequence/thread/correlation information interactively.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Logging.FileLogSink.IncludeExecutionContext">
+            <summary>
+            Include sequence, monotonic elapsed time, PID/TID, operation/scope and
+            structured diagnostic context in file output.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Logging.HostSystemInfo">
+            <summary>Provides best-effort information about the host system.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.HostSystemInfo.CpuName">
+            <summary>Host CPU name, or a safe fallback when it cannot be determined.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.HostSystemInfo.GpuName">
+            <summary>Preferred physical GPU name, or a safe fallback when it cannot be determined.</summary>
+        </member>
+        <member name="P:SharpEmu.Logging.HostSystemInfo.Summary">
+            <summary>Returns a concise description of the host hardware for diagnostic logs.</summary>
+        </member>
+        <member name="T:SharpEmu.Logging.LogContext">
+            <summary>
+            Lightweight ambient diagnostic context. Values flow through async calls via
+            AsyncLocal and are copied into LogEntry only when an entry is emitted.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Logging.LogEntry">
+            <summary>
+            Immutable event passed to log sinks. The execution/correlation fields are
+            intentionally optional so existing callers that construct LogEntry directly
+            remain source compatible.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Logging.LogEntry.#ctor(System.DateTimeOffset,SharpEmu.Logging.LogLevel,System.String,System.String,System.String,System.Int32,System.String,System.Exception,System.Int64,System.Double,System.Int32,System.Int32,System.String,System.String,System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String})">
+            <summary>
+            Immutable event passed to log sinks. The execution/correlation fields are
+            intentionally optional so existing callers that construct LogEntry directly
+            remain source compatible.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Logging.SharpEmuLog.MinimumLevel">
+            <summary>
+            Entries below this level are dropped. When a SHARPEMU_LOG_FILE sink is
+            active it only limits the console — the file receives every level.
+            <see cref="F:SharpEmu.Logging.LogLevel.None"/> disables logging entirely, file included.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Logging.SharpEmuLog.BeginScope(System.String,System.ValueTuple{System.String,System.Object}[])">
+            <summary>
+            Adds ambient fields to all log entries produced inside the returned scope.
+            Example:
+            using var _ = SharpEmuLog.BeginScope("gpu.submit",
+                ("queue", queueId), ("submit", submitId), ("guest_pc", $"0x{pc:X}"));
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Logging.SharpEmuLog.BeginOperation(System.String,System.ValueTuple{System.String,System.Object}[])">
+            <summary>
+            Starts a correlated operation. Every log inside the scope receives a
+            compact operation id plus the supplied diagnostic fields.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Logging.SharpEmuLog.SetGlobalContext(System.String,System.Object)">
+            <summary>
+            Adds a process-wide diagnostic field, useful for title_id, game_version,
+            cpu_backend, gpu_name, driver_version and similar stable run metadata.
+            Passing null removes the field.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Logging.SharpEmuLog.Shutdown">
+            <summary>
+            Disposes the active sink if it implements IDisposable.
+            Call at shutdown to flush file buffers.
+            </summary>
+        </member>
+    </members>
+</doc>

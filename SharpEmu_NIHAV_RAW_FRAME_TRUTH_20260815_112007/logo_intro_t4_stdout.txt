@@ -1,0 +1,4 @@
+﻿Opening F:\JOGOSPS5\PPSA01341\movies\logo_intro.bk2
+ trying demuxer bink
+ total duration 0:00:12.0
+stream 0 - (Video#0 @ 1/30 - 3840x2160) bink2-video

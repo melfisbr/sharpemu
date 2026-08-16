@@ -1,0 +1,99 @@
+V74.0.7 evidence from V74.0.6.3 result
+
+SUMMARY
+﻿version=74.0.6.3
+
+classification=memory-pressure-after-compute-restore
+
+exit_code=diagnostic-stop
+
+memory_pressure_stop=True
+
+compute_dispatch_fail_hits=0
+
+compute_null_invariant_hits=0
+
+event_fastpath_hits=22
+
+clr_failfast_hits=0
+
+natural_guest_movie_hits=0
+
+compute_yuv_binding_hits=0
+
+snapshot_reuse_hits=0
+
+peak_process_tree_working_set_mb=11796,3
+
+peak_process_tree_private_mb=17110,9
+
+Additional raw-log facts:
+- EVENT_FASTPATH includes n=256, n=512 and n=1024.
+- Vulkan compute dispatch failed: 0
+- compute texture resource remained null: 0
+- V74.0.4 large CPU snapshot breadcrumbs: 6
+- V74.0.4 DCC suppressions: 30
+- V74.0.5 source snapshot reuse hits: 0
+- latest DCC cumulative suppression text includes total_suppressed_mb=998.
+
+PROCESS TREE
+elapsed_s;process_count;working_set_mb;private_mb;cpu_seconds
+
+0,5;3;87,0;30,9;0,63
+
+3,1;3;174,0;76,1;3,11
+
+5,6;3;582,7;478,2;7,14
+
+7,9;3;588,5;499,0;9,17
+
+10,4;3;665,5;6069,9;26,22
+
+12,8;3;906,7;6309,8;61,16
+
+15,3;3;907,1;6309,6;95,25
+
+17,7;3;1010,8;6313,9;130,11
+
+20,2;3;1248,0;6402,3;159,80
+
+22,6;3;1378,2;6402,6;184,81
+
+25,1;3;1699,7;6435,5;209,95
+
+27,5;3;1943,2;6436,8;235,86
+
+30,0;3;2003,7;6462,3;261,80
+
+32,4;3;2310,5;6796,1;287,89
+
+35,0;3;3500,3;7976,5;319,77
+
+37,6;3;4014,8;8610,1;352,63
+
+40,1;3;10489,5;15682,5;385,39
+
+42,7;3;11148,2;16457,8;418,98
+
+45,3;3;11152,2;16452,7;451,73
+
+47,8;3;11628,7;16981,0;484,94
+
+50,4;3;11796,3;17110,9;517,22
+
+Captured presenter SHA256:
+7E2BAF55BE358C248FAC6755DE8C15BA5F2BBB6ACC7BB1F4C3B78CE2F4E7D6E8
+
+Patched payload SHA256:
+1D8EE63DCB2F4E2A1EEC595535F40224FBE06E1DD16531233597F24740A02A28
+
+Source audit:
+1. `_textureCache` has count-based clearing at >2048 entries.
+2. sampled `CreateTextureResource()` can add a newly created image to
+   `_guestImages` and set `resource.GuestImage`.
+3. `_guestImages` is otherwise cleared at teardown; there was no sampled-image
+   byte budget.
+4. V73.17 staging retirement only detaches cached staging when a retirement
+   list is supplied.
+5. compute/offscreen paths supply such lists; direct swapchain
+   `RecordTranslatedDraw()` did not.

@@ -11,6 +11,25 @@ public static class NpManagerExports
     private const int NpTitleIdSize = 16;
     private const int NpTitleSecretSize = 128;
     private const int NpErrorInvalidArgument = unchecked((int)0x80550003);
+    private static readonly object RequestGate = new();
+    private static readonly HashSet<int> AsyncRequests = [];
+    private static int _nextAsyncRequest;
+
+    [SysAbiExport(Nid = "eiqMCt9UshI", ExportName = "sceNpCreateAsyncRequest", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNpManager")]
+    public static int NpCreateAsyncRequest(CpuContext ctx)
+    {
+        var requestId = Interlocked.Increment(ref _nextAsyncRequest);
+        lock (RequestGate) AsyncRequests.Add(requestId);
+        TraceNp($"create_async_request id={requestId}");
+        return ctx.SetReturn(requestId);
+    }
+
+    [SysAbiExport(Nid = "P6piso307SE", ExportName = "sceNpNotifyPremiumFeature", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNpManager")]
+    public static int NpNotifyPremiumFeature(CpuContext ctx)
+    {
+        TraceNp($"notify_premium_feature user={unchecked((int)ctx[CpuRegister.Rdi])} feature=0x{ctx[CpuRegister.Rsi]:X}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
 
     [SysAbiExport(
         Nid = "3Zl8BePTh9Y",
@@ -30,8 +49,15 @@ public static class NpManagerExports
         LibraryName = "libSceNpManager")]
     public static int NpDeleteRequest(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var requestId = unchecked((int)ctx[CpuRegister.Rdi]);
+        lock (RequestGate)
+        {
+            if (AsyncRequests.Count != 0 && !AsyncRequests.Remove(requestId))
+            {
+                return ctx.SetReturn(NpErrorInvalidArgument);
+            }
+        }
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
     }
 
     [SysAbiExport(

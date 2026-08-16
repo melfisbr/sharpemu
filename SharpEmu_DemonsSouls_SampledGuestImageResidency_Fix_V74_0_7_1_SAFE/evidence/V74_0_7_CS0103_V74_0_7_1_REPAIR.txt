@@ -1,0 +1,43 @@
+V74.0.7.1 BUILD REPAIR
+
+Observed V74.0.7:
+- PRECHECK PASSED on exact V74.0.6.3 baseline
+- exact audited payload installed
+- build reached SharpEmu.Libs
+- only one C# error:
+
+  VulkanVideoPresenter.cs(10741,17):
+  CS0103: InvalidateTextureCacheAddressV56 does not exist
+
+SAFE rollback restored VulkanVideoPresenter.cs.
+
+Current baseline remains:
+7E2BAF55BE358C248FAC6755DE8C15BA5F2BBB6ACC7BB1F4C3B78CE2F4E7D6E8
+
+Root cause:
+The residency trim used a historical/nonexistent helper name.
+
+The actual accumulated presenter defines:
+
+    private void InvalidateSampledTextureCacheForGuestAddressV56(
+        ulong address,
+        string reason)
+
+This routine is the correct semantic match because it:
+- removes `_textureCache` entries for the same guest address;
+- flushes only if standalone resources require it;
+- marks cached resources uncached;
+- queues standalone texture destruction on the submission timeline;
+- leaves GuestImage-backed TextureResource storage destruction to the
+  GuestImage retirement path.
+
+V74.0.7.1 changes exactly one runtime call:
+
+    InvalidateTextureCacheAddressV56(...)
+        ->
+    InvalidateSampledTextureCacheForGuestAddressV56(...)
+
+No residency policy, budget, compute path or staging-retirement behavior changes.
+
+Corrected payload SHA256:
+1D8EE63DCB2F4E2A1EEC595535F40224FBE06E1DD16531233597F24740A02A28

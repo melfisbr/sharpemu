@@ -1,0 +1,2 @@
+SharpEmu_V74_0_18_SAFE
+Native memcpy intrinsic A/B + native render-scale correctness recovery

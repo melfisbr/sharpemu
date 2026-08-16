@@ -1,0 +1,16 @@
+﻿Dragon Ball FighterZ Pthread Opaque Owner Sync V1.4.5 Result
+ExitCode=-1073741819
+OpaqueOwnerSyncCount=32
+OpaqueSync40840060=False
+OpaqueObject2AC0=False
+OldExternalOwnerSyncPresent=False
+AdaptiveTrackedSelfCompatHit=False
+FastpathUnlockTraceCount=0
+Deadlock9UK=False
+OldAV40=True
+NativeException=True
+UnresolvedSaKib=True
+AmprStillMaterialized=True
+AsyncLoadingThread=True
+ProjectFileNotFound=False
+GEngineLoopPreInitFailed=False

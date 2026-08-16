@@ -1,0 +1,9 @@
+﻿5,0s pthread_gate_enabled
+5,0s native_memcpy_intrinsic_enabled
+15,4s observed_tbb_limit=2
+25,7s main_loop [MSG-Init] Starting main loop: 18.0960s
+46,1s gather_complete [MSG-Init] ResourcePool::GatherResourceFileInfo() took 32.6980s
+240,6s import_progress_8388608 [LOADER][TRACE] dbfz.import_progress.v1892 import=8388608 nid=9UK1vLZQft4
+373,7s natural_1 ps_studios_logo.bk2
+384,0s completed_1 [LOADER][INFO] Bink RAD bridge completed: ps_studios_logo.bk2 after 10,22s exit=0
+604,1s import_progress_16777216 [LOADER][TRACE] dbfz.import_progress.v1892 import=16777216 nid=9UK1vLZQft4

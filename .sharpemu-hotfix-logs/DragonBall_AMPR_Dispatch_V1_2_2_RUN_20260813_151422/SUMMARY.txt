@@ -1,0 +1,9 @@
+﻿Dragon Ball FighterZ AMPR Dispatch V1.2.2 Result
+ExitCode=-1073741795
+DispatchMaterialized40000000=True
+DispatchMaterializeFailed=False
+OldMethodMarkerPresent=False
+OldAV40000000=False
+OldAV807842841=False
+NativeException=True
+ReachedEntry=True

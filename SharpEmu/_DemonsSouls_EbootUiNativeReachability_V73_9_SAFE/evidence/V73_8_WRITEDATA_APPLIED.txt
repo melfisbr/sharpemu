@@ -1,0 +1,13 @@
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF100 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=acb.compute[32] submission=22 packet=0x000000060A199348
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF360 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x0000000442500750
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF700 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x00000004425015DC
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF580 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x000000044250253C
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF4C0 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x0000000442503478
+[V73.4][LABEL] write_data_applied label=0x0000000442FFF0E0 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=48 packet=0x00000004461002A4
+[V73.4][LABEL] write_data_applied label=0x0000000442FFF300 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=48 packet=0x0000000446102090
+[V73.4][LABEL] write_data_applied label=0x0000000442FFF200 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=48 packet=0x00000004461021B4
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF100 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=acb.compute[32] submission=70 packet=0x000000060A67D348
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF360 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=72 packet=0x00000004425002A4
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF700 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=72 packet=0x0000000442501130
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF580 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=72 packet=0x0000000442502090
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF4C0 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=72 packet=0x0000000442502FCC

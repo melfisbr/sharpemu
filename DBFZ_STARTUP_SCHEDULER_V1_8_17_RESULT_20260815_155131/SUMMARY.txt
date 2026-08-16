@@ -1,0 +1,25 @@
+﻿Dragon Ball FighterZ Startup/Scheduler/RenderThread V1.8.17.6
+DiagnosticSeconds=240
+RuntimeSurvivedWindow=True
+TotalProcessMs=240202
+RuntimeEntryObservedMs=4496
+SplashObservedMs=198574
+ImportSetupFullCount=1
+ExecSetupCachePrimeCount=1
+ExecSetupCacheHitCount=7
+NativeWorkerPrewarm=[LOADER][INFO] Native guest workers prewarmed: 8/8 max_concurrent=16
+RenderThreadCreateCount=1
+RenderThreadRunCount=0
+RHIThreadRunCount=0
+AgcSubmissionRunCount=0
+RTHeartBeatRunCount=0
+RenderThreadTimeoutCount=0
+FatalOrAbortCount=0
+EventFastpathCount=4
+MkdirAlreadyExistsCount=91
+UnresolvedImportCount=2
+WarmupLine=[HLE] Warmed 3924 type initializers (0 threw) + JIT-compiled 54116 methods (129 skipped) across 11 HLE assemblies, plus 3421 framework type initializers.
+ModulePreloadLine=[RUNTIME] Module preload summary: loaded=7, failed=0, merged_imports=475, merged_symbols=91019
+ImportedDataRebindClean=True
+MaxObservedImportNumber=93881363
+MaxObservedImportLine=[LOADER][WARN] Import#93881363 unresolved: nid=FzQS6DREDfk count=1 ret=0x000000080068397B rdi=0x0000000000000001 rsi=0x0000000000000001 rdx=0x0000000054000000 rcx=0x0000000000000014 r8=0x0000000800BABA50 r9=0x00007FFFF01FE8BC symbol='FzQS6DREDfk#1#1' library_token='1' library='libSceSharePlay' library_version=0x0001 module_token='1' module='libSceSharePlay' module_version=1.1 token_peer_nids=3 known_token_peers=3 peer_names='+MCXJlWdi+s=sceSharePlayGetCurrentConnectionInfoA;UaLjloJinow=sceSharePlayTerminate;isruqthpYcw=sceSharePlayInitialize'

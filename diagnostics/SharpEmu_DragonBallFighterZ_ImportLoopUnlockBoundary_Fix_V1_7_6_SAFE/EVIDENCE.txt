@@ -1,0 +1,29 @@
+Dragon Ball FighterZ V1.7.6 evidence
+
+V1.7.5:
+LastAprSequence=1293
+Pak0PayloadCallCount=1280
+Pak1PayloadCallCount=2
+Pak0PayloadReadableAfterCount=1280
+Pak1PayloadReadableAfterCount=2
+Pak0PayloadChangedCount=1279
+Pak1PayloadChangedCount=2
+Pak0RequestedBytes=104908226
+Pak1RequestedBytes=8652123
+GlobalShaderCacheFatal=False
+AbortCalled=False
+NativeException=False
+LastVEH=
+
+Examples of materialized bytes:
+89504E470D0A1A0A0000000D49484452  -> PNG
+7B0D0A092246696C6556657273696F6E  -> text/config
+5B4C61756E63685D0D0A0D0A5B2F5363  -> config text
+
+Final runtime blocker:
+Import-loop guard fired at import#51347456:
+nid=tn3VlD0hG60
+ret=0x0000000800C00815
+
+The guard forced host unwind and converted the run into
+ORBIS_GEN2_ERROR_NOT_IMPLEMENTED despite no guest AV/abort/native exception.

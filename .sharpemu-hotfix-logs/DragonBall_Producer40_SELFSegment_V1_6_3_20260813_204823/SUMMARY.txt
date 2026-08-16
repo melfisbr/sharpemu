@@ -1,0 +1,11 @@
+﻿Dragon Ball FighterZ Producer40 SELF-Segment Evidence V1.6.3
+Eboot=F:\JOGOSPS5\[DLPSGAME.COM]-PPSA09790\[DLPSGAME.COM]-PPSA09790\PPSA09790-app\eboot.bin
+EbootSHA256=106b594c4e84401b096ec8b41a088fbf4e3862aee2faf030e4e6767df5cd1018
+SegmentBias=0x233F0
+BiasMode=signature-derived
+RuntimeSignatureOffset=0xC8F2C1
+PRODUCER_C222F0: guest_start=0x0000000800C21FF0 file_start=0xC453E0 bytes=0x1000 sha256=5e675768fec5bcfc991f962715cd8f656b342713cb11960accac9bab9687d73d
+CALLER_C6BEE0: guest_start=0x0000000800C6BBE0 file_start=0xC8EFD0 bytes=0x600 sha256=5c2b61f283f80cf0a8b49cb821fa9faf06337b0d901523391f7ab5ec1f4feac9
+COPY_11300: guest_start=0x0000000800011200 file_start=0x345F0 bytes=0x400 sha256=1e71ee5f1fc50f53f69951e0083eceea6c8550dd89197e771812d24265521db9
+ProducerCallVerified=True
+CopyCallVerified=True

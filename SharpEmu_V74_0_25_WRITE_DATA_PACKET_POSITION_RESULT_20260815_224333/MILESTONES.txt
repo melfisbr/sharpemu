@@ -1,0 +1,17 @@
+﻿22.4s write_data_packet_position=50
+22.4s main_loop guest_seconds=16.9584
+22.4s first_guest_frame size=3840x2160
+23.6s write_data_packet_position=64
+23.6s wait_resume=7
+27.5s wait_resume=9
+28.7s wait_resume=15
+29.9s write_data_packet_position=128
+29.9s wait_resume=89
+35.1s write_data_packet_position=256
+35.1s wait_resume=172
+40.1s write_data_packet_position=512
+40.1s wait_resume=256
+55.1s write_data_packet_position=1024
+55.1s wait_resume=512
+80.5s write_data_packet_position=2048
+85.6s wait_resume=1024

@@ -1,0 +1,63 @@
+    // V72.4.3.2.21 REFERENCE_NEUTRAL_GATE_HELPER
+    //
+    // V72.4.3.2.27 CENTERED_CHROMA_NEUTRAL_GATE_FIX
+    //
+    // cbValue/crValue reaching this helper are already centered signed chroma
+    // values (-128..127). V21/V22 subtracted 128 a second time, so neutral
+    // chroma (0,0) was measured as (-128,-128) and almost always rejected.
+    //
+    // Operate in the correct centered domain. Keep the gate conservative:
+    // only bright, genuinely near-neutral samples are pulled toward zero tint.
+    private static void ApplyV7243221ReferenceNeutralGate(
+        ref byte yy,
+        ref int cbValue,
+        ref int crValue)
+    {
+        var yyValue = (int)yy;
+        var cbDelta = cbValue;
+        var crDelta = crValue;
+        var chromaMagnitude =
+            Math.Abs(cbDelta) +
+            Math.Abs(crDelta);
+
+        if (yyValue < 144 ||
+            chromaMagnitude > 32)
+        {
+            return;
+        }
+
+        var lumaStrength =
+            Math.Clamp(
+                (yyValue - 144) * 3,
+                0,
+                192);
+        var neutralStrength =
+            (Math.Clamp(32 - chromaMagnitude, 0, 32) * 255 + 16) /
+            32;
+        var strength =
+            (lumaStrength * neutralStrength + 127) /
+            255;
+
+        if (strength <= 0)
+        {
+            return;
+        }
+
+        // Mild highlight lift; do not repeat V22's full-strength washout.
+        yyValue +=
+            ((255 - yyValue) * strength + 511) /
+            1024;
+
+        cbValue =
+            (cbDelta * (255 - strength) + 127) /
+            255;
+        crValue =
+            (crDelta * (255 - strength) + 127) /
+            255;
+
+        yy = (byte)Math.Clamp(yyValue, 0, 255);
+        cbValue = Math.Clamp(cbValue, -128, 127);
+        crValue = Math.Clamp(crValue, -128, 127);
+    }
+
+    private static void TryDumpV7243213PackedFrameTruth(

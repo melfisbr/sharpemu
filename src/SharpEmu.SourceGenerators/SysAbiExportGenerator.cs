@@ -24,6 +24,7 @@ namespace SharpEmu.SourceGenerators;
 public sealed class SysAbiExportGenerator : IIncrementalGenerator
 {
     private const string AttributeMetadataName = SysAbiExportShape.SysAbiExportAttributeName;
+    private const int RegistryChunkSize = 128;
 
     private sealed class ExportModel : IEquatable<ExportModel>
     {
@@ -177,27 +178,44 @@ public sealed class SysAbiExportGenerator : IIncrementalGenerator
         builder.AppendLine("    {");
         builder.AppendLine($"        var exports = new global::System.Collections.Generic.List<global::SharpEmu.HLE.ExportedFunction>({exports.Length});");
 
-        foreach (var export in exports)
+        var chunkCount = (exports.Length + RegistryChunkSize - 1) / RegistryChunkSize;
+        for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
         {
-            if (export is null)
-            {
-                continue;
-            }
-
-            var function = export.Shape switch
-            {
-                SysAbiExportShape.HandlerShape.ContextOnly => $"{export.ContainingType}.{export.MethodName}",
-                SysAbiExportShape.HandlerShape.Parameterless => $"static _ => {export.ContainingType}.{export.MethodName}()",
-                _ => TypedThunk(export),
-            };
-            builder.AppendLine(
-                $"        Add(exports, registrationGeneration, {Literal(export.LibraryName)}, {Literal(export.Nid)}, " +
-                $"{Literal(export.ExportName)}, (global::SharpEmu.HLE.Generation){export.Target}, {function});");
+            builder.AppendLine($"        AddChunk{chunkIndex:D3}(exports, registrationGeneration);");
         }
 
         builder.AppendLine("        return exports;");
         builder.AppendLine("    }");
         builder.AppendLine();
+
+        // Keep generated methods deliberately small. With tens of thousands of exports,
+        // placing every registration call in CreateExports produces a multi-megabyte
+        // method whose JIT compilation can exhaust the native stack before the runtime
+        // is created. Chunks preserve source order and exact registration semantics while
+        // bounding the IL/JIT work for any individual generated method.
+        for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+        {
+            var start = chunkIndex * RegistryChunkSize;
+            var end = Math.Min(start + RegistryChunkSize, exports.Length);
+            builder.AppendLine($"    private static void AddChunk{chunkIndex:D3}(");
+            builder.AppendLine("        global::System.Collections.Generic.List<global::SharpEmu.HLE.ExportedFunction> exports,");
+            builder.AppendLine("        global::SharpEmu.HLE.Generation registrationGeneration)");
+            builder.AppendLine("    {");
+
+            for (var exportIndex = start; exportIndex < end; exportIndex++)
+            {
+                var export = exports[exportIndex];
+                if (export is null)
+                {
+                    continue;
+                }
+
+                AppendRegistration(builder, export, "        ");
+            }
+
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
         builder.AppendLine("    private static void Add(");
         builder.AppendLine("        global::System.Collections.Generic.List<global::SharpEmu.HLE.ExportedFunction> exports,");
         builder.AppendLine("        global::SharpEmu.HLE.Generation registrationGeneration,");
@@ -218,6 +236,21 @@ public sealed class SysAbiExportGenerator : IIncrementalGenerator
         builder.AppendLine("}");
 
         context.AddSource("SysAbiExportRegistry.g.cs", SourceText.From(builder.ToString(), Encoding.UTF8));
+    }
+
+
+    private static void AppendRegistration(StringBuilder builder, ExportModel export, string indent)
+    {
+        var function = export.Shape switch
+        {
+            SysAbiExportShape.HandlerShape.ContextOnly => $"{export.ContainingType}.{export.MethodName}",
+            SysAbiExportShape.HandlerShape.Parameterless => $"static _ => {export.ContainingType}.{export.MethodName}()",
+            _ => TypedThunk(export),
+        };
+
+        builder.AppendLine(
+            $"{indent}Add(exports, registrationGeneration, {Literal(export.LibraryName)}, {Literal(export.Nid)}, " +
+            $"{Literal(export.ExportName)}, (global::SharpEmu.HLE.Generation){export.Target}, {function});");
     }
 
     /// <summary>

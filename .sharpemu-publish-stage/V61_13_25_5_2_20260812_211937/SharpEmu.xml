@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>SharpEmu</name>
+    </assembly>
+    <members>
+        <member name="M:SharpEmu.CLI.Program.CheckHostArchitecture">
+            <summary>
+            The supported host execution model, checked before any emulation
+            starts: the CPU backend executes guest x86-64 code natively, so the
+            host process must be x86-64 — win-x64/linux-x64 on x64 hardware, or
+            osx-x64 under Rosetta 2 on Apple Silicon (Rosetta translates the
+            whole process, so it still reports as X64 here). Failing up front on
+            any other process architecture distinguishes that from MoltenVK,
+            signal-handler, or guest-memory startup problems.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.CLI.Program.ConfigureMoltenVkDefaults">
+            <summary>
+            Applies MoltenVK performance defaults before the Vulkan loader is
+            loaded. Existing user-provided values always take precedence.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.CLI.Program.PreloadMacVulkanLoader">
+            <summary>
+            Makes a Vulkan loader visible before SDL creates its Vulkan surface.
+            Homebrew's Vulkan libraries are arm64-only and cannot load into this
+            x86-64 (Rosetta 2) process, so a universal libMoltenVK.dylib placed
+            next to the executable (named libvulkan.1.dylib) is preloaded here;
+            dyld can then resolve the loader for SDL and Silk.NET.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.CLI.Program.UseUtf8ConsoleOutput">
+            <summary>
+            Makes console writes UTF-8 so the GUI's pipe reader (and any modern
+            terminal) decodes non-ASCII text correctly. Without this, redirected
+            output falls back to the OS ANSI code page and characters like "—"
+            arrive mangled.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.CLI.Program.TryGetDebugServerOptions(System.String[],System.Boolean@,SharpEmu.Debugger.Server.DebuggerServerOptions@,System.String@)">
+            <summary>
+            Detects the <c>--debug-server</c> flag and parses its optional
+            <c>host:port</c> endpoint. Returns false only when the flag is present but
+            its endpoint is malformed, so the caller can abort with a clear error.
+            </summary>
+        </member>
+    </members>
+</doc>

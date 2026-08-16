@@ -1,0 +1,22 @@
+V74.0.21 EBOOT/GUEST ABI findings used for this correction
+
+Demon's Souls main image:
+- ELF type: SceDynExec (0xFE10)
+- e_entry: 0x70
+- image base: 0x0000000800000000
+- final main entry: 0x0000000800000070
+- SceProcParam guest address: 0x00000008027A7E80
+- SceProcParam segment size: 0x60
+- TLS template: filesz=0x8, memsz=0x100, align=0x10
+
+Observed SharpEmu guest handoff before this patch:
+- main ExecuteEntry starts at 0x0000000800000070
+- RDI points to a host-built 0x20 entry block
+- that block contains argc plus only three argv slots
+- _init_env (bzQExy189ZI) is the first libc entry consumer
+- HLE _init_env previously returned success without processing the frame
+- sceKernelGetProcParam independently returns the correct 0x00000008027A7E80
+
+Correction boundary:
+- repair the EntryParams transport and _init_env selection/fallback now;
+- keep the native host CALL entry trampoline unchanged until this corrected frame is measured.

@@ -1,0 +1,33 @@
+{
+  "revision": "V72.4.3.2.29",
+  "input_result": "SharpEmu_V72_4_3_2_28_BINK_RESULT_20260815_133811.zip",
+  "v28": {
+    "movies_completed": 3,
+    "attract_attached": true,
+    "unhandled_exceptions": 0,
+    "ps_studios_bridge_seconds": 13.37,
+    "logo_intro_bridge_seconds": 28.88,
+    "attract_bridge_seconds": 323.4,
+    "attract_nominal_seconds": 117.367,
+    "attract_effective_fps_approx": 10.89,
+    "attract_read_avg_ms_end": 3.23,
+    "attract_convert_avg_ms_end": 20.45,
+    "attract_wait_avg_ms_peak_approx": 921.38
+  },
+  "v29": {
+    "nihav_dedicated_logical_count": 2,
+    "priority": "High",
+    "direct_packed_chroma_kernel": "7x7",
+    "attract_audio_tempo": 0.9054,
+    "auto_boot_grace_ms": 1500,
+    "extended_frame_truth_serials": [
+      840,
+      1200,
+      1800,
+      2400,
+      3000,
+      3600,
+      4080
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+[STARTMENU][AUTO_OPTIONS][V2.1.0] configured raw='90,105,120,135,150' count=5 mode=sample-edge-retry press_samples=1 release_samples=1

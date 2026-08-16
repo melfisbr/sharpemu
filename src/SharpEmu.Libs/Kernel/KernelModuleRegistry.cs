@@ -41,6 +41,7 @@ public static class KernelModuleRegistry
         ulong EndAddress,
         ulong EntryPoint,
         ulong InitEntryPoint,
+        IReadOnlyList<ulong> InitializerEntryPoints,
         ulong EhFrameHeaderAddress,
         ulong EhFrameAddress,
         ulong EhFrameSize,
@@ -67,6 +68,7 @@ public static class KernelModuleRegistry
         ulong size,
         ulong entryPoint,
         ulong initEntryPoint,
+        IReadOnlyList<ulong>? initializerEntryPoints,
         ulong ehFrameHeaderAddress,
         ulong ehFrameAddress,
         ulong ehFrameSize,
@@ -74,6 +76,7 @@ public static class KernelModuleRegistry
         bool isSystemModule = false)
     {
         var normalizedPath = NormalizePath(modulePath);
+        var normalizedInitializers = NormalizeInitializerEntryPoints(initEntryPoint, initializerEntryPoints);
         lock (_gate)
         {
             if (!string.IsNullOrWhiteSpace(normalizedPath) &&
@@ -86,6 +89,7 @@ public static class KernelModuleRegistry
                     EndAddress = ComputeEnd(baseAddress, size),
                     EntryPoint = entryPoint,
                     InitEntryPoint = initEntryPoint,
+                    InitializerEntryPoints = normalizedInitializers,
                     EhFrameHeaderAddress = ehFrameHeaderAddress,
                     EhFrameAddress = ehFrameAddress,
                     EhFrameSize = ehFrameSize,
@@ -107,6 +111,7 @@ public static class KernelModuleRegistry
                 EndAddress: ComputeEnd(baseAddress, size),
                 EntryPoint: entryPoint,
                 InitEntryPoint: initEntryPoint,
+                InitializerEntryPoints: normalizedInitializers,
                 EhFrameHeaderAddress: ehFrameHeaderAddress,
                 EhFrameAddress: ehFrameAddress,
                 EhFrameSize: ehFrameSize,
@@ -122,6 +127,23 @@ public static class KernelModuleRegistry
             _handleByName[name] = handle;
             return handle;
         }
+    }
+
+    private static IReadOnlyList<ulong> NormalizeInitializerEntryPoints(
+        ulong initEntryPoint,
+        IReadOnlyList<ulong>? initializerEntryPoints)
+    {
+        if (initializerEntryPoints is { Count: > 0 })
+        {
+            return initializerEntryPoints
+                .Where(address => address >= 0x10000)
+                .Distinct()
+                .ToArray();
+        }
+
+        return initEntryPoint >= 0x10000
+            ? new[] { initEntryPoint }
+            : Array.Empty<ulong>();
     }
 
     public static int RegisterSyntheticModule(string moduleName, bool isSystemModule)
@@ -147,6 +169,7 @@ public static class KernelModuleRegistry
                 EndAddress: 0,
                 EntryPoint: 0,
                 InitEntryPoint: 0,
+                InitializerEntryPoints: Array.Empty<ulong>(),
                 EhFrameHeaderAddress: 0,
                 EhFrameAddress: 0,
                 EhFrameSize: 0,
@@ -236,9 +259,9 @@ public static class KernelModuleRegistry
     }
 
     /// <summary>
-    /// Atomically claims a module initializer. A module can be observed while
-    /// it is starting (for recursive loader calls), but its DT_INIT routine is
-    /// executed at most once after a successful start.
+    /// Atomically claims a module initializer sequence. A module can be observed
+    /// while it is starting (for recursive loader calls), but DT_INIT plus any
+    /// DT_INIT_ARRAY constructors are executed at most once after a successful start.
     /// </summary>
     public static bool TryBeginModuleStart(int handle, out ModuleEntry module)
     {
@@ -254,7 +277,7 @@ public static class KernelModuleRegistry
                 return false;
             }
 
-            if (module.InitEntryPoint < 0x10000)
+            if (module.InitializerEntryPoints.Count == 0)
             {
                 module = module with { StartState = ModuleStartState.Started };
                 _modulesByHandle[handle] = module;

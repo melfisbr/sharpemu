@@ -1,0 +1,31 @@
+{
+  "version": "V74.0.9",
+  "source_changes": false,
+  "required_presenter_sha256": "0D4DB050177B237149CD55C1F18F0A99EB28A2B0999BA40E5E7F4234AC7BCE66",
+  "eboot_sha256": "22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E",
+  "hard_horizon_seconds": 600,
+  "natural_bink_post_capture_seconds": 60,
+  "reference_v7318_natural_result_end_seconds": 479.5,
+  "targeted_render_target": "0x45D550000",
+  "simultaneous_domains": [
+    "GC/live heap/allocation/fragmentation",
+    "process memory/CPU/IO",
+    "system commit/RAM",
+    "GPU dedicated/shared/utilization",
+    "NVIDIA board telemetry",
+    "standalone texture cache",
+    "sampled GuestImage cache",
+    "guest buffer cache",
+    "pending image/upload/submission state",
+    "direct memory and lazy commit",
+    "guest thread snapshots",
+    "GPU waits",
+    "VideoOut FPS/present",
+    "EVENT_FASTPATH",
+    "critical 0x45D producer lifecycle",
+    "compute/shader/device-loss",
+    "natural Bink/YUV/UI progression"
+  ],
+  "bulk_traces_disabled": true,
+  "publish": false
+}

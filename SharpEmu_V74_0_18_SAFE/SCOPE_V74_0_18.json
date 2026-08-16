@@ -1,0 +1,21 @@
+{
+  "version": "74.0.18.0",
+  "title": "Demon's Souls native memcpy intrinsic A/B and render-scale correctness recovery",
+  "source_changes": [
+    "src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs"
+  ],
+  "runtime_ab": {
+    "SHARPEMU_NATIVE_MEMCPY_INTRINSIC": "1",
+    "SHARPEMU_PTHREAD_OPAQUE_OWNER_SYNC": "1",
+    "SHARPEMU_RENDER_SCALE": "1.0",
+    "SHARPEMU_DCC_ALIAS_HISTORY_MS": "0"
+  },
+  "default_behavior": "Q3VBxCXhUHs remains HLE-preferred unless SHARPEMU_NATIVE_MEMCPY_INTRINSIC=1",
+  "known_evidence": {
+    "managed_import_checkpoint": 33554432,
+    "checkpoint_nid": "Q3VBxCXhUHs",
+    "v74017_guest_frame": "960x540",
+    "movie": "ps_studios_logo.bk2",
+    "rad_completion_seconds": 8.6
+  }
+}

@@ -1,0 +1,3 @@
+[MSG-Init] Starting Script: $/scripts/cp11/_cmn/cp11main.cgpr : 44.0048s
+[MSG-Init] Starting main loop: 00:01:05.81
+[MSG-Init] ResourcePool::GatherResourceFileInfo() took 36.5392s

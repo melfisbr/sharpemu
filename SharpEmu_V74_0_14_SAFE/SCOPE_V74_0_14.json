@@ -1,0 +1,28 @@
+{
+  "version": "74.0.14",
+  "target": "Demon's Souls PPSA01341 startup performance/stability",
+  "source_changes": [
+    "surgical runtime override support for NativeWorkerMaxConcurrent only when current source uses a literal cap",
+    "preserve the current literal cap as fallback outside explicit per-run override",
+    "preserve accumulated DBFZ scheduler/worker source and V74.0.10 renderer/resource lane"
+  ],
+  "runtime_profile": {
+    "SHARPEMU_NATIVE_WORKER_MAX_CONCURRENT": "2",
+    "SHARPEMU_RENDERER_RESOURCE_NATIVE_MAX_CONCURRENT": "8",
+    "SHARPEMU_RENDER_SCALE": "0.5",
+    "SHARPEMU_VK_SAMPLED_GUEST_IMAGE_CACHE_MB": "256",
+    "SHARPEMU_VK_STANDALONE_TEXTURE_CACHE_MB": "768",
+    "SHARPEMU_VK_GUEST_BUFFER_CACHE_MB": "192",
+    "SHARPEMU_VK_DEVICE_BUFFER_CACHE_MB": "384"
+  },
+  "runner_repairs": [
+    "aggregate full process tree telemetry",
+    "runtime tbb_limit verification",
+    "expanded Vulkan device-lost detection",
+    "heap corruption detection",
+    "shared stderr reads",
+    "result zip on guarded stop"
+  ],
+  "bink_changes": "none; preserves V74.0.13 robust startup completion handoff",
+  "whole_file_nativeworker_replacement": false
+}

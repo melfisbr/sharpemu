@@ -1,0 +1,13 @@
+﻿version=74.0.6.3
+classification=memory-pressure-after-compute-restore
+exit_code=diagnostic-stop
+memory_pressure_stop=True
+compute_dispatch_fail_hits=0
+compute_null_invariant_hits=0
+event_fastpath_hits=22
+clr_failfast_hits=0
+natural_guest_movie_hits=0
+compute_yuv_binding_hits=0
+snapshot_reuse_hits=0
+peak_process_tree_working_set_mb=11796,3
+peak_process_tree_private_mb=17110,9

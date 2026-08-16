@@ -1,0 +1,43 @@
+V73.11 evidence and scope
+
+V73.10 result:
+- HLE sceKernelUsleep was active (44 sampled trace lines).
+- worker RIP page app+0x821000 still peaked at 96%.
+- all eight UI native ranges remained zero.
+- only five VideoOut windows were reached before APPLICATION_HANG.
+- stdout stopped shortly after ResourcePool::RecordResourceDependencies().
+
+Important diagnostic correction:
+DirectExecutionBackend.GuestSampler.GuestRipSampleLoop samples only
+SnapshotGuestThreads(). The V73.10 thread_split/top_thread output shows that
+the app+0x821000 distribution is dominated by BPE JobWorkerThread CPU0..12.
+The initial game entry thread is not in SnapshotGuestThreads and was therefore
+absent from the V73.9/V73.10 UI/RIP profiler.
+
+The HLE usleep trace nevertheless captured an untracked thread=0 call:
+  ret=app+0x81A493
+This is inside the audited generic wait helper 0x81A3B0..0x81A500.
+
+Exact EBOOT disassembly of that helper establishes:
+- R15 = pointer whose 64-bit value is polled
+- R14 = target value
+- RBX = compare selector
+- R13 = spin counter
+- R12 = wrapper whose +8 field is the scheduler/object pointer
+
+The previous TraceUsleepSpin diagnostic printed/dereferenced R13, which is the
+spin counter in this helper, not the wait-value pointer.
+
+V73.11:
+1. removes only the V73.10 sceKernelUsleep HLE-preference block, restoring the
+   pre-V73.10 dispatch behavior;
+2. leaves the existing native usleep intrinsic and KernelUsleep HLE source
+   otherwise untouched;
+3. extends diagnostic host snapshots with R14/R15;
+4. samples _entryHostThreadId separately from worker GuestThreadState objects;
+5. reads *R15 only while the entry RIP is inside the proven generic wait helper;
+6. reports target/comparator/predicate and an RBP caller chain;
+7. includes the initial entry thread in the existing V73.9 UI-method counters.
+
+No job counter is modified. No wait is force-completed. No GPU or UI semantics
+are changed.

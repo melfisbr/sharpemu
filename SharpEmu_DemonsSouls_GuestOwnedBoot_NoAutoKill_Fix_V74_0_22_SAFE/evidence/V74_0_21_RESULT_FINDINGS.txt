@@ -1,0 +1,21 @@
+V74.0.21 uploaded result findings
+
+SUMMARY:
+WALL_SECONDS=26.88
+STOP_REASON=abi-proof-plus-observation
+CLASSIFICATION=entry-abi-proof-captured
+ENTRY_POINT_800000070_OBSERVED=True
+FULL_0X118_LAYOUT_OBSERVED=True
+PROC_PARAM_8027A7E80_OBSERVED=True
+INIT_ENV_PATH=LLE
+HOST_AUTO_BOOT_MARKERS=0
+NATURAL_MOVIE_MARKERS=0
+UNHANDLED_EXCEPTIONS=0
+
+Runtime evidence before runner stop:
+- Finished Initialization: 8.0685 s
+- Starting main loop: 17.6583 s
+- Vulkan VideoOut presented first frame: 3840x2160
+- working/private at last sample approximately 3476/7971 MB
+
+Conclusion: the close was caused by RUN_4's post-proof auto-stop, not by a guest crash.

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
@@ -17,6 +17,99 @@ namespace SharpEmu.Libs.Kernel;
 
 public static partial class KernelMemoryCompatExports
 {
+    // SHARPEMU_IO_HOTPATH_V1_8_2_1
+    [ThreadStatic]
+    private static byte[]? _kernelReadScratchV1821;
+
+    private static byte[] GetKernelReadScratchV1821(int requested)
+    {
+        var buffer = _kernelReadScratchV1821;
+        if (buffer is not null && buffer.Length >= requested)
+        {
+            return buffer;
+        }
+
+        if (buffer is not null)
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
+        }
+
+        buffer = ArrayPool<byte>.Shared.Rent(Math.Max(requested, 1));
+        _kernelReadScratchV1821 = buffer;
+        return buffer;
+    }
+
+    private static bool IsIoTraceEnabledV1821() =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_LOG_IO"),
+            "1",
+            StringComparison.Ordinal);
+    // [V67.0][BINK_FORCE_ONCE]
+    // Diagnostic-only, opt-in redirect. On the first guest .bk2 open in this process,
+    // redirect that one open to movies\logo_intro.bk2 (or the explicit host path in
+    // SHARPEMU_FORCE_BINK_INTRO_PATH). All subsequent opens use the original path.
+    private static int _forceBinkIntroOnceConsumed;
+
+    private static string ApplyForceBinkIntroOnce(string guestPath, string resolvedHostPath)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_FORCE_BINK_INTRO_ONCE"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return resolvedHostPath;
+        }
+
+        if (!guestPath.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
+        {
+            return resolvedHostPath;
+        }
+
+        if (Volatile.Read(ref _forceBinkIntroOnceConsumed) != 0)
+        {
+            return resolvedHostPath;
+        }
+
+        var explicitHostPath = Environment.GetEnvironmentVariable("SHARPEMU_FORCE_BINK_INTRO_PATH");
+        string? forcedHostPath = explicitHostPath;
+
+        if (string.IsNullOrWhiteSpace(forcedHostPath))
+        {
+            var app0Root = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR");
+            if (!string.IsNullOrWhiteSpace(app0Root))
+            {
+                forcedHostPath = Path.Combine(app0Root, "movies", "logo_intro.bk2");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(forcedHostPath))
+        {
+            Console.Error.WriteLine(
+                "[LOADER][WARN] [V67.0][BINK_FORCE_ONCE] app0/path unavailable; using normal guest movie.");
+            return resolvedHostPath;
+        }
+
+        forcedHostPath = Path.GetFullPath(forcedHostPath);
+        if (!File.Exists(forcedHostPath))
+        {
+            Console.Error.WriteLine(
+                "[LOADER][WARN] [V67.0][BINK_FORCE_ONCE] forced movie not found: " + forcedHostPath);
+            return resolvedHostPath;
+        }
+
+        if (Interlocked.CompareExchange(ref _forceBinkIntroOnceConsumed, 1, 0) != 0)
+        {
+            return resolvedHostPath;
+        }
+
+        Console.Error.WriteLine(
+            "[LOADER][INFO] [V67.0][BINK_FORCE_ONCE] guest='" + guestPath +
+            "' original='" + resolvedHostPath +
+            "' forced='" + forcedHostPath +
+            "'; next BK2 opens return to normal routing.");
+
+        return forcedHostPath;
+    }
     private const int MaxGuestStringLength = 4096;
     private const int WideCharSize = sizeof(ushort);
     private const int MemsetChunkSize = 16 * 1024;
@@ -117,7 +210,7 @@ public static partial class KernelMemoryCompatExports
     private static readonly Dictionary<string, string> _guestMounts = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> _tracedStatResults = new(StringComparer.Ordinal);
     // Both caches memoize host filesystem probe outcomes, so their key
-    // equivalence must match the host filesystem's — see HostFsPath. On a
+    // equivalence must match the host filesystem's Ã¢â‚¬â€ see HostFsPath. On a
     // case-sensitive host an ignore-case cache aliases distinct paths: a
     // cached miss for "/app0/DATA.BIN" keeps answering NOT_FOUND for
     // "/app0/Data.bin" even though that file exists.
@@ -125,6 +218,8 @@ public static partial class KernelMemoryCompatExports
     private static readonly ConcurrentDictionary<string, ulong> _aprFileSizeCache = new(HostFsPath.Comparer);
     private static long _nextFileDescriptor = 2;
     private static string _applicationTitleId = "UNKNOWN";
+
+    internal static string CurrentApplicationTitleId => Volatile.Read(ref _applicationTitleId);
 
     public static void ConfigureApplicationInfo(string? titleId)
     {
@@ -143,11 +238,110 @@ public static partial class KernelMemoryCompatExports
         Volatile.Write(ref _applicationTitleId, new string(sanitized));
     }
 
+    // SHARPEMU_TITLE_SCOPED_COMPAT_V73_0_13
+    // Compatibility code that is tied to one executable must never leak into
+    // other titles merely because they share an import NID or a virtual address
+    // shape. SharpEmu.Core is an InternalsVisibleTo consumer of SharpEmu.Libs,
+    // so the native backend can use this gate without adding a public API.
+    internal static bool IsConfiguredApplicationTitle(string titleId)
+    {
+        if (string.IsNullOrWhiteSpace(titleId))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            Volatile.Read(ref _applicationTitleId),
+            titleId.Trim(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static int AllocateGuestFileDescriptor()
     {
         lock (_fdGate)
         {
             return (int)Interlocked.Increment(ref _nextFileDescriptor);
+        }
+    }
+
+    // V59: acquire a file stream while the fd table is still locked so
+    // close(fd) cannot dispose it between lookup and the host I/O operation.
+    private static bool TryAcquireOpenFileStreamV59(int fd, out FileStream? stream)
+    {
+        lock (_fdGate)
+        {
+            if (!_openFiles.TryGetValue(fd, out stream) || stream is null)
+            {
+                stream = null;
+                return false;
+            }
+
+            Monitor.Enter(stream);
+            return true;
+        }
+    }
+
+    private static void ReleaseOpenFileStreamV59(FileStream stream) =>
+        Monitor.Exit(stream);
+
+    internal static int KernelPreadAtV59(
+        CpuContext ctx,
+        int fd,
+        ulong bufferAddress,
+        int requested,
+        long offset)
+    {
+        if (requested < 0 ||
+            offset < 0 ||
+            (requested > 0 && bufferAddress == 0))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        if (requested == 0)
+        {
+            ctx[CpuRegister.Rax] = 0;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
+        if (!TryAcquireOpenFileStreamV59(fd, out var stream) || stream is null)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
+        }
+
+        try
+        {
+            var buffer = GetKernelReadScratchV1821(requested);
+            var read = RandomAccess.Read(
+                stream.SafeFileHandle,
+                buffer.AsSpan(0, requested),
+                offset);
+
+            if (read > 0 &&
+                !ctx.Memory.TryWrite(bufferAddress, buffer.AsSpan(0, read)))
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+            }
+
+            LogIoTrace(
+                "pread",
+                stream.Name,
+                $"fd={fd} offset={offset} req={requested} read={read}");
+
+            ctx[CpuRegister.Rax] = unchecked((ulong)read);
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+        catch (IOException ex)
+        {
+            LogIoTrace(
+                "pread",
+                stream.Name,
+                $"fd={fd} offset={offset} req={requested} result=io_error ex={ex.Message}");
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+        finally
+        {
+            ReleaseOpenFileStreamV59(stream);
         }
     }
 
@@ -1445,6 +1639,64 @@ public static partial class KernelMemoryCompatExports
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
+    // SHARPEMU_V34_MOVIE_IO_TRACE
+    private static void TraceV34MovieIoCandidate(
+        string guestPath,
+        string hostPath,
+        System.IO.FileAccess access)
+    {
+        if (access != System.IO.FileAccess.Read ||
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_TRACE_MOVIE_IO"),
+                "1",
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(hostPath))
+        {
+            return;
+        }
+
+        var lower = hostPath.ToLowerInvariant();
+        var likelyMoviePath =
+            lower.Contains("cinematic", StringComparison.Ordinal) ||
+            lower.Contains("cutscene", StringComparison.Ordinal) ||
+            lower.Contains("movie", StringComparison.Ordinal) ||
+            lower.Contains("video", StringComparison.Ordinal) ||
+            lower.Contains("bink", StringComparison.Ordinal) ||
+            lower.EndsWith(".bik", StringComparison.Ordinal) ||
+            lower.EndsWith(".bk2", StringComparison.Ordinal);
+        if (!likelyMoviePath)
+        {
+            return;
+        }
+
+        string magic = "unreadable";
+        try
+        {
+            using var stream = new System.IO.FileStream(
+                hostPath,
+                System.IO.FileMode.Open,
+                System.IO.FileAccess.Read,
+                System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete);
+            Span<byte> header = stackalloc byte[4];
+            var read = stream.Read(header);
+            if (read > 0)
+            {
+                magic = Convert.ToHexString(header[..read]);
+            }
+        }
+        catch (Exception ex) when (
+            ex is System.IO.IOException or
+            UnauthorizedAccessException or
+            System.Security.SecurityException)
+        {
+            magic = ex.GetType().Name;
+        }
+
+        Console.Error.WriteLine(
+            $"[LOADER][INFO] movie_io_candidate guest='{guestPath}' " +
+            $"host='{hostPath}' magic={magic}");
+    }
+
     [SysAbiExport(
         Nid = "6c3rCVE-fTU",
         ExportName = "_open",
@@ -1462,8 +1714,28 @@ public static partial class KernelMemoryCompatExports
         }
 
         var hostPath = ResolveGuestPath(guestPath);
+        // [V67.1.3][BINK_HARNESS_OPEN]
+        if (guestPath.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
+        {
+            BinkIntroHarnessTrace.Event(
+                "OPEN_REQUEST",
+                "guest='" + guestPath + "' host='" + hostPath +
+                "' flags=0x" + flags.ToString("X8"));
+        }
+        hostPath = ApplyForceBinkIntroOnce(guestPath, hostPath);
         var access = ResolveOpenAccess(flags);
         var mode = ResolveOpenMode(flags, access);
+        if (TryOpenDirectoryBeforeMovieBridge(
+                ctx,
+                guestPath,
+                hostPath,
+                flags,
+                access,
+                out var earlyDirectoryResult))
+        {
+            return earlyDirectoryResult;
+        }
+        TraceV34MovieIoCandidate(guestPath, hostPath, access);
         // A denied path (empty host path) must not reach FileStream, which would
         // throw an ArgumentException the catch below does not cover.
         if (string.IsNullOrEmpty(hostPath))
@@ -1473,7 +1745,14 @@ public static partial class KernelMemoryCompatExports
         }
         try
         {
-            if (HostMovieBridge.ShouldSkipGuestMovie(hostPath))
+            var v6711ShouldSkip = HostMovieBridge.ShouldSkipGuestMovie(hostPath);
+            if (hostPath.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
+            {
+                BinkIntroHarnessTrace.Event(
+                    "SHOULD_SKIP",
+                    "host='" + hostPath + "' skip=" + v6711ShouldSkip);
+            }
+            if (v6711ShouldSkip)
             {
                 LogOpenTrace(
                     "_open bink-skip path='" + guestPath + "' host='" + hostPath +
@@ -1491,6 +1770,14 @@ public static partial class KernelMemoryCompatExports
                     hostPath,
                     out binkCompletionShim,
                     out observedBinkMovie);
+            if (hostPath.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
+            {
+                BinkIntroHarnessTrace.Event(
+                    "TAKEOVER_RESULT",
+                    "host='" + hostPath +
+                    "' takeover=" + useBinkCompletionShim +
+                    " observed=" + observedBinkMovie);
+            }
 
             if (IsMutatingOpen(flags) && IsReadOnlyGuestMutationPath(guestPath))
             {
@@ -1519,7 +1806,7 @@ public static partial class KernelMemoryCompatExports
                     _openDirectories[directoryFd] = new OpenDirectory
                     {
                         Path = hostPath,
-                        Entries = EnumerateDirectoryEntries(hostPath),
+                        Entries = EnumerateDirectoryEntriesForContentDiscovery(hostPath),
                         NextIndex = 0
                     };
                 }
@@ -1563,6 +1850,7 @@ public static partial class KernelMemoryCompatExports
                 InvalidateAprFileSizeCache(hostPath);
             }
 
+            ContentAssetRoutingDiagnostics.TracePath("open", guestPath, hostPath, found: true);
             LogOpenTrace($"_open file path='{guestPath}' host='{hostPath}' flags=0x{flags:X8} fd={fd}");
             ctx[CpuRegister.Rax] = unchecked((ulong)fd);
             return (int)OrbisGen2Result.ORBIS_GEN2_OK;
@@ -1627,6 +1915,7 @@ public static partial class KernelMemoryCompatExports
         if (statCacheKey is not null && IsNegativeStatCached(statCacheKey))
         {
             LogUniqueStatTrace(guestPath, hostPath, found: false);
+            ContentAssetRoutingDiagnostics.TracePath("stat", guestPath, hostPath, found: false);
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
@@ -1638,6 +1927,7 @@ public static partial class KernelMemoryCompatExports
             }
 
             LogUniqueStatTrace(guestPath, hostPath, found: false);
+            ContentAssetRoutingDiagnostics.TracePath("stat", guestPath, hostPath, found: false);
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
@@ -1647,6 +1937,7 @@ public static partial class KernelMemoryCompatExports
         }
 
         LogUniqueStatTrace(guestPath, hostPath, found: true);
+        ContentAssetRoutingDiagnostics.TracePath("stat", guestPath, hostPath, found: true);
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
@@ -1745,6 +2036,10 @@ public static partial class KernelMemoryCompatExports
             {
                 // Stop at the first miss and report its index.
                 // The caller can then use its normal file-open fallback.
+                // SHARPEMU_APR_RESOLVE_MISS_PROVENANCE_V1_8_8
+                Console.Error.WriteLine(
+                    $"[LOADER][WARN] dbfz.apr_resolve_miss.v188 " +
+                    $"guest='{guestPath}' host='{hostPath}' index={i} count={count}");
                 LogIoTrace("apr_resolve", guestPath, $"host='{hostPath}' index={i} count={count} result=not_found");
                 if (sizesAddress != 0 &&
                     !TryWriteUInt64Compat(ctx, sizesAddress + (i * sizeof(ulong)), 0))
@@ -2013,6 +2308,40 @@ public static partial class KernelMemoryCompatExports
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
+    // SHARPEMU_KERNEL_FSYNC_V1_8_6
+    // Flush an already-open guest file descriptor through the same V59 stream
+    // lifetime lock used by read/write/lseek.
+    [SysAbiExport(
+        Nid = "fTx66l5iWIA",
+        ExportName = "sceKernelFsync",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int KernelFsync(CpuContext ctx)
+    {
+        var fd = unchecked((int)ctx[CpuRegister.Rdi]);
+        if (!TryAcquireOpenFileStreamV59(fd, out var stream) || stream is null)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
+        }
+
+        try
+        {
+            stream.Flush(flushToDisk: true);
+            LogIoTrace("fsync", stream.Name, $"fd={fd} flushed=1");
+            ctx[CpuRegister.Rax] = 0;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+        catch (IOException ex)
+        {
+            LogIoTrace("fsync", stream.Name, $"fd={fd} flushed=0 ex={ex.Message}");
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+        finally
+        {
+            ReleaseOpenFileStreamV59(stream);
+        }
+    }
+
     [SysAbiExport(
         Nid = "AUXVxWeJU-A",
         ExportName = "sceKernelUnlink",
@@ -2224,7 +2553,12 @@ public static partial class KernelMemoryCompatExports
         {
             HostMovieBridge.NotifyGuestMovieClosed(observedBinkPath!);
         }
-        stream.Dispose();
+
+        lock (stream)
+        {
+            stream.Dispose();
+        }
+
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
@@ -2250,65 +2584,115 @@ public static partial class KernelMemoryCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_OK;
         }
 
+        // SHARPEMU_DEMONSSOULS_UI_READ_SERIALIZATION_V73_7_1
+        // Keep the fd-table lookup and FileStream monitor acquisition atomic.
+        // KernelCloseCore removes the fd under _fdGate and then locks the same
+        // stream before Dispose(). Without this monitor, an async resource
+        // loader can retain a FileStream reference, lose the close race and
+        // execute Position/Read on a disposed object.
         FileStream? stream;
         HostMovieBridge.BinkGuestCompletionShim completionShim = default;
         var useBinkCompletionShim = false;
         lock (_fdGate)
         {
-            _openFiles.TryGetValue(fd, out stream);
-            useBinkCompletionShim = _binkGuestCompletionShims.TryGetValue(fd, out completionShim);
+            if (!_openFiles.TryGetValue(fd, out stream) || stream is null)
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
+            }
+
+            useBinkCompletionShim =
+                _binkGuestCompletionShims.TryGetValue(fd, out completionShim);
+            Monitor.Enter(stream);
         }
 
-        if (stream is null)
+        try
         {
+            long positionBefore;
+            try
+            {
+                positionBefore = stream.Position;
+            }
+            catch (IOException)
+            {
+                positionBefore = -1;
+            }
+
+            var buffer = GetKernelReadScratchV1821(requested);
+            // [V67.1.3][BINK_HARNESS_READ]
+            if (BinkIntroHarnessTrace.Enabled && stream.Name.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
+            {
+                BinkIntroHarnessTrace.Event(
+                    "READ_BEFORE",
+                    "path='" + stream.Name + "' fd=" + fd +
+                    " pos=" + positionBefore + " requested=" + requested);
+            }
+
+            var read = stream.Read(buffer, 0, requested);
+            if (read > 0 && useBinkCompletionShim)
+            {
+                // The patched NumFrames field is what tells the guest "this
+                // movie is fully consumed" - hold that specific read until the
+                // host has actually finished showing it, so guest-side game
+                // logic can't race ahead of what's still on screen.
+                if (completionShim.Patch(positionBefore, buffer.AsSpan(0, read)))
+                {
+                    HostMovieBridge.WaitForHostPlaybackToFinish(stream.Name);
+                }
+            }
+
+            if (read > 0 &&
+                !ctx.Memory.TryWrite(bufferAddress, buffer.AsSpan(0, read)))
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+            }
+
+            long positionAfter;
+            try
+            {
+                positionAfter = stream.Position;
+            }
+            catch (IOException)
+            {
+                positionAfter = -1;
+            }
+
+            LogIoTrace(
+                "read",
+                stream.Name,
+                $"fd={fd} req={requested} read={read} pos={positionBefore}->{positionAfter} preview='{PreviewIoBytes(buffer, read, 64)}' hex={PreviewIoHex(buffer, read, 32)} guest_tail={PreviewGuestHex(ctx, bufferAddress + (ulong)Math.Max(read, 0), 32)}");
+
+            if (BinkIntroHarnessTrace.Enabled && stream.Name.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
+            {
+                BinkIntroHarnessTrace.Event(
+                    "READ_AFTER",
+                    "path='" + stream.Name + "' fd=" + fd +
+                    " pos=" + positionBefore + "->" + positionAfter +
+                    " read=" + read);
+            }
+
+            ctx[CpuRegister.Rax] = unchecked((ulong)read);
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+        catch (ObjectDisposedException ex)
+        {
+            LogIoTrace(
+                "read",
+                $"fd:{fd}",
+                $"req={requested} result=disposed ex={ex.Message}");
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
-
-        long positionBefore;
-        try
+        catch (IOException ex)
         {
-            positionBefore = stream.Position;
+            LogIoTrace(
+                "read",
+                stream.Name,
+                $"fd={fd} req={requested} result=io_error ex={ex.Message}");
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY;
         }
-        catch (IOException)
+        finally
         {
-            positionBefore = -1;
+            Monitor.Exit(stream);
         }
-
-        var buffer = GC.AllocateUninitializedArray<byte>(requested);
-        var read = stream.Read(buffer, 0, requested);
-        if (read > 0 && useBinkCompletionShim)
-        {
-            // The patched NumFrames field is what tells the guest "this
-            // movie is fully consumed" - hold that specific read until the
-            // host has actually finished showing it, so guest-side game
-            // logic can't race ahead of what's still on screen.
-            if (completionShim.Patch(positionBefore, buffer.AsSpan(0, read)))
-            {
-                HostMovieBridge.WaitForHostPlaybackToFinish(stream.Name);
-            }
-        }
-        if (read > 0 && !ctx.Memory.TryWrite(bufferAddress, buffer.AsSpan(0, read)))
-        {
-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
-        }
-
-        long positionAfter;
-        try
-        {
-            positionAfter = stream.Position;
-        }
-        catch (IOException)
-        {
-            positionAfter = -1;
-        }
-
-        LogIoTrace(
-            "read",
-            stream.Name,
-            $"fd={fd} req={requested} read={read} pos={positionBefore}->{positionAfter} preview='{PreviewIoBytes(buffer, read, 64)}' hex={PreviewIoHex(buffer, read, 32)} guest_tail={PreviewGuestHex(ctx, bufferAddress + (ulong)Math.Max(read, 0), 32)}");
-
-        ctx[CpuRegister.Rax] = unchecked((ulong)read);
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
     [SysAbiExport(
@@ -2412,52 +2796,53 @@ public static partial class KernelMemoryCompatExports
     {
         position = -1;
 
-        FileStream? stream;
-        lock (_fdGate)
-        {
-            _openFiles.TryGetValue(fd, out stream);
-        }
-
-        if (stream is null)
+        if (!TryAcquireOpenFileStreamV59(fd, out var stream) || stream is null)
         {
             LogIoTrace("lseek", $"fd:{fd}", $"offset={offset} whence={whence} result=badfd");
             return OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
-        SeekOrigin origin;
-        switch (whence)
-        {
-            case SeekSet:
-                origin = SeekOrigin.Begin;
-                break;
-            case SeekCur:
-                origin = SeekOrigin.Current;
-                break;
-            case SeekEnd:
-                origin = SeekOrigin.End;
-                break;
-            default:
-                LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} result=invalid_whence");
-                return OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-        }
-
         try
         {
-            position = stream.Seek(offset, origin);
-        }
-        catch (IOException ex)
-        {
-            LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} result=io_error ex={ex.Message}");
-            return OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-        }
-        catch (ArgumentException ex)
-        {
-            LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} result=invalid ex={ex.Message}");
-            return OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-        }
+            SeekOrigin origin;
+            switch (whence)
+            {
+                case SeekSet:
+                    origin = SeekOrigin.Begin;
+                    break;
+                case SeekCur:
+                    origin = SeekOrigin.Current;
+                    break;
+                case SeekEnd:
+                    origin = SeekOrigin.End;
+                    break;
+                default:
+                    LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} result=invalid_whence");
+                    return OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+            }
 
-        LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} pos={position}");
-        return OrbisGen2Result.ORBIS_GEN2_OK;
+            try
+            {
+                position = stream.Seek(offset, origin);
+            }
+            catch (IOException ex)
+            {
+                LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} result=io_error ex={ex.Message}");
+                return OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+            }
+            catch (ArgumentException ex)
+            {
+                LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} result=invalid ex={ex.Message}");
+                return OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+            }
+
+            LogIoTrace("lseek", stream.Name, $"fd={fd} offset={offset} whence={whence} pos={position}");
+            return OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+        finally
+        {
+            ReleaseOpenFileStreamV59(stream);
+        }
     }
 
     [SysAbiExport(
@@ -2515,21 +2900,22 @@ public static partial class KernelMemoryCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_OK;
         }
 
-        FileStream? stream;
-        lock (_fdGate)
-        {
-            _openFiles.TryGetValue(fd, out stream);
-        }
-
-        if (stream is null)
+        if (!TryAcquireOpenFileStreamV59(fd, out var stream) || stream is null)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
-        stream.Write(payload, 0, requested);
-        stream.Flush();
-        ctx[CpuRegister.Rax] = unchecked((ulong)requested);
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        try
+        {
+            stream.Write(payload, 0, requested);
+            stream.Flush();
+            ctx[CpuRegister.Rax] = unchecked((ulong)requested);
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+        finally
+        {
+            ReleaseOpenFileStreamV59(stream);
+        }
     }
 
     [SysAbiExport(
@@ -2919,7 +3305,17 @@ public static partial class KernelMemoryCompatExports
 
         if (searchStart >= searchEnd)
         {
-            searchStart = 0;
+            // V66: an invalid direct-memory search window must not silently
+            // restart at physical address zero.
+            TraceDirectMemoryCall(
+                ctx,
+                "allocate_direct_invalid_window",
+                length,
+                alignment,
+                memoryType,
+                outAddress,
+                result: OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
         // PS5 direct memory is allocated in 16 KiB pages; when the guest does
@@ -3190,6 +3586,22 @@ public static partial class KernelMemoryCompatExports
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
+        if (_strictKernelMemoryV66)
+        {
+            lock (_memoryGate)
+            {
+                if (!IsDirectMemoryRangeAllocatedV66Locked(directMemoryStart, length))
+                {
+                    if (ShouldTraceDirectMemory())
+                    {
+                        Console.Error.WriteLine(
+                            $"[LOADER][WARN] map_direct strict backing miss: direct=0x{directMemoryStart:X16} len=0x{length:X16}");
+                    }
+
+                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
+                }
+            }
+        }
 
         ulong mappedAddress;
         lock (_memoryGate)
@@ -3258,7 +3670,14 @@ public static partial class KernelMemoryCompatExports
             {
                 if (mappedAddress == 0)
                 {
-                    mappedAddress = requestedAddress != 0
+                    // V72.0.3 DIRECT_MEMORY_BACKING_GUARD:
+                    // A failed reservation must never turn an arbitrary requested
+                    // virtual address into a successful direct mapping merely by
+                    // recording metadata. Accept the requested address only when
+                    // guest memory actually backs the complete range; otherwise
+                    // search for a genuinely backed alternative range.
+                    mappedAddress = requestedAddress != 0 &&
+                                    IsGuestRangeBacked(ctx, requestedAddress, length)
                         ? requestedAddress
                         : AllocateMappedGuestAddress(ctx, length, effectiveAlignment);
                     if (ShouldTraceDirectMemory())
@@ -5122,7 +5541,8 @@ public static partial class KernelMemoryCompatExports
             if (guestPath.StartsWith("/app0/", StringComparison.OrdinalIgnoreCase))
             {
                 var relative = NormalizeMountRelativePath(guestPath["/app0/".Length..]);
-                return CombineWithinMount(app0Root, relative);
+                var resolved = CombineWithinMount(app0Root, relative);
+                return ResolveDbfzLooseGlobalShaderCacheAlias(guestPath, resolved);
             }
 
             if (guestPath.StartsWith("app0/", StringComparison.OrdinalIgnoreCase))
@@ -5278,7 +5698,7 @@ public static partial class KernelMemoryCompatExports
                 continue;
             }
 
-            resolved.Add(segment);
+            resolved.Add(HostFsPath.EncodeHostPathSegment(segment));
         }
 
         return string.Join(Path.DirectorySeparatorChar, resolved);
@@ -5541,9 +5961,30 @@ public static partial class KernelMemoryCompatExports
         {
             return false;
         }
+        // SHARPEMU_DBFZ_FULL_APP0_WRITE_V1_8_15_1_1
+        // The prior writable-app0 A/B eliminated DBFZ mkdir/open permission
+        // failures. Apply that behavior only to PPSA09790.
+        if (string.Equals(
+                Volatile.Read(ref _applicationTitleId),
+                "PPSA09790",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
 
         var normalized = NormalizeGuestStatCachePath(guestPath);
-        return normalized is not null &&
+
+        // SHARPEMU_DBFZ_SAVED_APP0_AUTO_V1_8_14_2
+        if (string.Equals(
+                Volatile.Read(ref _applicationTitleId),
+                "PPSA09790",
+                StringComparison.OrdinalIgnoreCase) &&
+            normalized is not null &&
+            (string.Equals(normalized, "/app0/red/saved", StringComparison.OrdinalIgnoreCase) ||
+             normalized.StartsWith("/app0/red/saved/", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }        return normalized is not null &&
                (string.Equals(normalized, "/app0", StringComparison.OrdinalIgnoreCase) ||
                 normalized.StartsWith("/app0/", StringComparison.OrdinalIgnoreCase));
     }
@@ -6230,7 +6671,7 @@ public static partial class KernelMemoryCompatExports
     /// destroys any existing entry that happens to share a start address. That
     /// silently discarded enclosing reservations: a title reserves a large range
     /// and then commits a small mapping at the same base, and the record of
-    /// everything past the small mapping disappears — leaving sceKernelVirtualQuery
+    /// everything past the small mapping disappears Ã¢â‚¬â€ leaving sceKernelVirtualQuery
     /// unable to find memory the guest legitimately owns.
     ///
     /// Carving also keeps the table non-overlapping. Previously a new region
@@ -6312,6 +6753,28 @@ public static partial class KernelMemoryCompatExports
         };
     }
 
+    private static bool IsDirectMemoryRangeAllocatedV66Locked(ulong directStart, ulong length)
+    {
+        if (length == 0 || !TryAddU64(directStart, length, out var directEnd))
+        {
+            return false;
+        }
+
+        foreach (var allocation in _directAllocations.Values)
+        {
+            if (!TryAddU64(allocation.Start, allocation.Length, out var allocationEnd))
+            {
+                continue;
+            }
+
+            if (directStart >= allocation.Start && directEnd <= allocationEnd)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
     private static bool TryFindDirectAllocationLocked(ulong directStart, out DirectAllocation allocation)
     {
         foreach (var candidate in _directAllocations.Values)
@@ -6413,7 +6876,7 @@ public static partial class KernelMemoryCompatExports
         }
 
         // Regions do not overlap, so only the one with the greatest base address
-        // <= queryAddress can contain it — index lo when it starts exactly at
+        // <= queryAddress can contain it Ã¢â‚¬â€ index lo when it starts exactly at
         // queryAddress, otherwise lo - 1.
         var floorIndex = (lo < count && keys[lo] == queryAddress) ? lo : lo - 1;
         if (floorIndex >= 0)
@@ -6466,6 +6929,12 @@ public static partial class KernelMemoryCompatExports
 
     // Cached once so the ~8 direct-memory call sites don't each do a
     // GetEnvironmentVariable P/Invoke per operation.
+    // V66: strict direct-memory provenance validation for A/B runs.
+    private static readonly bool _strictKernelMemoryV66 =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_KERNEL_STRICT_SEMANTICS"),
+            "1",
+            StringComparison.Ordinal);
     private static readonly bool _traceDirectMemory = string.Equals(
         Environment.GetEnvironmentVariable("SHARPEMU_LOG_DIRECT_MEMORY"), "1", StringComparison.Ordinal);
 
@@ -7347,69 +7816,7 @@ public static partial class KernelMemoryCompatExports
 
     private static int KernelGetdirentriesCore(CpuContext ctx, int fd, ulong bufferAddress, int requested, ulong basePointerAddress)
     {
-        if (fd < 0 || bufferAddress == 0 || requested < 512)
-        {
-            ctx[CpuRegister.Rax] = unchecked((ulong)(int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-        }
-
-        OpenDirectory? directory;
-        bool isOpenFile;
-        lock (_fdGate)
-        {
-            _openDirectories.TryGetValue(fd, out directory);
-            isOpenFile = directory is null && _openFiles.ContainsKey(fd);
-        }
-
-        if (directory is null)
-        {
-            // A regular file fd used with getdents must not look like EOF (rax=0);
-            // that path has caused GTA's fiWriteAsyncDataWorker to treat the fd
-            // integer as a pointer and AV at address 0xB1.
-            var error = isOpenFile
-                ? OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT
-                : OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
-            LogIoTrace("getdents", $"fd:{fd}", $"result={(isOpenFile ? "not_directory" : "badfd")}");
-            ctx[CpuRegister.Rax] = unchecked((ulong)(int)error);
-            return (int)error;
-        }
-
-        var currentIndex = directory.NextIndex;
-        if (basePointerAddress != 0 && !TryWriteUInt64Compat(ctx, basePointerAddress, (ulong)currentIndex))
-        {
-            ctx[CpuRegister.Rax] = unchecked((ulong)(int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
-        }
-
-        if (currentIndex >= directory.Entries.Length)
-        {
-            LogIoTrace("getdents", directory.Path, $"fd={fd} result=eof entries={directory.Entries.Length}");
-            ctx[CpuRegister.Rax] = 0;
-            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
-        }
-
-        var entryName = directory.Entries[currentIndex];
-        directory.NextIndex = currentIndex + 1;
-
-        var entryBytes = Encoding.UTF8.GetBytes(entryName);
-        var nameLength = Math.Min(entryBytes.Length, 255);
-        var entryPath = Path.Combine(directory.Path, entryName);
-        var entryType = Directory.Exists(entryPath) ? (byte)4 : (byte)8;
-
-        var payload = new byte[512];
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, sizeof(uint)), ComputeDirectoryEntryHash(entryBytes.AsSpan(0, nameLength)));
-        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(4, sizeof(ushort)), 512);
-        payload[6] = entryType;
-        payload[7] = unchecked((byte)nameLength);
-        entryBytes.AsSpan(0, nameLength).CopyTo(payload.AsSpan(8));
-
-        if (!TryWriteCompat(ctx, bufferAddress, payload))
-        {
-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
-        }
-
-        ctx[CpuRegister.Rax] = 512;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        return KernelGetdirentriesBatchCompat(ctx, fd, bufferAddress, requested, basePointerAddress);
     }
 
     private static string[] EnumerateDirectoryEntries(string hostPath)
@@ -7598,6 +8005,10 @@ public static partial class KernelMemoryCompatExports
 
     private static string PreviewIoBytes(byte[] buffer, int count, int maxBytes)
     {
+        if (!IsIoTraceEnabledV1821())
+        {
+            return string.Empty;
+        }
         if (count <= 0)
         {
             return string.Empty;
@@ -7610,6 +8021,10 @@ public static partial class KernelMemoryCompatExports
 
     private static string PreviewIoHex(byte[] buffer, int count, int maxBytes)
     {
+        if (!IsIoTraceEnabledV1821())
+        {
+            return string.Empty;
+        }
         if (count <= 0)
         {
             return string.Empty;
@@ -7621,6 +8036,10 @@ public static partial class KernelMemoryCompatExports
 
     private static string PreviewGuestHex(CpuContext ctx, ulong address, int maxBytes)
     {
+        if (!IsIoTraceEnabledV1821())
+        {
+            return string.Empty;
+        }
         if (address == 0 || maxBytes <= 0)
         {
             return string.Empty;
@@ -8096,3 +8515,5 @@ public static partial class KernelMemoryCompatExports
     private static byte ToAsciiLower(byte value) =>
         value is >= (byte)'A' and <= (byte)'Z' ? (byte)(value + 32) : value;
 }
+
+

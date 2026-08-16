@@ -1,0 +1,13 @@
+V31.2 runtime evidence supplied by user
+=======================================
+RAD_AVAILABLE=False
+RAD_STARTED=0
+RAD_ATTACHED=0
+RAD_COMPLETED=0
+NIHAV_FALLBACK_ATTACHES=3
+EXTERNAL_INTRO_AUDIO_STARTS=2
+UNHANDLED_EXCEPTIONS=0
+
+Observed NIHAV performance at 640x360 included roughly 34-36 ms conversion per frame while the 30 fps frame budget is 33.33 ms. The result proves V31.2 did not use RAD and explains the continued high CPU, color/artifact path and audio drift.
+
+V31.4 therefore refuses to run without radvideo64.exe and forbids NIHAV/FFmpeg fallback while SHARPEMU_BINK_MODE=rad.

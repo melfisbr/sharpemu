@@ -1,0 +1,700 @@
+﻿[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x020 addr=0x00000008033C49C0 hex=21 2E 50 02 08 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 58 69 02 08 00 00 00 utf16='â¸¡ÉÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·å¢€É©Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x040 addr=0x00000008033C49E0 hex=A0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 C8 58 69 02 08 00 00 00 D0 8D 10 01 08 00 00 00 utf16='è¶ ÄÂ·Â·Â·Â·Â·Â·å£ˆÉ©Â·Â·è·ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x060 addr=0x00000008033C4A00 hex=00 00 00 00 00 00 00 00 10 59 69 02 08 00 00 00 F0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å¤É©Â·Â·è·°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xA8 ptr=0x0000000802979F68 head=0x0000000802979F68 utf16='é½¨Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x000 addr=0x0000000802979F68 hex=68 9F 97 02 08 00 00 00 68 9F 97 02 08 00 00 00 78 9F 97 02 08 00 00 00 78 9F 97 02 08 00 00 00 utf16='é½¨Ê—Â·Â·é½¨Ê—Â·Â·é½¸Ê—Â·Â·é½¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x020 addr=0x0000000802979F88 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 9E 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·éº Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x040 addr=0x0000000802979FA8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x060 addr=0x0000000802979FC8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xB0 ptr=0x0000000802979F68 head=0x0000000802979F68 utf16='é½¨Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x000 addr=0x0000000802979F68 hex=68 9F 97 02 08 00 00 00 68 9F 97 02 08 00 00 00 78 9F 97 02 08 00 00 00 78 9F 97 02 08 00 00 00 utf16='é½¨Ê—Â·Â·é½¨Ê—Â·Â·é½¸Ê—Â·Â·é½¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x020 addr=0x0000000802979F88 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 9E 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·éº Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x040 addr=0x0000000802979FA8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x060 addr=0x0000000802979FC8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xB8 ptr=0x0000000802979F78 head=0x0000000802979F78 utf16='é½¸Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x000 addr=0x0000000802979F78 hex=78 9F 97 02 08 00 00 00 78 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='é½¸Ê—Â·Â·é½¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x020 addr=0x0000000802979F98 hex=00 00 00 00 00 00 00 00 A0 9E 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·éº Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x040 addr=0x0000000802979FB8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x060 addr=0x0000000802979FD8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xC0 ptr=0x0000000802979F78 head=0x0000000802979F78 utf16='é½¸Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x000 addr=0x0000000802979F78 hex=78 9F 97 02 08 00 00 00 78 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='é½¸Ê—Â·Â·é½¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x020 addr=0x0000000802979F98 hex=00 00 00 00 00 00 00 00 A0 9E 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·éº Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x040 addr=0x0000000802979FB8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x060 addr=0x0000000802979FD8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xE0 ptr=0x0000000802979EA0 head=0x0000000802979700 utf16='éœ€Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x000 addr=0x0000000802979EA0 hex=00 97 97 02 08 00 00 00 A0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='éœ€Ê—Â·Â·é¾ Ê—Â·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x020 addr=0x0000000802979EC0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 F0 CF F6 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·ì¿°ï‡¶Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x040 addr=0x0000000802979EE0 hex=78 69 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 C0 59 06 00 00 60 00 00 utf16='æ¥¸Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·å§€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x060 addr=0x0000000802979F00 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 C0 5A 06 00 00 60 00 00 C0 5B 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·å«€Â·æ€€Â·å¯€Â·æ€€Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xE8 ptr=0x0000000802F625D0 head=0x0000000802979FA0 utf16='é¾ Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x000 addr=0x0000000802F625D0 hex=A0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='é¾ Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x020 addr=0x0000000802F625F0 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x040 addr=0x0000000802F62610 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x060 addr=0x0000000802F62630 hex=A0 49 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xF0 ptr=0x0000000802902700 head=0x0000000802979FB0 utf16='é¾°Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x000 addr=0x0000000802902700 hex=B0 9F 97 02 08 00 00 00 B0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='é¾°Ê—Â·Â·é¾°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x060 addr=0x0000000802902760 hex=00 00 40 CE 04 00 00 00 00 00 60 CE 04 00 00 00 10 66 3C 03 08 00 00 00 00 00 A0 CE 04 00 00 00 utf16='Â·ì¹€Â·Â·Â·ì¹ Â·Â·æ˜Ì¼Â·Â·Â·ìº Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xF8 ptr=0x0000000802902700 head=0x0000000802979FB0 utf16='é¾°Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x000 addr=0x0000000802902700 hex=B0 9F 97 02 08 00 00 00 B0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='é¾°Ê—Â·Â·é¾°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x060 addr=0x0000000802902760 hex=00 00 40 CE 04 00 00 00 00 00 60 CE 04 00 00 00 10 66 3C 03 08 00 00 00 00 00 A0 CE 04 00 00 00 utf16='Â·ì¹€Â·Â·Â·ì¹ Â·Â·æ˜Ì¼Â·Â·Â·ìº Â·Â·'
+[DS-THREADSTART][V46.2] ==============================================
+[V73.20.1][NATIVE] guest_native_worker name='Core.Res.Decompressor' managed_tid=74
+[LOADER][INFO] Scheduled guest thread 'Core.Res.FileLoader' handle=0x000002F9F1F75070 entry=0x0000000801104E90 arg=0x0000000802979FC0 priority=700 host_priority=Normal affinity=0xA00
+[DS-THREADSTART][V46.2] ==============================================
+[DS-THREADSTART][V46.2] snapshot#3 name='Core.Res.FileLoader' handle=0x000002F9F1F75070 entry=0x0000000801104E90 arg=0x0000000802979FC0 priority=700 affinity=0xA00
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000 addr=0x0000000802979FC0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 70 50 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·å°ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020 addr=0x0000000802979FE0 hex=60 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 00 5E 06 00 00 60 00 00 utf16='æ¡ Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·å¸€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x040 addr=0x000000080297A000 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 00 5F 06 00 00 60 00 00 00 60 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·å¼€Â·æ€€Â·æ€€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x060 addr=0x000000080297A020 hex=01 00 00 00 00 00 00 00 C0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 31 21 00 06 00 00 00 utf16='Â·Â·Â·Â·é¿€Ê—Â·Â·Â·Â·Â·Â·ã„€!Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x080 addr=0x000000080297A040 hex=00 00 00 00 00 00 00 00 13 00 00 00 00 00 00 00 1F 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A0 addr=0x000000080297A060 hex=00 00 00 00 00 00 00 00 68 A0 97 02 08 00 00 00 68 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 utf16='Â·Â·Â·Â·ê¨Ê—Â·Â·ê¨Ê—Â·Â·ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0 addr=0x000000080297A080 hex=78 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0 addr=0x000000080297A0A0 hex=A0 9F 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='é¾ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x100 addr=0x000000080297A0C0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x120 addr=0x000000080297A0E0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x140 addr=0x000000080297A100 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x160 addr=0x000000080297A120 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x180 addr=0x000000080297A140 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1A0 addr=0x000000080297A160 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1C0 addr=0x000000080297A180 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1E0 addr=0x000000080297A1A0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[V73.20.1][NATIVE] guest_native_worker name='Core.Res.FileLoader' managed_tid=76
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000=0x0000000802695798 class=mapped inline_utf16='åž˜É©Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000801104C30 head_class=mapped head_utf16='ä°°ÄÂ·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000->text+0x000 addr=0x0000000802695798 hex=30 4C 10 01 08 00 00 00 A0 49 10 01 08 00 00 00 40 4A 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='ä°°ÄÂ·Â·ä¦ ÄÂ·Â·ä©€ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000->text+0x020 addr=0x00000008026957B8 hex=00 00 00 00 00 00 00 00 50 54 10 01 08 00 00 00 70 54 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å‘ÄÂ·Â·å‘°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000->text+0x040 addr=0x00000008026957D8 hex=00 00 00 00 00 00 00 00 F0 8C 10 01 08 00 00 00 00 90 10 01 08 00 00 00 A0 90 10 01 08 00 00 00 utf16='Â·Â·Â·Â·è³°ÄÂ·Â·é€€ÄÂ·Â·é‚ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x008=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x010=0x000002F9F1F75070 class=mapped inline_utf16='å°ï‡·Ë¹Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x018=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020=0x00000008033C6860 class=mapped inline_utf16='æ¡ Ì¼Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000802698418 head_class=mapped head_utf16='è˜É©Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020->text+0x000 addr=0x00000008033C6860 hex=18 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 40 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='è˜É©Â·Â·Â·Â·Â·Â·è‘€É©Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020->text+0x020 addr=0x00000008033C6880 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020->text+0x040 addr=0x00000008033C68A0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 40 4B 69 02 08 00 00 00 FC FF FF FF 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·ä­€É©Â·Â·ï¿¼ï¿¿Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x028=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030=0x0000000802695428 class=mapped inline_utf16='å¨É©Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008010FAE60 head_class=mapped head_utf16='ê¹ ÄÂ·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030->text+0x000 addr=0x0000000802695428 hex=60 AE 0F 01 08 00 00 00 40 AF 0F 01 08 00 00 00 D0 B0 0F 01 08 00 00 00 E0 B0 0F 01 08 00 00 00 utf16='ê¹ ÄÂ·Â·ê½€ÄÂ·Â·ëƒÄÂ·Â·ëƒ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030->text+0x020 addr=0x0000000802695448 hex=80 B1 0F 01 08 00 00 00 10 B2 0F 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë†€ÄÂ·Â·ëˆÄÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030->text+0x040 addr=0x0000000802695468 hex=80 B2 0F 01 08 00 00 00 40 B3 0F 01 08 00 00 00 30 B4 0F 01 08 00 00 00 40 B4 0F 01 08 00 00 00 utf16='ëŠ€ÄÂ·Â·ë€ÄÂ·Â·ë°ÄÂ·Â·ë‘€ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x038=0x0000600000065E00 class=mapped inline_utf16='å¸€Â·æ€€Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x040=0x0000000000000001 class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x048=0x00000008026953E8 class=mapped inline_utf16='å¨É©Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008010FA710 head_class=mapped head_utf16='êœÄÂ·Â·' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x050=0x0000600000065F00 class=mapped inline_utf16='å¼€Â·æ€€Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x058=0x0000600000066000 class=mapped inline_utf16='æ€€Â·æ€€Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x060=0x0000000000000001 class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068=0x0000000802979FC0 class=mapped inline_utf16='é¿€Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000802695798 head_class=mapped head_utf16='åž˜É©Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068->text+0x000 addr=0x0000000802979FC0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 70 50 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·å°ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068->text+0x020 addr=0x0000000802979FE0 hex=60 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 00 5E 06 00 00 60 00 00 utf16='æ¡ Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·å¸€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068->text+0x040 addr=0x000000080297A000 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 00 5F 06 00 00 60 00 00 00 60 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·å¼€Â·æ€€Â·æ€€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x070=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078=0x0000000600213100 class=mapped inline_utf16='ã„€!Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x7365522E65726F43 head_class=noncanonical head_utf16='æ½ƒæ•²åˆ®ç¥' text_score=4
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078->text+0x000 addr=0x0000000600213100 hex=43 6F 72 65 2E 52 65 73 2E 46 69 6C 65 4C 6F 61 64 65 72 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä˜®æ±©ä±¥æ…¯æ•¤rÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078->text+0x020 addr=0x0000000600213120 hex=43 6F 72 65 2E 52 65 73 2E 44 65 63 6F 6D 70 72 65 73 73 6F 72 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä®æ¥æµ¯ç‰°ç¥æ½³rÂ·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078->text+0x040 addr=0x0000000600213140 hex=90 5E E0 CD 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='åºì· Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x080=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x088=0x0000000000000013 class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x090=0x000000000000001F class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098=0x00000008033C49A0 class=mapped inline_utf16='ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008026956C8 head_class=mapped head_utf16='å›ˆÉ©Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098->text+0x000 addr=0x00000008033C49A0 hex=C8 56 69 02 08 00 00 00 A0 49 3C 03 08 00 00 00 22 00 00 00 00 00 00 00 43 8D 4A 02 08 00 00 00 utf16='å›ˆÉ©Â·Â·ä¦ Ì¼Â·Â·"Â·Â·Â·èµƒÉŠÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098->text+0x020 addr=0x00000008033C49C0 hex=21 2E 50 02 08 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 58 69 02 08 00 00 00 utf16='â¸¡ÉÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·å¢€É©Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098->text+0x040 addr=0x00000008033C49E0 hex=A0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 C8 58 69 02 08 00 00 00 D0 8D 10 01 08 00 00 00 utf16='è¶ ÄÂ·Â·Â·Â·Â·Â·å£ˆÉ©Â·Â·è·ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8=0x000000080297A068 class=mapped inline_utf16='ê¨Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A068 head_class=mapped head_utf16='ê¨Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8->text+0x000 addr=0x000000080297A068 hex=68 A0 97 02 08 00 00 00 68 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 utf16='ê¨Ê—Â·Â·ê¨Ê—Â·Â·ê¸Ê—Â·Â·ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8->text+0x020 addr=0x000000080297A088 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·é¾ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8->text+0x040 addr=0x000000080297A0A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0=0x000000080297A068 class=mapped inline_utf16='ê¨Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A068 head_class=mapped head_utf16='ê¨Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0->text+0x000 addr=0x000000080297A068 hex=68 A0 97 02 08 00 00 00 68 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 utf16='ê¨Ê—Â·Â·ê¨Ê—Â·Â·ê¸Ê—Â·Â·ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0->text+0x020 addr=0x000000080297A088 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·é¾ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0->text+0x040 addr=0x000000080297A0A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8=0x000000080297A078 class=mapped inline_utf16='ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A078 head_class=mapped head_utf16='ê¸Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8->text+0x000 addr=0x000000080297A078 hex=78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê¸Ê—Â·Â·ê¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8->text+0x020 addr=0x000000080297A098 hex=00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·é¾ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8->text+0x040 addr=0x000000080297A0B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0=0x000000080297A078 class=mapped inline_utf16='ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A078 head_class=mapped head_utf16='ê¸Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0->text+0x000 addr=0x000000080297A078 hex=78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê¸Ê—Â·Â·ê¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0->text+0x020 addr=0x000000080297A098 hex=00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·é¾ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0->text+0x040 addr=0x000000080297A0B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0D0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0D8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0=0x0000000802979FA0 class=mapped inline_utf16='é¾ Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000802979EA0 head_class=mapped head_utf16='éº Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0->text+0x000 addr=0x0000000802979FA0 hex=A0 9E 97 02 08 00 00 00 A0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='éº Ê—Â·Â·ê‚ Ê—Â·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0->text+0x020 addr=0x0000000802979FC0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 70 50 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·å°ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0->text+0x040 addr=0x0000000802979FE0 hex=60 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 00 5E 06 00 00 60 00 00 utf16='æ¡ Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·å¸€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8=0x0000000802F625D0 class=mapped inline_utf16='â—Ë¶Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A0A0 head_class=mapped head_utf16='ê‚ Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8->text+0x000 addr=0x0000000802F625D0 hex=A0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê‚ Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8->text+0x020 addr=0x0000000802F625F0 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8->text+0x040 addr=0x0000000802F62610 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0=0x0000000802902700 class=mapped inline_utf16='âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A0B0 head_class=mapped head_utf16='ê‚°Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0->text+0x000 addr=0x0000000802902700 hex=B0 A0 97 02 08 00 00 00 B0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê‚°Ê—Â·Â·ê‚°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8=0x0000000802902700 class=mapped inline_utf16='âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A0B0 head_class=mapped head_utf16='ê‚°Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8->text+0x000 addr=0x0000000802902700 hex=B0 A0 97 02 08 00 00 00 B0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê‚°Ê—Â·Â·ê‚°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x100=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x108=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x110=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x118=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x120=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x128=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x130=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x138=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x140=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x148=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x150=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x158=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x160=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x168=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x170=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x178=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x180=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x188=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x190=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x198=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1A0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1A8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1B0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1B8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1C0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1C8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1D0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1D8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1E0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1E8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1F0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1F8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x000 addr=0x000000080297A000 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 00 5F 06 00 00 60 00 00 00 60 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·å¼€Â·æ€€Â·æ€€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x020 addr=0x000000080297A020 hex=01 00 00 00 00 00 00 00 C0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 31 21 00 06 00 00 00 utf16='Â·Â·Â·Â·é¿€Ê—Â·Â·Â·Â·Â·Â·ã„€!Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x040 addr=0x000000080297A040 hex=00 00 00 00 00 00 00 00 13 00 00 00 00 00 00 00 1F 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x060 addr=0x000000080297A060 hex=00 00 00 00 00 00 00 00 68 A0 97 02 08 00 00 00 68 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 utf16='Â·Â·Â·Â·ê¨Ê—Â·Â·ê¨Ê—Â·Â·ê¸Ê—Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x00 ptr=0x0000000802695798 head=0x0000000801104C30 utf16='ä°°ÄÂ·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x000 addr=0x0000000802695798 hex=30 4C 10 01 08 00 00 00 A0 49 10 01 08 00 00 00 40 4A 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='ä°°ÄÂ·Â·ä¦ ÄÂ·Â·ä©€ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x020 addr=0x00000008026957B8 hex=00 00 00 00 00 00 00 00 50 54 10 01 08 00 00 00 70 54 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å‘ÄÂ·Â·å‘°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x040 addr=0x00000008026957D8 hex=00 00 00 00 00 00 00 00 F0 8C 10 01 08 00 00 00 00 90 10 01 08 00 00 00 A0 90 10 01 08 00 00 00 utf16='Â·Â·Â·Â·è³°ÄÂ·Â·é€€ÄÂ·Â·é‚ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x060 addr=0x00000008026957F8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 9C 10 01 08 00 00 00 90 9C 10 01 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·é²€ÄÂ·Â·é²ÄÂ·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x20 ptr=0x00000008033C6860 head=0x0000000802698418 utf16='è˜É©Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x000 addr=0x00000008033C6860 hex=18 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 40 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='è˜É©Â·Â·Â·Â·Â·Â·è‘€É©Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x020 addr=0x00000008033C6880 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x040 addr=0x00000008033C68A0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 40 4B 69 02 08 00 00 00 FC FF FF FF 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·ä­€É©Â·Â·ï¿¼ï¿¿Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x060 addr=0x00000008033C68C0 hex=00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x30 ptr=0x0000000802695428 head=0x00000008010FAE60 utf16='ê¹ ÄÂ·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x000 addr=0x0000000802695428 hex=60 AE 0F 01 08 00 00 00 40 AF 0F 01 08 00 00 00 D0 B0 0F 01 08 00 00 00 E0 B0 0F 01 08 00 00 00 utf16='ê¹ ÄÂ·Â·ê½€ÄÂ·Â·ëƒÄÂ·Â·ëƒ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x020 addr=0x0000000802695448 hex=80 B1 0F 01 08 00 00 00 10 B2 0F 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë†€ÄÂ·Â·ëˆÄÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x040 addr=0x0000000802695468 hex=80 B2 0F 01 08 00 00 00 40 B3 0F 01 08 00 00 00 30 B4 0F 01 08 00 00 00 40 B4 0F 01 08 00 00 00 utf16='ëŠ€ÄÂ·Â·ë€ÄÂ·Â·ë°ÄÂ·Â·ë‘€ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x060 addr=0x0000000802695488 hex=30 B5 0F 01 08 00 00 00 F0 B5 0F 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë”°ÄÂ·Â·ë—°ÄÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x68 ptr=0x0000000802979FC0 head=0x0000000802695798 utf16='åž˜É©Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x000 addr=0x0000000802979FC0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 70 50 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·å°ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x020 addr=0x0000000802979FE0 hex=60 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 00 5E 06 00 00 60 00 00 utf16='æ¡ Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·å¸€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x040 addr=0x000000080297A000 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 00 5F 06 00 00 60 00 00 00 60 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·å¼€Â·æ€€Â·æ€€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x060 addr=0x000000080297A020 hex=01 00 00 00 00 00 00 00 C0 9F 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 31 21 00 06 00 00 00 utf16='Â·Â·Â·Â·é¿€Ê—Â·Â·Â·Â·Â·Â·ã„€!Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x78 ptr=0x0000000600213100 head=0x7365522E65726F43 utf16='æ½ƒæ•²åˆ®ç¥' score=4
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x000 addr=0x0000000600213100 hex=43 6F 72 65 2E 52 65 73 2E 46 69 6C 65 4C 6F 61 64 65 72 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä˜®æ±©ä±¥æ…¯æ•¤rÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x020 addr=0x0000000600213120 hex=43 6F 72 65 2E 52 65 73 2E 44 65 63 6F 6D 70 72 65 73 73 6F 72 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä®æ¥æµ¯ç‰°ç¥æ½³rÂ·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x040 addr=0x0000000600213140 hex=90 5E E0 CD 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='åºì· Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x060 addr=0x0000000600213160 hex=F8 BE 63 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë»¸É£Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x98 ptr=0x00000008033C49A0 head=0x00000008026956C8 utf16='å›ˆÉ©Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x000 addr=0x00000008033C49A0 hex=C8 56 69 02 08 00 00 00 A0 49 3C 03 08 00 00 00 22 00 00 00 00 00 00 00 43 8D 4A 02 08 00 00 00 utf16='å›ˆÉ©Â·Â·ä¦ Ì¼Â·Â·"Â·Â·Â·èµƒÉŠÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x020 addr=0x00000008033C49C0 hex=21 2E 50 02 08 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 58 69 02 08 00 00 00 utf16='â¸¡ÉÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·å¢€É©Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x040 addr=0x00000008033C49E0 hex=A0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 C8 58 69 02 08 00 00 00 D0 8D 10 01 08 00 00 00 utf16='è¶ ÄÂ·Â·Â·Â·Â·Â·å£ˆÉ©Â·Â·è·ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x060 addr=0x00000008033C4A00 hex=00 00 00 00 00 00 00 00 10 59 69 02 08 00 00 00 F0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å¤É©Â·Â·è·°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xA8 ptr=0x000000080297A068 head=0x000000080297A068 utf16='ê¨Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x000 addr=0x000000080297A068 hex=68 A0 97 02 08 00 00 00 68 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 utf16='ê¨Ê—Â·Â·ê¨Ê—Â·Â·ê¸Ê—Â·Â·ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x020 addr=0x000000080297A088 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·é¾ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x040 addr=0x000000080297A0A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x060 addr=0x000000080297A0C8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xB0 ptr=0x000000080297A068 head=0x000000080297A068 utf16='ê¨Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x000 addr=0x000000080297A068 hex=68 A0 97 02 08 00 00 00 68 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 utf16='ê¨Ê—Â·Â·ê¨Ê—Â·Â·ê¸Ê—Â·Â·ê¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x020 addr=0x000000080297A088 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·é¾ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x040 addr=0x000000080297A0A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x060 addr=0x000000080297A0C8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xB8 ptr=0x000000080297A078 head=0x000000080297A078 utf16='ê¸Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x000 addr=0x000000080297A078 hex=78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê¸Ê—Â·Â·ê¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x020 addr=0x000000080297A098 hex=00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·é¾ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x040 addr=0x000000080297A0B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x060 addr=0x000000080297A0D8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xC0 ptr=0x000000080297A078 head=0x000000080297A078 utf16='ê¸Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x000 addr=0x000000080297A078 hex=78 A0 97 02 08 00 00 00 78 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê¸Ê—Â·Â·ê¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x020 addr=0x000000080297A098 hex=00 00 00 00 00 00 00 00 A0 9F 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·é¾ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x040 addr=0x000000080297A0B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x060 addr=0x000000080297A0D8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xE0 ptr=0x0000000802979FA0 head=0x0000000802979EA0 utf16='éº Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x000 addr=0x0000000802979FA0 hex=A0 9E 97 02 08 00 00 00 A0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='éº Ê—Â·Â·ê‚ Ê—Â·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x020 addr=0x0000000802979FC0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 70 50 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·å°ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x040 addr=0x0000000802979FE0 hex=60 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 00 5E 06 00 00 60 00 00 utf16='æ¡ Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·å¸€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x060 addr=0x000000080297A000 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 00 5F 06 00 00 60 00 00 00 60 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·å¼€Â·æ€€Â·æ€€Â·æ€€Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xE8 ptr=0x0000000802F625D0 head=0x000000080297A0A0 utf16='ê‚ Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x000 addr=0x0000000802F625D0 hex=A0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê‚ Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x020 addr=0x0000000802F625F0 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x040 addr=0x0000000802F62610 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x060 addr=0x0000000802F62630 hex=A0 49 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xF0 ptr=0x0000000802902700 head=0x000000080297A0B0 utf16='ê‚°Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x000 addr=0x0000000802902700 hex=B0 A0 97 02 08 00 00 00 B0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê‚°Ê—Â·Â·ê‚°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x060 addr=0x0000000802902760 hex=00 00 40 CE 04 00 00 00 00 00 60 CE 04 00 00 00 10 66 3C 03 08 00 00 00 00 00 A0 CE 04 00 00 00 utf16='Â·ì¹€Â·Â·Â·ì¹ Â·Â·æ˜Ì¼Â·Â·Â·ìº Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xF8 ptr=0x0000000802902700 head=0x000000080297A0B0 utf16='ê‚°Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x000 addr=0x0000000802902700 hex=B0 A0 97 02 08 00 00 00 B0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê‚°Ê—Â·Â·ê‚°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x060 addr=0x0000000802902760 hex=00 00 40 CE 04 00 00 00 00 00 60 CE 04 00 00 00 10 66 3C 03 08 00 00 00 00 00 A0 CE 04 00 00 00 utf16='Â·ì¹€Â·Â·Â·ì¹ Â·Â·æ˜Ì¼Â·Â·Â·ìº Â·Â·'
+[DS-THREADSTART][V46.2] ==============================================
+[V73.20.1][NATIVE] guest_native_worker name='Core.Res.FileLoader' managed_tid=76
+[LOADER][INFO] Scheduled guest thread 'Core.Res.TaskManager' handle=0x000002F9F1F780A0 entry=0x0000000801104E90 arg=0x000000080297A0C0 priority=700 host_priority=Normal affinity=0xA00
+[DS-THREADSTART][V46.2] ==============================================
+[DS-THREADSTART][V46.2] snapshot#4 name='Core.Res.TaskManager' handle=0x000002F9F1F780A0 entry=0x0000000801104E90 arg=0x000000080297A0C0 priority=700 affinity=0xA00
+[V73.20.1][NATIVE] guest_native_worker name='Core.Res.TaskManager' managed_tid=77
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000 addr=0x000000080297A0C0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 A0 80 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·è‚ ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020 addr=0x000000080297A0E0 hex=40 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 40 61 06 00 00 60 00 00 utf16='æ¡€Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·æ…€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x040 addr=0x000000080297A100 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 40 62 06 00 00 60 00 00 40 63 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·æ‰€Â·æ€€Â·æ€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x060 addr=0x000000080297A120 hex=01 00 00 00 00 00 00 00 C0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 E0 30 21 00 06 00 00 00 utf16='Â·Â·Â·Â·êƒ€Ê—Â·Â·Â·Â·Â·Â·ãƒ !Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x080 addr=0x000000080297A140 hex=00 00 00 00 00 00 00 00 14 00 00 00 00 00 00 00 1F 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A0 addr=0x000000080297A160 hex=00 00 00 00 00 00 00 00 68 A1 97 02 08 00 00 00 68 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 utf16='Â·Â·Â·Â·ê…¨Ê—Â·Â·ê…¨Ê—Â·Â·ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0 addr=0x000000080297A180 hex=78 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê…¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0 addr=0x000000080297A1A0 hex=A0 A0 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='ê‚ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x100 addr=0x000000080297A1C0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x120 addr=0x000000080297A1E0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x140 addr=0x000000080297A200 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x160 addr=0x000000080297A220 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x180 addr=0x000000080297A240 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1A0 addr=0x000000080297A260 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1C0 addr=0x000000080297A280 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1E0 addr=0x000000080297A2A0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000=0x0000000802695798 class=mapped inline_utf16='åž˜É©Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000801104C30 head_class=mapped head_utf16='ä°°ÄÂ·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000->text+0x000 addr=0x0000000802695798 hex=30 4C 10 01 08 00 00 00 A0 49 10 01 08 00 00 00 40 4A 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='ä°°ÄÂ·Â·ä¦ ÄÂ·Â·ä©€ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000->text+0x020 addr=0x00000008026957B8 hex=00 00 00 00 00 00 00 00 50 54 10 01 08 00 00 00 70 54 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å‘ÄÂ·Â·å‘°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x000->text+0x040 addr=0x00000008026957D8 hex=00 00 00 00 00 00 00 00 F0 8C 10 01 08 00 00 00 00 90 10 01 08 00 00 00 A0 90 10 01 08 00 00 00 utf16='Â·Â·Â·Â·è³°ÄÂ·Â·é€€ÄÂ·Â·é‚ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x008=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x010=0x000002F9F1F780A0 class=mapped inline_utf16='è‚ ï‡·Ë¹Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x018=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020=0x00000008033C6840 class=mapped inline_utf16='æ¡€Ì¼Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008026983F0 head_class=mapped head_utf16='è°É©Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020->text+0x000 addr=0x00000008033C6840 hex=F0 83 69 02 08 00 00 00 30 65 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 10 66 3C 03 08 00 00 00 utf16='è°É©Â·Â·æ”°Ì¼Â·Â·Â·Â·Â·Â·æ˜Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020->text+0x020 addr=0x00000008033C6860 hex=18 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 40 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='è˜É©Â·Â·Â·Â·Â·Â·è‘€É©Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x020->text+0x040 addr=0x00000008033C6880 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x028=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030=0x0000000802695428 class=mapped inline_utf16='å¨É©Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008010FAE60 head_class=mapped head_utf16='ê¹ ÄÂ·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030->text+0x000 addr=0x0000000802695428 hex=60 AE 0F 01 08 00 00 00 40 AF 0F 01 08 00 00 00 D0 B0 0F 01 08 00 00 00 E0 B0 0F 01 08 00 00 00 utf16='ê¹ ÄÂ·Â·ê½€ÄÂ·Â·ëƒÄÂ·Â·ëƒ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030->text+0x020 addr=0x0000000802695448 hex=80 B1 0F 01 08 00 00 00 10 B2 0F 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë†€ÄÂ·Â·ëˆÄÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x030->text+0x040 addr=0x0000000802695468 hex=80 B2 0F 01 08 00 00 00 40 B3 0F 01 08 00 00 00 30 B4 0F 01 08 00 00 00 40 B4 0F 01 08 00 00 00 utf16='ëŠ€ÄÂ·Â·ë€ÄÂ·Â·ë°ÄÂ·Â·ë‘€ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x038=0x0000600000066140 class=mapped inline_utf16='æ…€Â·æ€€Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x040=0x0000000000000001 class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x048=0x00000008026953E8 class=mapped inline_utf16='å¨É©Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008010FA710 head_class=mapped head_utf16='êœÄÂ·Â·' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x050=0x0000600000066240 class=mapped inline_utf16='æ‰€Â·æ€€Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x058=0x0000600000066340 class=mapped inline_utf16='æ€Â·æ€€Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000000000000 head_class=null head_utf16='' text_score=0
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x060=0x0000000000000001 class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068=0x000000080297A0C0 class=mapped inline_utf16='êƒ€Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000802695798 head_class=mapped head_utf16='åž˜É©Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068->text+0x000 addr=0x000000080297A0C0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 A0 80 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·è‚ ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068->text+0x020 addr=0x000000080297A0E0 hex=40 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 40 61 06 00 00 60 00 00 utf16='æ¡€Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·æ…€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x068->text+0x040 addr=0x000000080297A100 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 40 62 06 00 00 60 00 00 40 63 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·æ‰€Â·æ€€Â·æ€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x070=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078=0x00000006002130E0 class=mapped inline_utf16='ãƒ !Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x7365522E65726F43 head_class=noncanonical head_utf16='æ½ƒæ•²åˆ®ç¥' text_score=4
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078->text+0x000 addr=0x00000006002130E0 hex=43 6F 72 65 2E 52 65 73 2E 54 61 73 6B 4D 61 6E 61 67 65 72 00 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥å®ç¡äµ«æ¹¡æ¡ç‰¥Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078->text+0x020 addr=0x0000000600213100 hex=43 6F 72 65 2E 52 65 73 2E 46 69 6C 65 4C 6F 61 64 65 72 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä˜®æ±©ä±¥æ…¯æ•¤rÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x078->text+0x040 addr=0x0000000600213120 hex=43 6F 72 65 2E 52 65 73 2E 44 65 63 6F 6D 70 72 65 73 73 6F 72 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä®æ¥æµ¯ç‰°ç¥æ½³rÂ·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x080=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x088=0x0000000000000014 class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x090=0x000000000000001F class=small inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098=0x00000008033C49A0 class=mapped inline_utf16='ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x00000008026956C8 head_class=mapped head_utf16='å›ˆÉ©Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098->text+0x000 addr=0x00000008033C49A0 hex=C8 56 69 02 08 00 00 00 A0 49 3C 03 08 00 00 00 22 00 00 00 00 00 00 00 43 8D 4A 02 08 00 00 00 utf16='å›ˆÉ©Â·Â·ä¦ Ì¼Â·Â·"Â·Â·Â·èµƒÉŠÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098->text+0x020 addr=0x00000008033C49C0 hex=21 2E 50 02 08 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 58 69 02 08 00 00 00 utf16='â¸¡ÉÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·å¢€É©Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x098->text+0x040 addr=0x00000008033C49E0 hex=A0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 C8 58 69 02 08 00 00 00 D0 8D 10 01 08 00 00 00 utf16='è¶ ÄÂ·Â·Â·Â·Â·Â·å£ˆÉ©Â·Â·è·ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8=0x000000080297A168 class=mapped inline_utf16='ê…¨Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A168 head_class=mapped head_utf16='ê…¨Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8->text+0x000 addr=0x000000080297A168 hex=68 A1 97 02 08 00 00 00 68 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 utf16='ê…¨Ê—Â·Â·ê…¨Ê—Â·Â·ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8->text+0x020 addr=0x000000080297A188 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ê‚ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0A8->text+0x040 addr=0x000000080297A1A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0=0x000000080297A168 class=mapped inline_utf16='ê…¨Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A168 head_class=mapped head_utf16='ê…¨Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0->text+0x000 addr=0x000000080297A168 hex=68 A1 97 02 08 00 00 00 68 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 utf16='ê…¨Ê—Â·Â·ê…¨Ê—Â·Â·ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0->text+0x020 addr=0x000000080297A188 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ê‚ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B0->text+0x040 addr=0x000000080297A1A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8=0x000000080297A178 class=mapped inline_utf16='ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A178 head_class=mapped head_utf16='ê…¸Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8->text+0x000 addr=0x000000080297A178 hex=78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8->text+0x020 addr=0x000000080297A198 hex=00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·ê‚ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0B8->text+0x040 addr=0x000000080297A1B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0=0x000000080297A178 class=mapped inline_utf16='ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A178 head_class=mapped head_utf16='ê…¸Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0->text+0x000 addr=0x000000080297A178 hex=78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0->text+0x020 addr=0x000000080297A198 hex=00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·ê‚ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C0->text+0x040 addr=0x000000080297A1B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0C8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0D0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0D8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0=0x000000080297A0A0 class=mapped inline_utf16='ê‚ Ê—Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x0000000802979FA0 head_class=mapped head_utf16='é¾ Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0->text+0x000 addr=0x000000080297A0A0 hex=A0 9F 97 02 08 00 00 00 A0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='é¾ Ê—Â·Â·ê† Ê—Â·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0->text+0x020 addr=0x000000080297A0C0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 A0 80 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·è‚ ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E0->text+0x040 addr=0x000000080297A0E0 hex=40 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 40 61 06 00 00 60 00 00 utf16='æ¡€Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·æ…€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8=0x0000000802F625D0 class=mapped inline_utf16='â—Ë¶Â·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A1A0 head_class=mapped head_utf16='ê† Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8->text+0x000 addr=0x0000000802F625D0 hex=A0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê† Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8->text+0x020 addr=0x0000000802F625F0 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0E8->text+0x040 addr=0x0000000802F62610 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0=0x0000000802902700 class=mapped inline_utf16='âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A1B0 head_class=mapped head_utf16='ê†°Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0->text+0x000 addr=0x0000000802902700 hex=B0 A1 97 02 08 00 00 00 B0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê†°Ê—Â·Â·ê†°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F0->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8=0x0000000802902700 class=mapped inline_utf16='âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2]   -> head=0x000000080297A1B0 head_class=mapped head_utf16='ê†°Ê—Â·Â·' text_score=2
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8->text+0x000 addr=0x0000000802902700 hex=B0 A1 97 02 08 00 00 00 B0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê†°Ê—Â·Â·ê†°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x0F8->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x100=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x108=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x110=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x118=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x120=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x128=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x130=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x138=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x140=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x148=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x150=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x158=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x160=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x168=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x170=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x178=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x180=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x188=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x190=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x198=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1A0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1A8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1B0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1B8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1C0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1C8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1D0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1D8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1E0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1E8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1F0=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg.pre-run+0x1F8=0x0000000000000000 class=null inline_utf16=''
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x000 addr=0x000000080297A100 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 40 62 06 00 00 60 00 00 40 63 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·æ‰€Â·æ€€Â·æ€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x020 addr=0x000000080297A120 hex=01 00 00 00 00 00 00 00 C0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 E0 30 21 00 06 00 00 00 utf16='Â·Â·Â·Â·êƒ€Ê—Â·Â·Â·Â·Â·Â·ãƒ !Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x040 addr=0x000000080297A140 hex=00 00 00 00 00 00 00 00 14 00 00 00 00 00 00 00 1F 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x40+0x060 addr=0x000000080297A160 hex=00 00 00 00 00 00 00 00 68 A1 97 02 08 00 00 00 68 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 utf16='Â·Â·Â·Â·ê…¨Ê—Â·Â·ê…¨Ê—Â·Â·ê…¸Ê—Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x00 ptr=0x0000000802695798 head=0x0000000801104C30 utf16='ä°°ÄÂ·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x000 addr=0x0000000802695798 hex=30 4C 10 01 08 00 00 00 A0 49 10 01 08 00 00 00 40 4A 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='ä°°ÄÂ·Â·ä¦ ÄÂ·Â·ä©€ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x020 addr=0x00000008026957B8 hex=00 00 00 00 00 00 00 00 50 54 10 01 08 00 00 00 70 54 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å‘ÄÂ·Â·å‘°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x040 addr=0x00000008026957D8 hex=00 00 00 00 00 00 00 00 F0 8C 10 01 08 00 00 00 00 90 10 01 08 00 00 00 A0 90 10 01 08 00 00 00 utf16='Â·Â·Â·Â·è³°ÄÂ·Â·é€€ÄÂ·Â·é‚ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x00->text+0x060 addr=0x00000008026957F8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 9C 10 01 08 00 00 00 90 9C 10 01 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·é²€ÄÂ·Â·é²ÄÂ·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x20 ptr=0x00000008033C6840 head=0x00000008026983F0 utf16='è°É©Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x000 addr=0x00000008033C6840 hex=F0 83 69 02 08 00 00 00 30 65 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 10 66 3C 03 08 00 00 00 utf16='è°É©Â·Â·æ”°Ì¼Â·Â·Â·Â·Â·Â·æ˜Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x020 addr=0x00000008033C6860 hex=18 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 40 84 69 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='è˜É©Â·Â·Â·Â·Â·Â·è‘€É©Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x040 addr=0x00000008033C6880 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x20->text+0x060 addr=0x00000008033C68A0 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 40 4B 69 02 08 00 00 00 FC FF FF FF 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·ä­€É©Â·Â·ï¿¼ï¿¿Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x30 ptr=0x0000000802695428 head=0x00000008010FAE60 utf16='ê¹ ÄÂ·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x000 addr=0x0000000802695428 hex=60 AE 0F 01 08 00 00 00 40 AF 0F 01 08 00 00 00 D0 B0 0F 01 08 00 00 00 E0 B0 0F 01 08 00 00 00 utf16='ê¹ ÄÂ·Â·ê½€ÄÂ·Â·ëƒÄÂ·Â·ëƒ ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x020 addr=0x0000000802695448 hex=80 B1 0F 01 08 00 00 00 10 B2 0F 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë†€ÄÂ·Â·ëˆÄÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x040 addr=0x0000000802695468 hex=80 B2 0F 01 08 00 00 00 40 B3 0F 01 08 00 00 00 30 B4 0F 01 08 00 00 00 40 B4 0F 01 08 00 00 00 utf16='ëŠ€ÄÂ·Â·ë€ÄÂ·Â·ë°ÄÂ·Â·ë‘€ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x30->text+0x060 addr=0x0000000802695488 hex=30 B5 0F 01 08 00 00 00 F0 B5 0F 01 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ë”°ÄÂ·Â·ë—°ÄÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x68 ptr=0x000000080297A0C0 head=0x0000000802695798 utf16='åž˜É©Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x000 addr=0x000000080297A0C0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 A0 80 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·è‚ ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x020 addr=0x000000080297A0E0 hex=40 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 40 61 06 00 00 60 00 00 utf16='æ¡€Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·æ…€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x040 addr=0x000000080297A100 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 40 62 06 00 00 60 00 00 40 63 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·æ‰€Â·æ€€Â·æ€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x68->text+0x060 addr=0x000000080297A120 hex=01 00 00 00 00 00 00 00 C0 A0 97 02 08 00 00 00 00 00 00 00 00 00 00 00 E0 30 21 00 06 00 00 00 utf16='Â·Â·Â·Â·êƒ€Ê—Â·Â·Â·Â·Â·Â·ãƒ !Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x78 ptr=0x00000006002130E0 head=0x7365522E65726F43 utf16='æ½ƒæ•²åˆ®ç¥' score=4
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x000 addr=0x00000006002130E0 hex=43 6F 72 65 2E 52 65 73 2E 54 61 73 6B 4D 61 6E 61 67 65 72 00 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥å®ç¡äµ«æ¹¡æ¡ç‰¥Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x020 addr=0x0000000600213100 hex=43 6F 72 65 2E 52 65 73 2E 46 69 6C 65 4C 6F 61 64 65 72 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä˜®æ±©ä±¥æ…¯æ•¤rÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x040 addr=0x0000000600213120 hex=43 6F 72 65 2E 52 65 73 2E 44 65 63 6F 6D 70 72 65 73 73 6F 72 00 00 00 00 00 00 00 00 00 00 00 utf16='æ½ƒæ•²åˆ®ç¥ä®æ¥æµ¯ç‰°ç¥æ½³rÂ·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x78->text+0x060 addr=0x0000000600213140 hex=90 5E E0 CD 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='åºì· Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0x98 ptr=0x00000008033C49A0 head=0x00000008026956C8 utf16='å›ˆÉ©Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x000 addr=0x00000008033C49A0 hex=C8 56 69 02 08 00 00 00 A0 49 3C 03 08 00 00 00 22 00 00 00 00 00 00 00 43 8D 4A 02 08 00 00 00 utf16='å›ˆÉ©Â·Â·ä¦ Ì¼Â·Â·"Â·Â·Â·èµƒÉŠÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x020 addr=0x00000008033C49C0 hex=21 2E 50 02 08 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 58 69 02 08 00 00 00 utf16='â¸¡ÉÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·å¢€É©Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x040 addr=0x00000008033C49E0 hex=A0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 C8 58 69 02 08 00 00 00 D0 8D 10 01 08 00 00 00 utf16='è¶ ÄÂ·Â·Â·Â·Â·Â·å£ˆÉ©Â·Â·è·ÄÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0x98->text+0x060 addr=0x00000008033C4A00 hex=00 00 00 00 00 00 00 00 10 59 69 02 08 00 00 00 F0 8D 10 01 08 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·å¤É©Â·Â·è·°ÄÂ·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xA8 ptr=0x000000080297A168 head=0x000000080297A168 utf16='ê…¨Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x000 addr=0x000000080297A168 hex=68 A1 97 02 08 00 00 00 68 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 utf16='ê…¨Ê—Â·Â·ê…¨Ê—Â·Â·ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x020 addr=0x000000080297A188 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ê‚ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x040 addr=0x000000080297A1A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xA8->text+0x060 addr=0x000000080297A1C8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xB0 ptr=0x000000080297A168 head=0x000000080297A168 utf16='ê…¨Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x000 addr=0x000000080297A168 hex=68 A1 97 02 08 00 00 00 68 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 utf16='ê…¨Ê—Â·Â·ê…¨Ê—Â·Â·ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x020 addr=0x000000080297A188 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·ê‚ Ê—Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x040 addr=0x000000080297A1A8 hex=D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 utf16='â—Ë¶Â·Â·âœ€ÊÂ·Â·âœ€ÊÂ·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB0->text+0x060 addr=0x000000080297A1C8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xB8 ptr=0x000000080297A178 head=0x000000080297A178 utf16='ê…¸Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x000 addr=0x000000080297A178 hex=78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x020 addr=0x000000080297A198 hex=00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·ê‚ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x040 addr=0x000000080297A1B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xB8->text+0x060 addr=0x000000080297A1D8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xC0 ptr=0x000000080297A178 head=0x000000080297A178 utf16='ê…¸Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x000 addr=0x000000080297A178 hex=78 A1 97 02 08 00 00 00 78 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê…¸Ê—Â·Â·ê…¸Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x020 addr=0x000000080297A198 hex=00 00 00 00 00 00 00 00 A0 A0 97 02 08 00 00 00 D0 25 F6 02 08 00 00 00 00 27 90 02 08 00 00 00 utf16='Â·Â·Â·Â·ê‚ Ê—Â·Â·â—Ë¶Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x040 addr=0x000000080297A1B8 hex=00 27 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='âœ€ÊÂ·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xC0->text+0x060 addr=0x000000080297A1D8 hex=00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xE0 ptr=0x000000080297A0A0 head=0x0000000802979FA0 utf16='é¾ Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x000 addr=0x000000080297A0A0 hex=A0 9F 97 02 08 00 00 00 A0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='é¾ Ê—Â·Â·ê† Ê—Â·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x020 addr=0x000000080297A0C0 hex=98 57 69 02 08 00 00 00 00 00 00 00 00 00 00 00 A0 80 F7 F1 F9 02 00 00 00 00 00 00 00 00 00 00 utf16='åž˜É©Â·Â·Â·Â·Â·Â·è‚ ï‡·Ë¹Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x040 addr=0x000000080297A0E0 hex=40 68 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 28 54 69 02 08 00 00 00 40 61 06 00 00 60 00 00 utf16='æ¡€Ì¼Â·Â·Â·Â·Â·Â·å¨É©Â·Â·æ…€Â·æ€€Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE0->text+0x060 addr=0x000000080297A100 hex=01 00 00 00 00 00 00 00 E8 53 69 02 08 00 00 00 40 62 06 00 00 60 00 00 40 63 06 00 00 60 00 00 utf16='Â·Â·Â·Â·å¨É©Â·Â·æ‰€Â·æ€€Â·æ€Â·æ€€Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xE8 ptr=0x0000000802F625D0 head=0x000000080297A1A0 utf16='ê† Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x000 addr=0x0000000802F625D0 hex=A0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê† Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x020 addr=0x0000000802F625F0 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x040 addr=0x0000000802F62610 hex=A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xE8->text+0x060 addr=0x0000000802F62630 hex=A0 49 3C 03 08 00 00 00 00 00 00 00 00 00 00 00 A0 49 3C 03 08 00 00 00 A0 49 3C 03 08 00 00 00 utf16='ä¦ Ì¼Â·Â·Â·Â·Â·Â·ä¦ Ì¼Â·Â·ä¦ Ì¼Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xF0 ptr=0x0000000802902700 head=0x000000080297A1B0 utf16='ê†°Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x000 addr=0x0000000802902700 hex=B0 A1 97 02 08 00 00 00 B0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê†°Ê—Â·Â·ê†°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF0->text+0x060 addr=0x0000000802902760 hex=00 00 40 CE 04 00 00 00 00 00 60 CE 04 00 00 00 10 66 3C 03 08 00 00 00 00 00 A0 CE 04 00 00 00 utf16='Â·ì¹€Â·Â·Â·ì¹ Â·Â·æ˜Ì¼Â·Â·Â·ìº Â·Â·'
+[DS-THREADSTART][V46.2] text_pointer offset=0xF8 ptr=0x0000000802902700 head=0x000000080297A1B0 utf16='ê†°Ê—Â·Â·' score=2
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x000 addr=0x0000000802902700 hex=B0 A1 97 02 08 00 00 00 B0 A1 97 02 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 utf16='ê†°Ê—Â·Â·ê†°Ê—Â·Â·Â·Â·Â·Â·Â·Â·Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x020 addr=0x0000000802902720 hex=80 48 3C 03 08 00 00 00 40 2A 90 02 08 00 00 00 00 00 00 00 00 00 00 00 00 27 90 02 08 00 00 00 utf16='ä¢€Ì¼Â·Â·â©€ÊÂ·Â·Â·Â·Â·Â·âœ€ÊÂ·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x040 addr=0x0000000802902740 hex=D8 26 F6 02 08 00 00 00 00 00 30 CE 04 00 00 00 00 00 40 CE 04 00 00 00 A0 27 F6 02 08 00 00 00 utf16='â›˜Ë¶Â·Â·Â·ì¸°Â·Â·Â·ì¹€Â·Â·âž Ë¶Â·Â·'
+[DS-VPROBE][V46.2] highgfx.arg+0xF8->text+0x060 addr=0x0000000802902760 hex=00 00 40 CE 04 00 00 00 00 00 60 CE 04 00 00 00 10 66 3C 03 08 00 00 00 00 00 A0 CE 04 00 00 00 utf16='Â·ì¹€Â·Â·Â·ì¹ Â·Â·æ˜Ì¼Â·Â·Â·ìº Â·Â·'
+[DS-THREADSTART][V46.2] ==============================================
+[V73.20.1][NATIVE] guest_native_worker name='Core.Res.TaskManager' managed_tid=77
+[LOADER][INFO] Scheduled guest thread 'NexusRevolution Event' handle=0x000002F9F1F790B0 entry=0x0000000801104E90 arg=0x000000060834E4E0 priority=700 host_priority=Normal affinity=0xA00
+[V73.20.1][NATIVE] guest_native_worker name='NexusRevolution Event' managed_tid=78
+[LOADER][INFO] Scheduled guest thread 'NexusRevolution Surveillance' handle=0x000002F9F1F7A0C0 entry=0x0000000801104E90 arg=0x000000060834E410 priority=700 host_priority=Normal affinity=0xA00
+[V73.20.1][NATIVE] guest_native_worker name='NexusRevolution Surveillance' managed_tid=79
+[LOADER][TRACE] audio_out2.context-query-memory stack-size-only out=0x7FFFF01F5960 size=0x11640
+[LOADER][TRACE] audio_out2.context-query-memory stack-size-only out=0x7FFFF01F5A68 size=0x12C80
+[LOADER][INFO] Scheduled guest thread 'ncaPumpThread' handle=0x000002F9F1F7D0F0 entry=0x0000000801E697B0 arg=0x000000040111ACE8 priority=256 host_priority=Highest affinity=0x1FF0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A950 object=0x0000600000070600 old=0x0000000000000000 owner=0x000002F9F10F9290
+[V73.20.4.1][DEDICATED] create n=19 guest=0x000002F9F1F7D0F0 name='ncaPumpThread'
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A950 object=0x0000600000070600 old=0x000002F9F10F9290 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A9B0 object=0x0000600000070740 old=0x0000000000000000 owner=0x000002F9F1F7D0F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A9B0 object=0x0000600000070740 old=0x000002F9F1F7D0F0 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A950 object=0x0000600000070600 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A950 object=0x0000600000070600 old=0x000002F9F10FF2F0 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x000002F9F10F4240
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10F4240 owner=0x0000000000000000
+[LOADER][TRACE] pthread_opaque_owner_sync: op=lock slot=0x000000040110A758 object=0x00006000000704C0 old=0x0000000000000000 owner=0x000002F9F10FF2F0
+[LOADER][TRACE] pthread_opaque_owner_sync: op=unlock slot=0x000000040110A758 object=0x00006000000704C0 old=0x000002F9F10FF2F0 owner=0x0000000000000000
+[LOADER][INFO] Scheduled guest thread 'snd_stream_parsing_thread' handle=0x000002F9F1F76080 entry=0x0000000801E61E10 arg=0x00000008034366C8 priority=700 host_priority=Normal affinity=0x7F
+[V73.20.4.1][DEDICATED] create n=20 guest=0x000002F9F1F76080 name='snd_stream_parsing_thread'
+[LOADER][INFO] Scheduled guest thread 'snd_stream_reader_thread' handle=0x000002F9F1F7B0D0 entry=0x0000000801E62460 arg=0x00000008034366F0 priority=700 host_priority=Normal affinity=0x7F
+[V73.20.4.1][DEDICATED] create n=21 guest=0x000002F9F1F7B0D0 name='snd_stream_reader_thread'
+[STARTMENU][AUTO_OPTIONS][V2.1.0] configured raw='' count=0 mode=sample-edge-retry press_samples=1 release_samples=1
+[V73.0.16][APR_READ_QUEUED] count=1024 cmd=0x0000000608C929D0 id=0xFDA57142 dst=0x0000000402B85000 size=0x617C offset=0x0 read=0x0 result=0x00000000 path=''
+[V73.0.16][APR_READ_COMPLETE] count=1024 cmd=0x0000000608C929D0 id=0xFDA57142 dst=0x0000000402B85000 size=0x617C offset=0x0 read=0x617C result=0x00000000 path='F:\JOGOSPS5\PPSA01341\characters\c0000_main\animation\a00\_cmn\a00_6261.cani'
+[V73.0.16][APR_READ_QUEUED] count=2048 cmd=0x0000000608C929D0 id=0xB7534024 dst=0x0000000404D5D280 size=0x8DEC offset=0x0 read=0x0 result=0x00000000 path=''
+[V73.0.16][APR_READ_COMPLETE] count=2048 cmd=0x0000000608C929D0 id=0xB7534024 dst=0x0000000404D5D280 size=0x8DEC offset=0x0 read=0x8DEC result=0x00000000 path='F:\JOGOSPS5\PPSA01341\characters\c0000_main\animation\a48\_cmn\a48_4900.cani'
+[V73.0.16][APR_READ_QUEUED] count=4096 cmd=0x0000000608CB6A60 id=0x18FCD982 dst=0x0000000408D85E00 size=0x6BCC offset=0x0 read=0x0 result=0x00000000 path=''
+[V73.0.16][APR_READ_COMPLETE] count=4096 cmd=0x0000000608CB6A60 id=0x18FCD982 dst=0x0000000408D85E00 size=0x6BCC offset=0x0 read=0x6BCC result=0x00000000 path='F:\JOGOSPS5\PPSA01341\characters\c0000_main\animation\a203\_cmn\bp203_transition_outof_guardwalkr_r_foot_passing.cani'
+[V73.0.16][APR_READ_QUEUED] count=8192 cmd=0x0000000608C71370 id=0xEFCC9AAF dst=0x000000041D6D2840 size=0x1537 offset=0x0 read=0x0 result=0x00000000 path=''
+[V73.0.16][APR_READ_COMPLETE] count=8192 cmd=0x0000000608C71370 id=0xEFCC9AAF dst=0x000000041D6D2840 size=0x1537 offset=0x0 read=0x1537 result=0x00000000 path='F:\JOGOSPS5\PPSA01341\particles\miracles\heal\_cmn\heal_rune_rings_02.cprt'
+[LOADER][INFO] Vulkan VideoOut hid splash
+[LOADER][INFO] Vulkan VideoOut presented first frame: 3840x2160
+[V73.20.1][NATIVE] guest_native_worker name='Core.Res.TaskManager' managed_tid=77
+[V17][EVENT_FASTPATH] n=1 queue=acb.compute[32] submission=1 work_sequence=3 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=2 queue=dcb.graphics submission=2 work_sequence=10 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=3 queue=acb.compute[40] submission=3 work_sequence=26 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=4 queue=dcb.graphics submission=2 work_sequence=11 name='event_write type=0x10'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=1 queue=dcb.graphics submission='SharpEmu compute cs=0x00000004486BFC00 storage=0x0000000449ED0000 256x256 fmt2 32x32x1'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=2 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448581200 1x1x1'
+[V17][EVENT_FASTPATH] n=5 queue=dcb.graphics submission=2 work_sequence=18 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=6 queue=dcb.graphics submission=2 work_sequence=19 name='event_write type=0x10'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=3 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448581200 3x1x1'
+[V17][EVENT_FASTPATH] n=7 queue=dcb.graphics submission=4 work_sequence=31 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=8 queue=dcb.graphics submission=4 work_sequence=32 name='event_write type=0x10'
+[V17][EVENT_FASTPATH] n=9 queue=dcb.graphics submission=4 work_sequence=34 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=10 queue=dcb.graphics submission=4 work_sequence=35 name='event_write type=0x10'
+[V17][EVENT_FASTPATH] n=11 queue=dcb.graphics submission=4 work_sequence=40 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=12 queue=dcb.graphics submission=4 work_sequence=41 name='event_write type=0x10'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=4 queue=dcb.graphics submission='SharpEmu compute cs=0x00000004486BFC00 storage=0x0000000449F00000 256x256 fmt2 32x32x1'
+[V17][EVENT_FASTPATH] n=13 queue=dcb.graphics submission=4 work_sequence=45 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=14 queue=dcb.graphics submission=4 work_sequence=46 name='event_write type=0x10'
+[V17][EVENT_FASTPATH] n=15 queue=dcb.graphics submission=4 work_sequence=50 name='event_write type=0x07'
+[V17][EVENT_FASTPATH] n=16 queue=dcb.graphics submission=4 work_sequence=51 name='event_write type=0x10'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=5 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448581200 1x1x1'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=6 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448581200 16x1x1'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=7 queue=dcb.graphics submission='SharpEmu compute cs=0x00000004486E2E00 1x1x1'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=8 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448581200 13x1x1'
+[V17][EVENT_FASTPATH] n=32 queue=dcb.graphics submission=4 work_sequence=102 name='event_write type=0x07'
+[LOADER][TRACE] vk.ordered_action_fence_wait count=16 queue=dcb.graphics submission='SharpEmu compute cs=0x00000004486DA300 storage=0x0000000448F40000 64x64 fmt12 8x8x1'
+[V17][EVENT_FASTPATH] n=64 queue=dcb.graphics submission=4 work_sequence=193 name='event_write type=0x2E'
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF580 queue=acb.compute[72] submission=20 command=0x000000060A221D00 packet=0x000000060A221D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF4C0 queue=acb.compute[40] submission=23 command=0x000000060A26A000 packet=0x000000060A26A0A4 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][TRACE] vk.ordered_action_fence_wait count=32 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448640700 storage=0x0000000492980000 512x256 fmt4 4x2x1'
+[LOADER][TRACE] agc.dispatch_noop source=direct dims=0x000000060A1E1CDC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=absolute-indirect dims=0x000000044EB7FB80 raw=00000000/00000000/00000000 initiator=0x00000041 reason=zero-dimension
+[V17][EVENT_FASTPATH] n=128 queue=acb.compute[64] submission=9 work_sequence=435 name='event_write type=0x07'
+[V73.0.15][PARSER_ESCAPE] count=1 reason=waiter queued=26 payload=7 sync=19 retained_mb=80 incoming_mb=16 soft_mb=96 hard_mb=192 waiters=7
+[V73.0.15][PARSER_ESCAPE] count=2 reason=waiter queued=29 payload=8 sync=21 retained_mb=96 incoming_mb=0 soft_mb=96 hard_mb=192 waiters=7
+[V73.0.15][PARSER_ESCAPE] count=3 reason=waiter queued=33 payload=9 sync=24 retained_mb=96 incoming_mb=2 soft_mb=96 hard_mb=192 waiters=7
+[V74.0.4][ALLOC] large_texture_cpu_snapshot addr=0x000000045F580000 meta=0x0000000000000000 size=2560x1440 fmt=4/7 tile=24 storage=0 bytes=15728640
+[V74.0.4][ALLOC] large_texture_cpu_snapshot addr=0x0000000463810000 meta=0x0000000000000000 size=2560x1440 fmt=5/7 tile=27 storage=0 bytes=15728640
+[LOADER][WARN] agc.rt_sampled#1 addr=0x463810000 first=True gpu_resident=False fmt=5/7 known_targets=3
+[LOADER][TRACE] vk.ordered_action_fence_wait count=64 queue=dcb.graphics submission='SharpEmu compute cs=0x000000044863F600 storage=0x0000000464AF0000 214x120 fmt2 7x4x1'
+[V74.0.4][ALLOC] large_texture_cpu_snapshot addr=0x0000000467E00000 meta=0x0000000000000000 size=2560x1440 fmt=4/4 tile=27 storage=0 bytes=15728640
+[LOADER][WARN] agc.rt_sampled#2 addr=0x467E00000 first=True gpu_resident=False fmt=4/4 known_targets=3
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7A0 raw=00000000/00000000/00000000 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7AC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7B8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7C4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7D0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7DC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7E8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F7F4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F800 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F80C raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F818 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F824 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F830 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F83C raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F848 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F854 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F860 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F86C raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F878 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F884 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F890 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F89C raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8A8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8B4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8C0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8CC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8D8 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8E4 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8F0 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F8FC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F908 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F914 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F92C raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F938 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F944 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F950 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F95C raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F968 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F974 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x00000004BF67F980 raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[V17][EVENT_FASTPATH] n=256 queue=dcb.graphics submission=24 work_sequence=834 name='event_write type=0x07'
+[LOADER][WARN] agc.rt_sampled#8 addr=0x45BC00000 first=True gpu_resident=False fmt=12/7 known_targets=3
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=1 addr=0x000000045BC00000 meta=0x0000000486B22000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=28
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x0000000447E7FED0 raw=00000000/00000000/00000000 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=absolute-indirect dims=0x000000044F67FEC0 raw=00000000/00000000/00000000 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=absolute-indirect dims=0x000000044F67FE40 raw=00000001/00000001/00000000 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=absolute-indirect dims=0x000000044F67FE60 raw=00000002/00000002/00000000 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=absolute-indirect dims=0x000000044F67FEA0 raw=00000001/00000001/00000000 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=base-indirect dims=0x0000000447E7FEC0 raw=00000000/00000000/00000000 initiator=0x00000041 reason=zero-dimension
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=2 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=57
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=3 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=86
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=4 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=115
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=5 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=143
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=6 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=172
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=7 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=201
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=8 addr=0x00000004888C0000 meta=0x00000004BED34000 size=2560x1440 fmt=12/7 tile=27 bytes=30146560 total_suppressed_mb=230
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=9 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=245
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=10 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=260
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=11 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=275
+[V74.0.4][ALLOC] large_texture_cpu_snapshot addr=0x0000000463810000 meta=0x0000000000000000 size=2560x1440 fmt=5/7 tile=27 storage=0 bytes=15728640
+[LOADER][WARN] agc.rt_sampled#22 addr=0x4677F0000 first=True gpu_resident=True fmt=12/7 known_targets=7
+[LOADER][WARN] agc.rt_sampled#24 addr=0x467F70000 first=True gpu_resident=True fmt=12/7 known_targets=8
+[LOADER][WARN] agc.rt_sampled#26 addr=0x465AB0000 first=True gpu_resident=True fmt=12/7 known_targets=8
+[LOADER][TRACE] vk.ordered_action_fence_wait count=128 queue=acb.compute[40] submission='SharpEmu compute cs=0x000000044863A600 storage=0x0000000466EE0000 80x45 fmt6 10x6x1'
+[LOADER][WARN] agc.rt_sampled#27 addr=0x468E70000 first=True gpu_resident=True fmt=12/7 known_targets=9
+[LOADER][WARN] agc.rt_sampled#28 addr=0x4686F0000 first=True gpu_resident=True fmt=12/7 known_targets=9
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=12 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=338
+[LOADER][WARN] agc.rt_sampled#32 addr=0x492E50000 first=True gpu_resident=True fmt=12/7 known_targets=11
+[LOADER][WARN] agc.wait_suspended label=0x0000000442EFF300 queue=acb.compute[72] submission=44 command=0x000000060A493D00 packet=0x000000060A493D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442EFF200 queue=acb.compute[40] submission=47 command=0x000000060A4DC000 packet=0x000000060A4DC064 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][INFO] Vulkan VideoOut presented guest frame: image=0x0000000457C00000 3840x2160
+[LOADER][TRACE] agc.dispatch_noop source=direct dims=0x000000060A453CDC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[V73.0.15][PARSER_ESCAPE] count=4 reason=waiter queued=33 payload=8 sync=25 retained_mb=81 incoming_mb=16 soft_mb=96 hard_mb=192 waiters=6
+[V73.0.15][PARSER_ESCAPE] count=5 reason=waiter queued=36 payload=9 sync=27 retained_mb=97 incoming_mb=0 soft_mb=96 hard_mb=192 waiters=6
+[V73.0.15][PARSER_ESCAPE] count=6 reason=waiter queued=40 payload=10 sync=30 retained_mb=97 incoming_mb=2 soft_mb=96 hard_mb=192 waiters=6
+[V17][EVENT_FASTPATH] n=512 queue=acb.compute[64] submission=43 work_sequence=1636 name='event_write type=0x07'
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=13 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=402
+[LOADER][INFO] Vulkan pipeline cache saved: path=C:\Users\Edpo\Documents\GitHub\sharpemu\artifacts\bin\Debug\net10.0\win-x64\user\pipeline_cache\PPSA01341\vulkan-pipeline-cache.bin bytes=7784567
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=14 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=466
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=15 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=530
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=16 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=545
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=17 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=560
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=18 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=575
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=19 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=590
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=20 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=605
+[V74.0.4][ALLOC] large_texture_cpu_snapshot addr=0x000000045F580000 meta=0x0000000000000000 size=2560x1440 fmt=4/7 tile=24 storage=0 bytes=15728640
+[LOADER][WARN] agc.rt_sampled#97 addr=0x466230000 first=True gpu_resident=True fmt=12/7 known_targets=11
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=21 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=668
+[LOADER][TRACE] vk.ordered_action_fence_wait count=256 queue=dcb.graphics submission='SharpEmu compute cs=0x0000000448581200 3x1x1'
+[LOADER][TRACE] agc.dispatch_noop source=direct dims=0x000000060A6C5CDC raw=00000000/00000001/00000001 initiator=0x00000041 reason=zero-dimension
+[LOADER][TRACE] agc.dispatch_noop source=absolute-indirect dims=0x000000044EB7FBA0 raw=00000002/00000002/00000000 initiator=0x00000041 reason=zero-dimension
+[V73.0.15][PARSER_ESCAPE] count=7 reason=waiter queued=26 payload=7 sync=19 retained_mb=80 incoming_mb=16 soft_mb=96 hard_mb=192 waiters=7
+[V73.0.15][PARSER_ESCAPE] count=8 reason=waiter queued=29 payload=8 sync=21 retained_mb=96 incoming_mb=0 soft_mb=96 hard_mb=192 waiters=7
+[V73.0.15][PARSER_ESCAPE] count=9 reason=waiter queued=33 payload=9 sync=24 retained_mb=96 incoming_mb=2 soft_mb=96 hard_mb=192 waiters=7
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=22 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=732
+[V73.0.15][PARSER_ESCAPE] count=10 reason=waiter queued=39 payload=8 sync=31 retained_mb=96 incoming_mb=0 soft_mb=96 hard_mb=192 waiters=7
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=23 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=796
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=24 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=860
+[V17][EVENT_FASTPATH] n=1024 queue=dcb.graphics submission=72 work_sequence=3315 name='event_write type=0x07'
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=25 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=875
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=26 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=890
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=27 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=905
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=28 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=920
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=29 addr=0x0000000460890000 meta=0x0000000486B13000 size=2560x1440 fmt=10/0 tile=27 bytes=15728640 total_suppressed_mb=935
+[V74.0.4][ALLOC] large_texture_cpu_snapshot addr=0x000000045F580000 meta=0x0000000000000000 size=2560x1440 fmt=4/7 tile=24 storage=0 bytes=15728640
+[V74.0.2][TEXTURE_CONTRACT] sample=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 flags=0x007B0000 exact_known=0 exact_writer=0 exact_writer_seq=0 exact_resident=0 metadata_candidates=0 shape_candidates=0 resident_candidates=0 writer_candidates=0 alias_reason=metadata_matches=0;shape_matches=0;resident_matches=0;writer_matches=0
+[V74.0.4][DCC] unresolved_dcc_cpu_snapshot_suppressed count=30 addr=0x000000045D550000 meta=0x0000000486AF8000 size=3840x2160 fmt=12/7 tile=27 bytes=66846720 total_suppressed_mb=998

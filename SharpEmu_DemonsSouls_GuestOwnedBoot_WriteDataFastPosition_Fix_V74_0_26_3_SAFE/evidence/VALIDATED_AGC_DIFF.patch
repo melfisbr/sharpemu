@@ -1,0 +1,31 @@
+--- AgcExports.cs.C8721E52
++++ AgcExports.cs.V74.0.26
+@@ -5883,13 +5883,24 @@
+ 
+         var packetPositionWriteV74025 =
+             !requiresGpuBufferReadback && _writeDataPacketPositionV74025;
+-        var orderedSequence = requiresGpuBufferReadback || packetPositionWriteV74025
++        // SHARPEMU_V74_0_26_WRITE_DATA_NO_GPU_READBACK
++        // V74.0.25 intended WRITE_DATA's CPU-resident immediate payload to run
++        // at its logical PM4 queue position after prior commands are flushed.
++        // SubmitOrderedGuestAction() defaults RequiresGpuToCpuVisibility=true,
++        // which reintroduced a fence/readback stall. Use the existing explicit
++        // visibility-direction overload for this opt-in packet-position path.
++        var orderedSequence = requiresGpuBufferReadback
+             ? GuestGpu.Current.SubmitOrderedGuestAction(
+                 ApplyAndQueueCompletion,
+                 debugName)
+-            : GuestGpu.Current.SubmitOrderedGuestActionAfterQueueCompletion(
+-                ApplyAndQueueCompletion,
+-                debugName);
++            : packetPositionWriteV74025
++                ? GuestGpu.Current.SubmitOrderedGuestActionWithVisibility(
++                    ApplyAndQueueCompletion,
++                    debugName,
++                    requiresGpuToCpuVisibility: false)
++                : GuestGpu.Current.SubmitOrderedGuestActionAfterQueueCompletion(
++                    ApplyAndQueueCompletion,
++                    debugName);
+         if (packetPositionWriteV74025)
+         {
+             var packetPositionCount = Interlocked.Increment(

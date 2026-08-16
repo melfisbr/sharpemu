@@ -1,0 +1,16 @@
+﻿Dragon Ball FighterZ EBOOT/SRC Current Audit V1.8.14
+EbootSHA256=106b594c4e84401b096ec8b41a088fbf4e3862aee2faf030e4e6767df5cd1018
+EbootUniqueImports=2766
+CurrentDirectSysAbiExports=1574
+CurrentNoDirectSysAbiExport=1192
+CurrentCsFiles=512
+Critical:
+hyVLT2VlOYk sceNgs2ParseWaveformData DirectExport=True
+gEpBkcwxUjw sceKernelAprResolveFilepathsToIdsAndFileSizes DirectExport=True
+1-LFLmRFxxM sceKernelMkdir DirectExport=True
+1G3lF1Gg1k8 sceKernelOpen DirectExport=True
+n3kSX62fgNo Pad unknown identity DirectExport=False
+FzQS6DREDfk SharePlay unknown identity DirectExport=False
+AQkj7C0f3PY sceNgs2SystemResetOption DirectExport=True
+5wjxESwX68I sceShareFeatureProhibit DirectExport=True
+T64o-315wbg sceShareSetScreenshotOverlayImage DirectExport=True

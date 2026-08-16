@@ -37,11 +37,24 @@ public static class KernelPthreadCompatExports
         string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_CONDS"), "1", StringComparison.Ordinal);
     private static readonly bool _tracePthreadFastPath =
         string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_FASTPATH"), "1", StringComparison.Ordinal);
+    private static readonly bool _tracePthreadCallsites =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_CALLSITES"),
+            "1",
+            StringComparison.Ordinal);
     private static readonly HashSet<ulong>? _tracePthreadMutexFilter = ParseTraceAddressFilter(
         Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_MUTEX_FILTER"));
+    // V66: architecture-validation mode. Compatibility remains default until
+    // title A/B evidence proves strict semantics should be promoted.
+    private static readonly bool _strictKernelSemanticsV66 =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_KERNEL_STRICT_SEMANTICS"),
+            "1",
+            StringComparison.Ordinal);
     private static long _nextSynchronizationWaiterId;
     private static int _pthreadFastPathTraceWritten;
     private static readonly ConcurrentDictionary<ulong, byte> _pthreadFastPathBusyTraced = new();
+    private static readonly ConcurrentDictionary<ulong, byte> _pthreadCallsiteTraced = new();
 
     private sealed class PthreadMutexState
     {
@@ -66,6 +79,18 @@ public static class KernelPthreadCompatExports
         public int Type { get; set; } = MutexTypeErrorCheck;
         public int Protocol { get; set; }
         public LinkedList<PthreadMutexWaiter> Waiters { get; } = new();
+
+        public PthreadMutexState()
+        {
+            Type = MutexTypeErrorCheck;
+            Protocol = 0;
+        }
+
+        public PthreadMutexState(int type, int protocol)
+        {
+            Type = type;
+            Protocol = protocol;
+        }
 
         public bool TryAcquireUncontended(ulong threadId, bool allowWaiterBarge)
         {
@@ -337,21 +362,21 @@ public static class KernelPthreadCompatExports
         ExportName = "scePthreadMutexLock",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int PthreadMutexLock(CpuContext ctx) => PthreadMutexLockCore(ctx, ctx[CpuRegister.Rdi], tryOnly: false);
+    public static int PthreadMutexLock(CpuContext ctx) => PthreadMutexLockCoreWithOpaqueOwnerSync(ctx, ctx[CpuRegister.Rdi], tryOnly: false);
 
     [SysAbiExport(
         Nid = "upoVrzMHFeE",
         ExportName = "scePthreadMutexTrylock",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int PthreadMutexTrylock(CpuContext ctx) => PthreadMutexLockCore(ctx, ctx[CpuRegister.Rdi], tryOnly: true);
+    public static int PthreadMutexTrylock(CpuContext ctx) => PthreadMutexLockCoreWithOpaqueOwnerSync(ctx, ctx[CpuRegister.Rdi], tryOnly: true);
 
     [SysAbiExport(
         Nid = "tn3VlD0hG60",
         ExportName = "scePthreadMutexUnlock",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int PthreadMutexUnlock(CpuContext ctx) => PthreadMutexUnlockCore(ctx, ctx[CpuRegister.Rdi], requireOwner: true);
+    public static int PthreadMutexUnlock(CpuContext ctx) => PthreadMutexUnlockCoreWithOpaqueOwnerSync(ctx, ctx[CpuRegister.Rdi], requireOwner: true);
 
     [SysAbiExport(
         Nid = "ttHNfU+qDBU",
@@ -372,21 +397,21 @@ public static class KernelPthreadCompatExports
         ExportName = "pthread_mutex_lock",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int PosixPthreadMutexLock(CpuContext ctx) => PthreadMutexLockCore(ctx, ctx[CpuRegister.Rdi], tryOnly: false);
+    public static int PosixPthreadMutexLock(CpuContext ctx) => PthreadMutexLockCoreWithOpaqueOwnerSync(ctx, ctx[CpuRegister.Rdi], tryOnly: false);
 
     [SysAbiExport(
         Nid = "K-jXhbt2gn4",
         ExportName = "pthread_mutex_trylock",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int PosixPthreadMutexTrylock(CpuContext ctx) => PthreadMutexLockCore(ctx, ctx[CpuRegister.Rdi], tryOnly: true);
+    public static int PosixPthreadMutexTrylock(CpuContext ctx) => PthreadMutexLockCoreWithOpaqueOwnerSync(ctx, ctx[CpuRegister.Rdi], tryOnly: true);
 
     [SysAbiExport(
         Nid = "2Z+PpY6CaJg",
         ExportName = "pthread_mutex_unlock",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int PosixPthreadMutexUnlock(CpuContext ctx) => PthreadMutexUnlockCore(ctx, ctx[CpuRegister.Rdi], requireOwner: true);
+    public static int PosixPthreadMutexUnlock(CpuContext ctx) => PthreadMutexUnlockCoreWithOpaqueOwnerSync(ctx, ctx[CpuRegister.Rdi], requireOwner: true);
 
     private static int PthreadGetthreadidCore(CpuContext ctx)
     {
@@ -744,11 +769,7 @@ public static class KernelPthreadCompatExports
         }
 
         var attr = ResolveMutexAttrState(ctx, attrAddress);
-        var state = new PthreadMutexState
-        {
-            Type = attr.Type,
-            Protocol = attr.Protocol,
-        };
+        var state = new PthreadMutexState(attr.Type, attr.Protocol);
 
         if (!TryAllocateOpaqueObject(ctx, MutexObjectSize, out var handle))
         {
@@ -804,6 +825,118 @@ public static class KernelPthreadCompatExports
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
+    // SHARPEMU_DBFZ_PTHREAD_OPAQUE_OWNER_SYNC_V1_4_5
+    private static int _dbfzOpaqueOwnerTraceCount;
+    // SHARPEMU_V74_0_17_DEMONS_PTHREAD_OPAQUE_OWNER_GATE
+    // DBFZ V1.4.5 mirrors adaptive mutex ownership into an opaque guest
+    // pthread field. Keep that compatibility enabled by default, but let
+    // other titles opt out of the extra guest-memory work explicitly.
+    private static readonly bool _v74017OpaqueOwnerSyncEnabled =
+        ReadV74017OpaqueOwnerSyncEnabled();
+
+    private static bool ReadV74017OpaqueOwnerSyncEnabled()
+    {
+        var value = Environment.GetEnvironmentVariable("SHARPEMU_PTHREAD_OPAQUE_OWNER_SYNC");
+        var enabled =
+            !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(value, "off", StringComparison.OrdinalIgnoreCase);
+        if (value is not null)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.17][PTHREAD_FASTBOOT] opaque_owner_sync={(enabled ? "enabled" : "disabled")} default=enabled");
+        }
+        return enabled;
+    }
+
+    private static bool TryResolveGuestMutexOpaqueObject(
+        CpuContext ctx,
+        ulong mutexAddress,
+        PthreadMutexState state,
+        out ulong objectAddress)
+    {
+        objectAddress = 0;
+        if (mutexAddress == 0)
+        {
+            return false;
+        }
+
+        if (KernelMemoryCompatExports.TryReadUInt64Compat(ctx, mutexAddress, out var pointedHandle) &&
+            pointedHandle != 0 &&
+            pointedHandle != mutexAddress &&
+            _mutexStates.TryGetValue(pointedHandle, out var pointedState) &&
+            ReferenceEquals(pointedState, state))
+        {
+            objectAddress = pointedHandle;
+            return true;
+        }
+
+        // Some internal callers may already pass an opaque object handle directly.
+        if (_mutexStates.TryGetValue(mutexAddress, out var directState) &&
+            ReferenceEquals(directState, state))
+        {
+            objectAddress = mutexAddress;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void SyncAdaptiveGuestMutexOpaqueOwner(
+        CpuContext ctx,
+        ulong mutexAddress,
+        string operation)
+    {
+        if (!TryResolveMutexState(ctx, mutexAddress, createIfZero: false, out _, out var state) ||
+            state.Type != MutexTypeAdaptiveNp ||
+            !TryResolveGuestMutexOpaqueObject(ctx, mutexAddress, state, out var objectAddress) ||
+            ulong.MaxValue - objectAddress < 0x28)
+        {
+            return;
+        }
+
+        // FreeBSD/Orbis pthread mutex layout: type lives at +0x20; the pthread
+        // owner pointer follows at +0x28. Keep the lower-level umutex lock word
+        // untouched here because it may carry kernel/contested bits.
+        var ownerHandle = state.OwnerThreadId;
+        _ = KernelMemoryCompatExports.TryReadUInt64Compat(ctx, objectAddress + 0x28, out var oldOwner);
+        if (oldOwner == ownerHandle)
+        {
+            return;
+        }
+
+        if (!KernelMemoryCompatExports.TryWriteUInt64Compat(ctx, objectAddress + 0x28, ownerHandle))
+        {
+            return;
+        }
+
+        if (Interlocked.Increment(ref _dbfzOpaqueOwnerTraceCount) <= 32)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] pthread_opaque_owner_sync: op={operation} slot=0x{mutexAddress:X16} " +
+                $"object=0x{objectAddress:X16} old=0x{oldOwner:X16} owner=0x{ownerHandle:X16}");
+        }
+    }
+
+    private static int PthreadMutexLockCoreWithOpaqueOwnerSync(CpuContext ctx, ulong mutexAddress, bool tryOnly)
+    {
+        var result = PthreadMutexLockCore(ctx, mutexAddress, tryOnly);
+        if (_v74017OpaqueOwnerSyncEnabled && result == (int)OrbisGen2Result.ORBIS_GEN2_OK)
+        {
+            SyncAdaptiveGuestMutexOpaqueOwner(ctx, mutexAddress, tryOnly ? "trylock" : "lock");
+        }
+        return result;
+    }
+
+    private static int PthreadMutexUnlockCoreWithOpaqueOwnerSync(CpuContext ctx, ulong mutexAddress, bool requireOwner)
+    {
+        var result = PthreadMutexUnlockCore(ctx, mutexAddress, requireOwner);
+        if (_v74017OpaqueOwnerSyncEnabled && result == (int)OrbisGen2Result.ORBIS_GEN2_OK)
+        {
+            SyncAdaptiveGuestMutexOpaqueOwner(ctx, mutexAddress, "unlock");
+        }
+        return result;
+    }
     private static int PthreadMutexLockCore(CpuContext ctx, ulong mutexAddress, bool tryOnly)
     {
         if (mutexAddress == 0)
@@ -837,8 +970,10 @@ public static class KernelPthreadCompatExports
             if (!tryOnly && state.Type == MutexTypeAdaptiveNp &&
                 IsGuestTrackedSelfLock(ctx, mutexAddress, currentThreadId))
             {
-                TracePthreadMutex(ctx, "lock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK);
-                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK;
+                // SHARPEMU_DBFZ_PTHREAD_ADAPTIVE_SELFLOCK_V1_4_2
+                // Match the existing AdaptiveNp non-try semantics: tracked duplicate acquisition is idempotent.
+                TracePthreadMutex(ctx, "lock-idempotent-tracked-self", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_OK);
+                return (int)OrbisGen2Result.ORBIS_GEN2_OK;
             }
 
             if (state.Type == MutexTypeAdaptiveNp)
@@ -858,6 +993,15 @@ public static class KernelPthreadCompatExports
                     return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY;
                 }
 
+                if (_strictKernelSemanticsV66)
+                {
+                    // V66 strict NORMAL self-lock: NORMAL is not recursive.
+                    TracePthreadMutex(ctx, "lock-strict-self", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK);
+                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK;
+                }
+
+                // Compatibility path retained for titles whose userspace wrapper
+                // already performed ownership bookkeeping before entering HLE.
                 state.IncrementRecursion();
                 TracePthreadMutex(ctx, "lock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_OK);
                 return (int)OrbisGen2Result.ORBIS_GEN2_OK;
@@ -890,8 +1034,10 @@ public static class KernelPthreadCompatExports
                 if (!tryOnly && state.Type == MutexTypeAdaptiveNp &&
                     IsGuestTrackedSelfLock(ctx, mutexAddress, currentThreadId))
                 {
-                    TracePthreadMutex(ctx, "lock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK);
-                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK;
+                    // SHARPEMU_DBFZ_PTHREAD_ADAPTIVE_SELFLOCK_V1_4_2
+                    // Match the existing AdaptiveNp non-try semantics: tracked duplicate acquisition is idempotent.
+                    TracePthreadMutex(ctx, "lock-idempotent-tracked-self", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_OK);
+                    return (int)OrbisGen2Result.ORBIS_GEN2_OK;
                 }
 
                 if (state.Type == MutexTypeAdaptiveNp)
@@ -911,16 +1057,26 @@ public static class KernelPthreadCompatExports
                 }
 
                 if (state.Type == MutexTypeNormal)
+            {
+                if (tryOnly)
                 {
-                    if (tryOnly)
-                    {
-                        TracePthreadMutex(ctx, "trylock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY);
-                        return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY;
-                    }
+                    TracePthreadMutex(ctx, "trylock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY);
+                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY;
+                }
 
-                    TracePthreadMutex(ctx, "lock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK);
+                if (_strictKernelSemanticsV66)
+                {
+                    // V66 strict NORMAL self-lock: NORMAL is not recursive.
+                    TracePthreadMutex(ctx, "lock-strict-self", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK);
                     return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_DEADLOCK;
                 }
+
+                // Compatibility path retained for titles whose userspace wrapper
+                // already performed ownership bookkeeping before entering HLE.
+                state.IncrementRecursion();
+                TracePthreadMutex(ctx, "lock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_OK);
+                return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+            }
                 else
                 {
                     var ownedResult = tryOnly
@@ -1011,7 +1167,7 @@ public static class KernelPthreadCompatExports
                     WakeFirstMutexWaiter(state);
                 }
 
-                TracePthreadMutex(ctx, "unlock", mutexAddress, resolvedAddress, state, currentThreadId, (int)OrbisGen2Result.ORBIS_GEN2_OK);
+                // If we successfully released the mutex, return immediately with success
                 return (int)OrbisGen2Result.ORBIS_GEN2_OK;
             }
         }
@@ -1257,15 +1413,15 @@ public static class KernelPthreadCompatExports
             return CreateImplicitMutexState(ctx, mutexAddress, MutexTypeAdaptiveNp, out resolvedAddress, out state);
         }
 
-        if (pointedHandle != 0 && pointedHandle != mutexAddress && _mutexStates.TryGetValue(pointedHandle, out state))
-        {
-            _mutexStates[mutexAddress] = state;
-            resolvedAddress = pointedHandle;
-            return true;
-        }
-
         if (pointedHandle != 0)
         {
+            if (_mutexStates.TryGetValue(pointedHandle, out state))
+            {
+                _mutexStates.TryAdd(mutexAddress, state);
+                resolvedAddress = pointedHandle;
+                return true;
+            }
+
             resolvedAddress = pointedHandle;
             return false;
         }
@@ -1772,7 +1928,7 @@ public static class KernelPthreadCompatExports
         }
 
         var cond = new PthreadCondState();
-        var condMutex = new PthreadMutexState();
+        var condMutex = new PthreadMutexState(MutexTypeErrorCheck, 0);
         var condWaiter = new PthreadCondWaiter
         {
             ThreadId = 0x303,
@@ -1913,9 +2069,21 @@ public static class KernelPthreadCompatExports
         return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY;
     }
 
-    private static bool IsGuestTrackedSelfLock(CpuContext ctx, ulong mutexAddress, ulong currentThreadId) =>
-        KernelMemoryCompatExports.TryReadUInt64Compat(ctx, mutexAddress + 8, out var guestOwner) &&
-        guestOwner == currentThreadId;
+    private static bool IsGuestTrackedSelfLock(CpuContext ctx, ulong mutexAddress, ulong currentThreadId)
+    {
+        var objectAddress = mutexAddress;
+        if (KernelMemoryCompatExports.TryReadUInt64Compat(ctx, mutexAddress, out var pointedHandle) &&
+            pointedHandle != 0 &&
+            pointedHandle != mutexAddress &&
+            _mutexStates.ContainsKey(pointedHandle))
+        {
+            objectAddress = pointedHandle;
+        }
+
+        return ulong.MaxValue - objectAddress >= 0x28 &&
+            KernelMemoryCompatExports.TryReadUInt64Compat(ctx, objectAddress + 0x28, out var guestOwner) &&
+            guestOwner == currentThreadId;
+    }
 
     private static bool CompleteCondWaiterLocked(
         PthreadCondState state,
@@ -2185,11 +2353,60 @@ public static class KernelPthreadCompatExports
 
         _ = KernelMemoryCompatExports.TryReadUInt64Compat(ctx, mutexAddress, out var guestWord0);
         _ = KernelMemoryCompatExports.TryReadUInt64Compat(ctx, mutexAddress + 8, out var guestWord1);
+        var callContext = _tracePthreadCallsites
+            ? " " + KernelSyncTraceFormatter.FormatContext(ctx)
+            : string.Empty;
         Console.Error.WriteLine(
             $"[LOADER][TRACE] pthread_{operation}: mutex=0x{mutexAddress:X16} resolved=0x{resolvedAddress:X16} " +
             $"guest[0]=0x{guestWord0:X16} guest[8]=0x{guestWord1:X16} " +
             $"current=0x{currentThreadId:X16} owner=0x{(state?.OwnerThreadId ?? 0):X16} " +
-            $"recursion={(state?.RecursionCount ?? 0)} type={(state?.Type ?? 0)} result=0x{unchecked((uint)result):X8}");
+            $"recursion={(state?.RecursionCount ?? 0)} type={(state?.Type ?? 0)} result=0x{unchecked((uint)result):X8}" +
+            callContext);
+
+        if (_tracePthreadCallsites)
+        {
+            TracePthreadCallsiteBytes(ctx, operation, mutexAddress);
+        }
+    }
+
+    private static void TracePthreadCallsiteBytes(
+        CpuContext ctx,
+        string operation,
+        ulong mutexAddress)
+    {
+        var returnRip = GuestThreadExecution.TryGetCurrentImportCallFrame(
+            out var importFrame)
+            ? importFrame.ReturnRip
+            : 0UL;
+
+        if (returnRip == 0 ||
+            !_pthreadCallsiteTraced.TryAdd(returnRip, 0))
+        {
+            return;
+        }
+
+        const int bytesBeforeReturn = 32;
+        const int byteCount = 128;
+        if (returnRip < bytesBeforeReturn)
+        {
+            return;
+        }
+
+        var startAddress = returnRip - bytesBeforeReturn;
+        var bytes = new byte[byteCount];
+        if (!ctx.Memory.TryRead(startAddress, bytes))
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] pthread_callsite: op={operation} " +
+                $"mutex=0x{mutexAddress:X16} ret=0x{returnRip:X16} " +
+                $"code=unreadable");
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[LOADER][TRACE] pthread_callsite: op={operation} " +
+            $"mutex=0x{mutexAddress:X16} ret=0x{returnRip:X16} " +
+            $"start=0x{startAddress:X16} bytes={Convert.ToHexString(bytes)}");
     }
 
     private static void TracePthreadFastPathUnlock(

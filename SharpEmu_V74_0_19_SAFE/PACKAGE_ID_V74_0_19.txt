@@ -1,0 +1,2 @@
+﻿SharpEmu_V74_0_19_SAFE
+Purpose: restore Demon's Souls direct intro boot sequencing before guest presentation.

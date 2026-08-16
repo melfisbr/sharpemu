@@ -19,6 +19,7 @@ public static class CxaGuardExports
     {
         public ulong OwnerThreadId { get; set; }
         public int RecursionDepth { get; set; }
+        public ManualResetEventSlim Completion { get; } = new(initialState: false);
     }
 
     private static readonly ConcurrentDictionary<ulong, GuardState> _inProgress = new();
@@ -38,7 +39,6 @@ public static class CxaGuardExports
         }
 
         var currentThreadId = KernelPthreadState.GetCurrentThreadHandle();
-        var spinner = new SpinWait();
         while (true)
         {
             if (!TryReadGuardState(ctx, guardPtr, out _, out var initialized, out var inProgress))
@@ -65,7 +65,11 @@ public static class CxaGuardExports
             {
                 if (!TryWriteGuardState(ctx, guardPtr, GuardPendingValue))
                 {
-                    _inProgress.TryRemove(guardPtr, out _);
+                    if (_inProgress.TryRemove(guardPtr, out var removedState))
+                    {
+                        removedState.Completion.Set();
+                    }
+
                     ctx[CpuRegister.Rax] = 0;
                     return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
                 }
@@ -83,11 +87,14 @@ public static class CxaGuardExports
                     LogGuardResult("guard_acquire", guardPtr, result: 0, initialized, inProgress: true, ownerThreadId: state.OwnerThreadId);
                     return (int)OrbisGen2Result.ORBIS_GEN2_OK;
                 }
-            }
 
-            spinner.SpinOnce();
-            if (spinner.Count % 32 == 0)
+                LogGuardWait(guardPtr, currentThreadId, state.OwnerThreadId);
+                state.Completion.Wait();
+            }
+            else
             {
+                // The owner may have completed between the guest-memory read and
+                // the dictionary lookup. Re-read the guard rather than spinning.
                 Thread.Yield();
             }
         }
@@ -135,7 +142,11 @@ public static class CxaGuardExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
 
-        _inProgress.TryRemove(guardPtr, out _);
+        if (_inProgress.TryRemove(guardPtr, out var completedState))
+        {
+            completedState.Completion.Set();
+        }
+
         LogGuardState(ctx, "guard_release", guardPtr, initialized: true, inProgress: false);
 
         ctx[CpuRegister.Rax] = 0;
@@ -165,7 +176,11 @@ public static class CxaGuardExports
         }
 
         _ = TryWriteGuardState(ctx, guardPtr, 0);
-        _inProgress.TryRemove(guardPtr, out _);
+        if (_inProgress.TryRemove(guardPtr, out var abortedState))
+        {
+            abortedState.Completion.Set();
+        }
+
         LogGuardState(ctx, "guard_abort", guardPtr, initialized: false, inProgress: false);
 
         ctx[CpuRegister.Rax] = 0;
@@ -208,6 +223,18 @@ public static class CxaGuardExports
         var readable = ctx.TryReadUInt64(guardPtr, out var word);
         Console.Error.WriteLine(
             $"[LOADER][TRACE] {op}: guard=0x{guardPtr:X16} init={initialized} in_progress={inProgress} word={(readable ? $"0x{word:X16}" : "<unreadable>")}");
+    }
+
+
+    private static void LogGuardWait(ulong guardPtr, ulong waiterThreadId, ulong ownerThreadId)
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_GUARDS"), "1", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[LOADER][TRACE] guard_wait: guard=0x{guardPtr:X16} waiter_thread={waiterThreadId} owner_thread={ownerThreadId}");
     }
 
     private static void LogGuardResult(string op, ulong guardPtr, int result, bool initialized, bool inProgress, ulong ownerThreadId)

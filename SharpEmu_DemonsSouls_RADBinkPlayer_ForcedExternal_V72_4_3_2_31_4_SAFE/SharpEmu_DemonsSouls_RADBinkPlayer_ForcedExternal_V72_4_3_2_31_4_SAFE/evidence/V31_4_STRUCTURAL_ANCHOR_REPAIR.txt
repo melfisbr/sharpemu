@@ -1,0 +1,23 @@
+V72.4.3.2.31.4 STRUCTURAL ANCHOR REPAIR
+========================================
+Observed V31.3 apply result:
+- PRECHECK PASSED.
+- RAD_PLAYER=C:\Program Files (x86)\RADVideo\radvideo64.exe
+- RAD_VERSION=2026.06
+- Active-state anchors updated: 2
+- Apply then failed with: Anchor ambiguous: busy RAD state
+- Automatic source rollback completed successfully.
+
+Root cause:
+The baseline HostMovieBridge contains multiple legitimate occurrences of
+`if (_playback is not null || _frameBuffer is not null)`. One of them is the
+queued-attach check. V31.3 tried to patch that generic condition with an
+exact-once primitive and later tried to patch the queued occurrence again.
+
+V31.4 repair:
+1. All equivalent busy-state checks are updated in one atomic Replace-AllExact pass.
+2. The queued-attach pass is idempotent and accepts the already-patched structure.
+3. The generic `_playback is not null` completion poll is selected structurally:
+   the last matching block before the existing `Bink2 bridge completed:` marker.
+4. Post-patch validation rejects any remaining legacy active/busy condition.
+5. RAD remains required; no NIHAV/FFmpeg fallback is introduced.

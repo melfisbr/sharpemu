@@ -276,6 +276,8 @@ public partial class MainWindow : Window
         VSyncToggle.IsCheckedChanged += (_, _) => _settings.VSync = VSyncToggle.IsChecked == true;
         HdrModeBox.SelectionChanged += (_, _) => _settings.HdrMode = SelectedComboText(HdrModeBox, "Auto");
         InputModeBox.SelectionChanged += (_, _) => _settings.InputMode = SelectedComboText(InputModeBox, "Auto");
+        KeyboardMappingButton.Click += async (_, _) =>
+            await OpenKeyboardMappingAsync();
         UpdateButton.Click += async (_, _) => await OnUpdateButtonAsync();
         SelectLogFilePathButton.Click += async (_, _) => await SelectLogFilePathAsync();
         EnvBthidToggle.IsCheckedChanged += (_, _) =>
@@ -1243,6 +1245,21 @@ public partial class MainWindow : Window
             _ => fallback,
         };
 
+    private async Task OpenKeyboardMappingAsync()
+    {
+        var dialog = new KeyboardMappingWindow(_settings.KeyboardBindings);
+        var result = await dialog.ShowDialog<
+            Dictionary<string, KeyboardPadBinding>?>(this);
+        if (result is null)
+        {
+            return;
+        }
+
+        _settings.KeyboardBindings =
+            KeyboardPadMapping.NormalizeBindings(result);
+        _settings.Save();
+    }
+
     private void LoadHostDisplayOptions()
     {
         _updatingHostDisplayOptions = true;
@@ -1611,7 +1628,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _allGames.AddRange(cached);
+        _allGames.AddRange(cached.Where(IsValidLibraryGame));
         RefreshVisibleGames(new HashSet<GameEntry>(cached));
         LoadGameDetailsInBackground(cached, cached);
     }
@@ -1640,7 +1657,7 @@ public partial class MainWindow : Window
         Dispatcher.UIThread.VerifyAccess();
         var reconciliation = GameLibraryReconciler.Reconcile(_allGames, games);
         _allGames.Clear();
-        _allGames.AddRange(reconciliation.Games);
+        _allGames.AddRange(reconciliation.Games.Where(IsValidLibraryGame));
         RefreshVisibleGames(reconciliation.BackgroundsChanged);
         LoadingState.IsVisible = false;
         LoadGameDetailsInBackground(reconciliation.CoversToLoad, reconciliation.Games);
@@ -1796,6 +1813,16 @@ public partial class MainWindow : Window
                     {
                         Console.Error.WriteLine(
                             $"[GUI][WARN] Could not inspect executable '{fullPath}': {exception.Message}");
+                    }
+
+                    // SharpEmu GUI library rule: only eboot.bin-backed entries are games.
+                    if (!string.Equals(
+                            Path.GetFileName(fullPath),
+                            "eboot.bin",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        !File.Exists(fullPath))
+                    {
+                        continue;
                     }
 
                     var (title, titleId, version) = TryReadParamJson(fullPath);
@@ -2116,6 +2143,11 @@ public partial class MainWindow : Window
 
         foreach (var game in _allGames)
         {
+            // GUI-EBOOT-V3 final HUD validity barrier.
+            if (!IsValidLibraryGame(game))
+            {
+                continue;
+            }
             if (query.Length == 0 ||
                 game.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 game.Path.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -2393,6 +2425,12 @@ public partial class MainWindow : Window
 
         Environment.SetEnvironmentVariable("SHARPEMU_INPUT_MODE", effective.InputMode.ToLowerInvariant());
         _appliedEnvironmentVariables.Add("SHARPEMU_INPUT_MODE");
+
+        Environment.SetEnvironmentVariable(
+            KeyboardPadMapping.EnvironmentVariableName,
+            KeyboardPadMapping.Serialize(_settings.KeyboardBindings));
+        _appliedEnvironmentVariables.Add(
+            KeyboardPadMapping.EnvironmentVariableName);
 
         Environment.SetEnvironmentVariable(
             "SHARPEMU_RENDER_SCALE",

@@ -1,0 +1,43 @@
+SharpEmu Demon’s Souls V61.22.1 — AGC Producer Lineage Repair (SAFE)
+====================================================================
+
+Purpose
+-------
+This package replaces the failed V61.22.0 package.
+
+V61.22.0 had two package-level defects:
+1) run_demons_diagnostic.ps1 read $LASTEXITCODE under StrictMode even when the
+   GUI invocation had not created the variable.
+2) precheck treated any existing RecordProduced call inside
+   ApplySubmittedWriteData as an incompatible baseline.
+
+The current SharpEmu baseline already contains the producer coverage that
+V61.22.0 was going to add:
+- WRITE_DATA calls GpuWaitRegistry.RecordProduced for successful dword writes.
+- WRITE_DATA calls RecordProducedLabelsInRange for the written span.
+- DMA completion records watched labels in the produced range.
+- RELEASE_MEM records produced values.
+
+Therefore V61.22.1 deliberately DOES NOT modify emulator source. Duplicating
+those calls would be incorrect.
+
+Why collect producer lineage now?
+---------------------------------
+The V61.21.0 run suspended WAIT_REG_MEM on:
+- 0x0000000456CFF580 (acb.compute[72], submission 20)
+- 0x0000000456CFF4C0 (acb.compute[40], submission 23)
+Both remained value=0, ref=1, producer=none-observed.
+
+Immediately around those waits the log shows compute submissions and Vulkan
+ordered-action fence waits. Since packet-level WRITE_DATA/DMA/RELEASE_MEM
+producer tracking already exists, the next evidence target is compute/Vulkan
+memory visibility (for example a shader/storage write that never becomes
+visible to guest-memory WAIT_REG_MEM).
+
+Safety
+------
+- No source file is edited.
+- APPLY/BUILD only validates the current producer coverage and builds it.
+- Diagnostic enables AGC, AGC shader and Vulkan resource tracing.
+- The diagnostic captures source evidence and expanded wait context into the
+  result ZIP so the next semantic patch can target the real producer path.

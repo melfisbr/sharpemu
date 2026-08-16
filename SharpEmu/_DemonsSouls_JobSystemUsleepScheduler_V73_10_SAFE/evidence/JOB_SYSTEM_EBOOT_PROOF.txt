@@ -1,0 +1,36 @@
+Demon's Souls JobSystem / sceKernelUsleep proof
+
+EBOOT SHA-256:
+22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E
+
+V73.9 profiler:
+app+0x821000 page share range = 78.5% .. 96.4%
+
+Disassembly / string-xref proof:
+- function 0x820FE0..0x821220 contains the hot RIPs 0x8210F6,
+  0x82110E, 0x821116 and 0x821143.
+- RIP-relative string at 0x251F8B2:
+  "void bpe::threading::JobSystemScheduler::WaitForJobs()"
+- same routine references:
+  "JobSystem is deadlocked. Please verify jobs are properly configured and running."
+- after 10,000 PAUSE iterations it calls app+0x827080.
+- app+0x827080 jumps to PLT stub app+0x1F00910.
+- PLT relocation index 0xB5 resolves to NID:
+  1jfXLRVzisc#u#a
+- NID 1jfXLRVzisc is sceKernelUsleep.
+
+SharpEmu current dispatch:
+TryCreateNativeImportIntrinsic has a native intrinsic for 1jfXLRVzisc and
+IsLeafImport also treats it as a leaf unless SHARPEMU_LOG_USLEEP is enabled.
+
+SharpEmu HLE implementation:
+KernelRuntimeCompatExports.KernelUsleep calls:
+  GuestThreadExecution.Scheduler?.Pump(ctx, "sceKernelUsleep")
+before performing the host yield/sleep.
+
+Therefore the default native intrinsic skips emulator scheduler pumping at the
+exact scheduling primitive used by the title's dominant WaitForJobs loop.
+
+V73.10 makes sceKernelUsleep HLE-preferred. The intrinsic remains in source but
+is not selected because TryCreateNativeImportIntrinsic checks
+IsHlePreferredNid first.

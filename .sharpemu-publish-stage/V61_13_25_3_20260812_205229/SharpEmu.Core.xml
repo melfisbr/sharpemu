@@ -1,0 +1,580 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>SharpEmu.Core</name>
+    </assembly>
+    <members>
+        <member name="P:SharpEmu.Core.Cpu.CpuDispatcher.NativeSessionLeaked">
+            <summary>
+            True when the disposed native backend left its session state alive
+            because guest workers were still executing guest code. The guest
+            address space must then stay mapped as well.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.CpuExecutionOptions.IgnoreGuestReturnValue">
+            <summary>
+            ELF DT_INIT / DT_INIT_ARRAY routines have no status-return contract.
+            When enabled, a normal RET to the host is considered successful even if
+            RAX contains a non-zero residual value. Traps, faults and forced guest
+            exits are still treated as execution failures.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.CpuExecutionOptions.DebugHook">
+            <summary>
+            An optional debugger attached to this execution session. When set, the
+            dispatcher notifies it at each frame boundary via
+            <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameEnter(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)"/> / <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameExit(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame,SharpEmu.HLE.OrbisGen2Result)"/>.
+            Null when no debugger is attached, which is the default and imposes no
+            runtime cost.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Debugging.CpuContextDebugFrame">
+            <summary>
+            Adapts a live <see cref="T:SharpEmu.HLE.CpuContext"/> to <see cref="T:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame"/>. The
+            dispatcher creates one of these around the guest context it is about to run
+            and passes it to the attached <see cref="T:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook"/>; every accessor
+            forwards directly to the underlying context.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Debugging.CpuDebugFrameKind">
+            <summary>
+            Identifies the kind of guest entry frame a debugger is observing. The
+            dispatcher enters a fresh frame for the process entry point and for every
+            module initializer, so the debug layer can label stops accordingly.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Core.Cpu.Debugging.CpuDebugFrameKind.ProcessEntry">
+            <summary>The guest process entry point (<c>eboot.bin</c> start).</summary>
+        </member>
+        <member name="F:SharpEmu.Core.Cpu.Debugging.CpuDebugFrameKind.ModuleInitializer">
+            <summary>A module DT_INIT / initializer routine.</summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Debugging.CpuStallKind">
+            <summary>The kind of execution stall the backend detected.</summary>
+        </member>
+        <member name="F:SharpEmu.Core.Cpu.Debugging.CpuStallKind.ImportLoop">
+            <summary>
+            The guest is repeatedly re-dispatching the same import with no forward
+            progress — most commonly a spin on a mutex lock/unlock pair.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Debugging.CpuStallInfo">
+            <summary>
+            Details of a detected stall handed to <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnStall(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame,SharpEmu.Core.Cpu.Debugging.CpuStallInfo)"/>.
+            Reported from the emulation thread at the point the backend recognises the
+            livelock, before it forces the guest out of the loop.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.CpuStallInfo.Nid">
+            <summary>The NID of the import being spun on, when known.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.CpuStallInfo.InstructionPointer">
+            <summary>The guest return address of the looping import dispatch.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.CpuStallInfo.DispatchIndex">
+            <summary>The import dispatch counter at detection time.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.CpuStallInfo.Argument0">
+            <summary>The first two guest ABI arguments at stall detection.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.CpuStallInfo.LibraryName">
+            <summary>The resolved HLE export, when the NID is registered.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.CpuStallInfo.Detail">
+            <summary>A human-readable one-line summary of the stall.</summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame">
+            <summary>
+            A live view of the guest CPU state at a dispatch boundary, handed to an
+            <see cref="T:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook"/> so a debugger can read and mutate registers and
+            guest memory without taking a dependency on the concrete
+            <c>CpuContext</c>/<c>CpuDispatcher</c> types.
+            </summary>
+            <remarks>
+            The frame instance is only valid for the duration of the hook call that
+            receives it (between <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameEnter(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)"/> and the
+            matching <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameExit(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame,SharpEmu.HLE.OrbisGen2Result)"/>). Reads and writes are
+            forwarded straight to the underlying guest context, so mutations made from
+            a hook are observed by the CPU backend when it resumes the frame.
+            </remarks>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.Kind">
+            <summary>The kind of frame being executed.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.Generation">
+            <summary>The guest ABI generation this frame targets.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.EntryPoint">
+            <summary>The guest virtual address the frame begins executing at.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.Label">
+            <summary>
+            A human-readable label for the frame (process image name or module name).
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.Memory">
+            <summary>Guest-addressable memory for this frame.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.GetRegister(SharpEmu.HLE.CpuRegister)">
+            <summary>Reads a general-purpose register.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.SetRegister(SharpEmu.HLE.CpuRegister,System.UInt64)">
+            <summary>Overwrites a general-purpose register.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.Rip">
+            <summary>The instruction pointer.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.Rflags">
+            <summary>The flags register.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.FsBase">
+            <summary>The FS segment base (guest TLS pointer).</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.GsBase">
+            <summary>The GS segment base.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.GetXmm(System.Int32,System.UInt64@,System.UInt64@)">
+            <summary>Reads the 128-bit value of an XMM register.</summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame.ImportStubs">
+            <summary>
+            The import stubs (guest address to NID) resolved for this frame, so a
+            debugger can annotate calls into HLE exports.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook">
+            <summary>
+            The seam the CPU dispatcher uses to notify an attached debugger when guest
+            execution crosses a frame boundary. Implemented outside of Core (for
+            example by <c>SharpEmu.Debugger</c>) and supplied through
+            <see cref="P:SharpEmu.Core.Cpu.CpuExecutionOptions.DebugHook"/>.
+            </summary>
+            <remarks>
+            This is intentionally coarse-grained: it exposes the entry and exit of each
+            dispatched frame rather than per-instruction stepping. Per-instruction
+            control requires cooperation from the native execution backend and is layered
+            on top of this seam as the backend gains support; keeping the dispatcher-level
+            contract stable lets the debugger infrastructure exist independently of that
+            work. Implementations must be thread-safe: frames may be dispatched from the
+            dedicated emulation thread while a debug server services clients on its own
+            threads.
+            </remarks>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameEnter(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)">
+            <summary>
+            Invoked immediately before the native backend begins executing a frame.
+            The debugger may inspect or mutate <paramref name="frame"/> and may block
+            the calling thread (for example, to honour a pause request) before
+            returning to allow execution to proceed.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameExit(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame,SharpEmu.HLE.OrbisGen2Result)">
+            <summary>
+            Invoked after a frame completes, whether it returned to the host or
+            terminated with an error. <paramref name="frame"/> reflects the final
+            guest state.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnStall(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame,SharpEmu.Core.Cpu.Debugging.CpuStallInfo)">
+            <summary>
+            Invoked from the emulation thread when the backend detects an execution
+            stall (for example a mutex spin loop) in the running frame, before it
+            forces the guest out of the loop. As with <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameEnter(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)"/>, the
+            implementation may inspect <paramref name="frame"/> and block to honour a
+            break before returning to let the backend proceed.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator">
+             <summary>
+             Pure software implementations of the BMI1, BMI2 and ABM general-purpose-register
+             bit-manipulation instructions.
+            
+             The direct-execution backend runs guest PS5 code natively on the host CPU. The PS5's
+             Zen 2 cores implement BMI1/BMI2/ABM, but a host CPU that predates those extensions raises
+             #UD (STATUS_ILLEGAL_INSTRUCTION) when it meets one of these opcodes. This class provides the
+             register-only arithmetic so the exception handler can finish the instruction in software and
+             resume, instead of aborting the title.
+            
+             The methods deliberately operate on plain integers rather than on the OS CONTEXT record so the
+             semantics can be unit-tested in isolation; the unsafe register/memory plumbing lives in the
+             backend adapter. Each method returns the result already masked to the operand width and, where
+             the instruction is defined to touch flags, updates the supplied EFLAGS value in place. Flags
+             documented as "undefined" by the vendor manuals are left untouched so behaviour stays
+             deterministic across hosts.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Andn(System.UInt64,System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>ANDN: <c>dest = (~src1) &amp; src2</c>. CF and OF are cleared.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Blsi(System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>BLSI: isolate the lowest set bit, <c>dest = (-src) &amp; src</c>. CF = (src != 0).</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Blsmsk(System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>BLSMSK: mask up to and including the lowest set bit, <c>dest = (src - 1) ^ src</c>. CF = (src == 0).</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Blsr(System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>BLSR: reset the lowest set bit, <c>dest = (src - 1) &amp; src</c>. CF = (src == 0).</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Bextr(System.UInt64,System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>
+            BEXTR: extract <c>len</c> bits of <paramref name="src"/> starting at bit <c>start</c>, where
+            start = control[7:0] and len = control[15:8]. Only ZF (per result) and cleared CF/OF are defined.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Bzhi(System.UInt64,System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>
+            BZHI: zero the bits of <paramref name="src"/> from bit position <c>index[7:0]</c> upward.
+            CF is set when the requested position is at or beyond the operand width.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Tzcnt(System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>TZCNT: count trailing zero bits. If src == 0 the result is the operand width and CF is set.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Lzcnt(System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize,System.UInt32@)">
+            <summary>LZCNT: count leading zero bits. If src == 0 the result is the operand width and CF is set.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Rorx(System.UInt64,System.Int32,SharpEmu.Core.Cpu.Emulation.GprOperandSize)">
+            <summary>RORX: rotate <paramref name="src"/> right by <paramref name="count"/> (masked to the operand width). No flags.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Sarx(System.UInt64,System.Int32,SharpEmu.Core.Cpu.Emulation.GprOperandSize)">
+            <summary>SARX: arithmetic shift right by <paramref name="count"/> (masked to the operand width). No flags.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Shlx(System.UInt64,System.Int32,SharpEmu.Core.Cpu.Emulation.GprOperandSize)">
+            <summary>SHLX: logical shift left by <paramref name="count"/> (masked to the operand width). No flags.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Shrx(System.UInt64,System.Int32,SharpEmu.Core.Cpu.Emulation.GprOperandSize)">
+            <summary>SHRX: logical shift right by <paramref name="count"/> (masked to the operand width). No flags.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Pdep(System.UInt64,System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize)">
+            <summary>PDEP: deposit contiguous low bits of <paramref name="src"/> into the positions selected by <paramref name="mask"/>. No flags.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.BmiInstructionEmulator.Pext(System.UInt64,System.UInt64,SharpEmu.Core.Cpu.Emulation.GprOperandSize)">
+            <summary>PEXT: gather the bits of <paramref name="src"/> selected by <paramref name="mask"/> into contiguous low bits. No flags.</summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Emulation.GprOperandSize">
+            <summary>
+            Operand width for the emulated general-purpose-register instructions. The numeric value is the
+            bit width, so it can double as the "count leading/trailing zeros of an all-zero source" result.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Emulation.Sse4aBitFieldEmulator">
+             <summary>
+             Pure software implementation of the bit-field math behind AMD's SSE4a EXTRQ/INSERTQ
+             instructions, in both their immediate and register forms.
+            
+             The direct-execution backend runs guest PS5 code natively on the host CPU. The PS5's Zen 2
+             cores implement AMD-only SSE4a (EXTRQ/INSERTQ), but Intel hosts - and Rosetta 2 on Apple
+             Silicon - do not, so they raise #UD (STATUS_ILLEGAL_INSTRUCTION) instead of executing the
+             opcode. SharpEmu already rewrites one specific compiled EXTRQ+VPBLENDD idiom at load time
+             (see <see cref="T:SharpEmu.Core.Cpu.Native.Sse4aExtrqBlendPatch"/>), but any other occurrence of EXTRQ/INSERTQ -
+             a different register allocation, a title built with a different compiler version, and so on
+             - still aborts the title. This class ported from Kyty's
+             <c>Loader::X64InstructionEmulator::TryEmulateSse4a</c> provides the general bit-field
+             extract/insert so the illegal-instruction handler can finish *any* EXTRQ/INSERTQ in software
+             and resume, instead of relying on a single hard-coded byte pattern.
+            
+             The methods operate on plain 64-bit integers rather than the OS CONTEXT record so the bit
+             math can be unit-tested in isolation; the unsafe CONTEXT/XMM plumbing lives in the backend
+             adapter (<see cref="T:SharpEmu.Core.Cpu.Native.DirectExecutionBackend"/>).
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Emulation.Sse4aBitFieldEmulator.DecodeRegisterControl(System.UInt64,System.Int32@,System.Int32@)">
+            <summary>
+            Splits the length/index pair that the register forms of EXTRQ and INSERTQ read out of a
+            source register rather than out of immediates: length in bits [5:0] of the controlling
+            quadword, index in bits [13:8]. Which quadword that is differs between the two
+            instructions, so the caller selects it - see the backend adapter.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.DirectExecutionBackend">
+            <summary>
+            Sampling profiler for guest code. Managed profilers only see the emulator's
+            own frames — once a guest thread is running translated code it is opaque to
+            them, so a title that burns its cores inside its own spin loops looks like
+            unattributed native time. This walks the guest thread registry and samples
+            each thread's host RIP, which lands directly on the guest instruction being
+            executed.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.SetActiveDebugFrame(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)">
+            <summary>
+            Binds the debug frame view the dispatcher created for the frame about to
+            run, so stall notifications reference the same frame the debugger saw at
+            entry. Set to null when no debugger is attached.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.NotifyDebuggerStall(SharpEmu.Core.Cpu.Debugging.CpuStallKind,SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ImportStubEntry@,System.UInt64,System.Int64,System.UInt64,System.UInt64)">
+            <summary>
+            Notifies an attached debugger of a detected execution stall. No-op when no
+            debugger is attached or no frame is bound. The debugger may block here to
+            present a break before the backend forces the guest out of the loop.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.CreateWorkerAbortStub">
+            <summary>
+            After a TBB execute-fault, VEH redirects here on a host stack.
+            SetEvent(done) then park forever — ExitThread from VEH CONTINUE_EXECUTION
+            was taking down the whole process (recover logged, no respawning). The
+            renter TerminateThread's the parked worker and respawns a clean loop.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ResumeBlockedNestedGuestCallback(SharpEmu.HLE.CpuContext,System.String,SharpEmu.Core.Cpu.Native.DirectExecutionBackend.GuestNativeCallExitReason@,System.String@)">
+            <summary>
+            Completes a nested guest callback which blocked in an HLE import. The
+            outer guest entry is still executing managed HLE code, so returning a
+            successful callback result here would abandon the callback continuation
+            and let a noreturn operation such as pthread_exit unwind through live
+            libc cleanup state. Temporarily expose the owning guest thread as blocked,
+            let the normal scheduler wake it, and resume the callback continuation on
+            this executor until it either returns or fails.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.MapGuestCpuAcrossSmtLanes(System.Int32,System.Int32)">
+            <summary>
+            Places guest CPUs on distinct physical cores first, then wraps onto the
+            SMT siblings. Doubling the index alone only works while the title stays
+            inside the first half of the guest CPU set: beyond that every mapped lane
+            lands past the host's processor count and gets dropped, which silently
+            leaves those threads unpinned. Demon's Souls asks for CPUs 0-12 and keeps
+            its renderer on 9 and 11, so dropping the overflow un-pinned both the
+            renderer and a third of its job pool onto every core at once.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.EmulatorReservedLanes">
+            <summary>
+            Host lanes kept away from guest threads. Measured on a 16-lane host with
+            Demon's Souls: reserving 0/4/6/8 lanes gave 6.08/6.78/7.20/5.62 fps, so
+            the useful range is a bit over a third of the machine — too few and the
+            emulator is crowded out, too many and the guest cannot make progress.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.GuestSessionLeaked">
+            <summary>
+            Set when <see cref="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.Dispose"/> intentionally left the native session
+            state (import trampolines, TLS, exception handlers) alive because guest
+            worker threads were still executing guest code. The owning runtime must
+            then keep the guest address space mapped as well; freeing either under a
+            running worker faults the whole process, which hosts the GUI launcher.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ProbeDemonResourceNodeFaultV461(SharpEmu.Core.Cpu.Native.DirectExecutionBackend.EXCEPTION_RECORD*,System.Void*,System.UInt64)">
+            <summary>
+            V46.1 evidence-only probe for the Demon's Souls resource dependency crash.
+            This method never mutates guest memory, registers, RIP, or exception state.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ProbeDemonVirtualCallFaultV462(SharpEmu.Core.Cpu.Native.DirectExecutionBackend.EXCEPTION_RECORD*,System.Void*,System.UInt64)">
+            <summary>
+            Evidence-only V46.2 probe. It never changes guest memory, registers, RIP,
+            exception state, scheduling state, or recovery decisions.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ProbeDemonThreadStartV462(SharpEmu.Core.Cpu.Native.DirectExecutionBackend.GuestThreadState)">
+            <summary>
+            Called after the guest thread state is queued but before Pump/dispatch.
+            It is read-only and proves whether the malformed pointer exists before
+            HighGraphics executes its first guest instruction.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Core.Cpu.Native.DirectExecutionBackend._perfHleCurrentExport">
+            <summary>
+            Name of the export currently being dispatched on this thread, so the
+            gateway can attribute its elapsed time once the call returns. Answering
+            "which export is worth optimising" needs cost per export, not just call
+            counts — a rare expensive call and a hot cheap one look identical in a
+            frequency histogram.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ResolveWaitLabel(SharpEmu.Core.Cpu.Native.DirectExecutionBackend.GuestThreadState)">
+            <summary>
+            Names the HLE call a thread is parked in, using the guest RIP the import
+            dispatcher left on its context.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.DescribeGuestAddress(System.UInt64)">
+            <summary>
+            Tags a sampled address with the region it belongs to. Guest module code
+            lives above the image base; anything else is emulator or system code that
+            the managed profiler already covers.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.IsPureLibcMathProgressBoundaryV48(SharpEmu.HLE.ExportedFunction)">
+             <summary>
+             V48.0: pure libc math is computational progress, not a scheduler/import
+             boundary that by itself proves a deadlock. These functions are
+             deterministic leaf work with no blocking semantics.
+            
+             This classification is deliberately based on the resolved export name,
+             not on a title or NID. It therefore applies equally to any guest that
+             legitimately performs high-frequency scalar math through HLE.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.TryHandleGuestImageWriteFault(System.Void*)">
+            <summary>
+            Windows counterpart of the POSIX SIGSEGV bridge into
+            <see cref="T:SharpEmu.HLE.GuestImageWriteTracker"/>. Guest code runs natively,
+            so a store into a surface the GPU backend has cached is an ordinary CPU
+            write with nothing to intercept â€” the page is write-protected instead and
+            the resulting fault is what tells the backend to re-upload. Without this
+            the cache serves the first upload forever, and anything the guest CPU
+            draws (a software-decoded movie frame, a memset fog layer) never reaches
+            the screen.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.TryDispatchHotMemoryLeaf(SharpEmu.HLE.CpuContext,SharpEmu.Core.Cpu.Native.DirectExecutionBackend.ImportStubEntry,System.IntPtr,System.UInt64@)">
+            <summary>
+            Ultra-thin path for hot memcpy/memmove leaf imports: skip
+            CpuContext register marshalling, import-call frames, and vector return
+            stores when guest memory can satisfy the copy directly.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.DirectExecutionBackend.WarmUpPosixSignalPath">
+            <summary>
+            Runs the signal-recovery path once with fabricated inputs before the
+            handlers are installed. The first entry into the handler must not
+            require JIT compilation (a fault can interrupt arbitrary runtime
+            states), and under Rosetta 2 the signal trampoline cannot enter x86
+            code that has never been executed (and therefore never translated): a
+            cold handler is silently never invoked and the faulting instruction
+            retries forever.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.NullHostFaultHandling">
+            <summary>
+            Placeholder for hosts whose fault bridge is installed directly by the
+            execution backend. POSIX uses its sigaction bridge and never calls these
+            Windows-shaped registration methods.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.PosixHostStubs">
+            <summary>
+            POSIX replacements for the kernel32 helpers the native backend embeds in
+            emitted x86-64 code. Every stub exposed here follows the Win64 calling
+            convention the emitted call sites were written for (first argument in
+            ECX, result in RAX, Win64 non-volatile registers preserved), so the
+            emission code stays identical across platforms.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.PosixHostStubs.TlsAlloc">
+            <summary>Allocates a pthread TLS key, mirroring kernel32!TlsAlloc.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.PosixHostStubs.GetCurrentThreadId">
+            <summary>Stable numeric id of the calling thread (kernel32!GetCurrentThreadId).</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.PosixHostStubs.CreateWin64ToSysVThunk(System.IntPtr)">
+            <summary>
+            Wraps a managed callback (compiled for the SysV ABI on POSIX .NET) in a
+            thunk that accepts up to four integer arguments in the Win64 ABI the
+            emitted x86-64 call sites use. Win64 passes args in rcx/rdx/r8/r9 and
+            treats rdi/rsi as non-volatile; SysV expects rdi/rsi/rdx/rcx and
+            clobbers them, so the thunk saves rdi/rsi, shuffles the registers, keeps
+            the stack 16-byte aligned for the call, and forwards the rax result.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.Sse4aExtrqBlendPatch">
+             <summary>
+             Recognizes Sony's AMD-only SSE4a EXTRQ+blend idiom and rewrites it into an
+             equivalent SSE4.1 sequence. SharpEmu executes guest x86-64 natively, but
+             Rosetta 2 and Intel hosts do not implement SSE4a, so the original opcode
+             raises #UD -> SIGILL. The compiler emits the idiom against whichever XMM
+             register it happens to allocate (Dead Cells uses xmm1, others xmm2), so the
+             source register is read from the ModRM r/m field rather than hard-coded.
+            
+             The match/encode logic is deliberately free of native page-patching so it
+             can be unit-tested against handcrafted byte sequences.
+             </summary>
+        </member>
+        <member name="F:SharpEmu.Core.Cpu.Native.Sse4aExtrqBlendPatch.SequenceLength">
+            <summary>Length in bytes of both the matched idiom and its replacement.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.Sse4aExtrqBlendPatch.TryMatch(System.ReadOnlySpan{System.Byte},System.Int32@,System.Int32@)">
+            <summary>
+            Matches the 12-byte idiom, extracting the destination register D and the
+            source (scratch) register N:
+            <code>
+              EXTRQ    xmmN, 0x28, 0x00     ; 66 0F 78 /0 28 00      mask xmmN to low 40 bits
+              VPBLENDD xmmD, xmmD, xmmN, 2  ; C4 E3 vvvv 02 /r 02    copy dword 1 into xmmD
+            </code>
+            N lives in the ModRM r/m field of both instructions; D (the blend
+            destination and src1) lives in the VPBLENDD ModRM reg field and VEX.vvvv.
+            Both are xmm0-xmm7 (the VEX byte1 0xE3 pins R/X/B, so no xmm8-15 extension).
+            The compiler allocates whichever registers it likes — Dead Cells builds use
+            D=xmm0 and D=xmm3, others differ — so both are read from the encoding.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Core.Cpu.Native.Sse4aExtrqBlendPatch.TryEncode(System.Int32,System.Int32,System.Span{System.Byte})">
+            <summary>
+            Writes the SSE4.1 equivalent into <paramref name="destination"/>:
+            <code>
+              PEXTRB eax, xmmN, 4  ; 66 0F 3A 14 /r 04   extract byte 4 (zero-extended)
+              PINSRD xmmD, eax, 1  ; 66 0F 3A 22 /r 01   insert into xmmD dword lane 1
+            </code>
+            After EXTRQ masks xmmN to its low 40 bits, dword 1 is just byte 4
+            zero-extended, so the two-instruction extract/insert reproduces the exact
+            observable result the AMD idiom left in xmmD. eax is a caller-dead scratch
+            at every site the compiler emits this idiom.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.Windows.Win64ContextOffsets">
+            <summary>
+            Byte offsets into the Win64 CONTEXT record delivered to vectored exception
+            handlers. The handlers read/write guest registers directly at these offsets
+            (no managed CONTEXT struct exists); a future POSIX backend gets a sibling
+            class for its mcontext layout.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.Windows.WindowsFaultCodes">
+            <summary>
+            Windows NTSTATUS exception codes and EXCEPTION_RECORD access-type values the
+            fault handlers filter on. Values are the same numbers the handlers previously
+            compared as bare literals; only the spelling changed.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Cpu.Native.Windows.WindowsFaultHandling">
+            <summary>
+            Vectored-exception-handler installation and the handler pre-filter thunk.
+            The thunk is inherently Windows-shaped (TEB stack-limit reads via gs:,
+            NTSTATUS pre-filtering, Win64 calling convention) and moved here whole from
+            DirectExecutionBackend; a POSIX backend supplies a sibling built around
+            sigaction/sigaltstack instead.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Core.Loader.ImportSymbolProvenance">
+            <summary>
+            Retains the complete ELF import symbol and its decoded PS4/PS5 dynamic
+            library/module metadata while the runtime continues to use the compact NID
+            as the lookup key.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Loader.SelfImage.NeededModuleNames">
+            <summary>
+            Dynamic-loader dependency names declared by DT_NEEDED / DT_SCE_NEEDED_MODULE.
+            The runtime uses these names only for dependency-first initializer ordering;
+            absence of metadata preserves the stable preload order.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Loader.SelfImage.ModuleParamAddress">
+            <summary>
+            Address of PT_SCE_MODULE_PARAM (0x61000002), when the image exposes one.
+            Kept separate from ProcParamAddress because the two program-header types
+            have distinct roles in SCE ELF layouts.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Loader.SelfImage.TlsStaticOffset">
+            <summary>Variant II distance from the thread pointer to this module's static TLS base.</summary>
+        </member>
+        <member name="M:SharpEmu.Core.Memory.PhysicalVirtualMemory.PrimeLazyReserveRegion(System.UInt64,System.UInt64)">
+            <summary>
+            Commits the leading slice of a reserve-only region so early guest touches
+            succeed before on-demand <see cref="M:SharpEmu.Core.Memory.PhysicalVirtualMemory.EnsureRangeCommitted(System.UInt64,System.UInt64,SharpEmu.Core.Memory.PhysicalVirtualMemory.MemoryRegion)"/> runs.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Core.Runtime.SharpEmuRuntimeOptions.DebugHook">
+            <summary>
+            An optional debugger to attach to guest execution. Flows through to
+            <see cref="P:SharpEmu.Core.Cpu.CpuExecutionOptions.DebugHook"/>. Null (the default) runs with
+            no debugger attached.
+            </summary>
+        </member>
+    </members>
+</doc>

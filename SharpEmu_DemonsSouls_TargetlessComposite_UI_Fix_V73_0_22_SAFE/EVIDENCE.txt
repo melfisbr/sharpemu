@@ -1,0 +1,32 @@
+Exact source/result validation
+
+AgcExports baseline: 7FFC81332D6C0CFDA2D03AF9B9A7A347F22B1A8190FA9AB4BBB9C34D010569CE
+AgcExports patched : 2A68E4F9E3BBAACC50409D03EB146235546392A8F036C8628D5CF6B2560E4DE1
+Presenter captured : 4D394E5A5E6DC778CF2573F904DF314012012E0BE185BF1EFA89E46E34B0A5E7
+
+Exact captured baseline sites found once each:
+1. replay option definition
+2. suppression condition
+3. replay trace condition
+
+Post-transform:
+marker count=1
+ShouldReplayTargetlessComposites references=3
+old suppression condition absent
+old replay trace block absent
+payload SHA256 exact=2A68E4F9E3BBAACC50409D03EB146235546392A8F036C8628D5CF6B2560E4DE1
+
+Presenter evidence:
+V74.0.23.1 present
+V740231MaxLargeArraySparseProbeBytes present
+ARRAY_BASELINE present
+
+Runtime evidence:
+deferred_composite_replayed=124
+deferred_composite_draws=248
+deferred_composite_suppressed=0
+cp5_present_success=133
+runtime_unresolved=0
+device_lost=0
+visual=LANGUAGE SELECT
+stderr_lines=325961

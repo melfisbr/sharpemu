@@ -6,6 +6,7 @@ using SharpEmu.Core.Cpu;
 using SharpEmu.GUI;
 using SharpEmu.HLE;
 using SharpEmu.Libs.VideoOut;
+using SharpEmu.Libs.Media;
 using SharpEmu.Logging;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
@@ -238,6 +239,11 @@ internal static partial class Program
         if (!isMitigatedChild && TryRunMitigatedChild(args, out var childExitCode))
         {
             return childExitCode;
+        }
+        // SHARPEMU_STANDALONE_BINK_V70_0
+        if (HasStandaloneBinkOption(args))
+        {
+            return RunStandaloneBink(args);
         }
 
         if (!TryParseArguments(
@@ -520,9 +526,123 @@ internal static partial class Program
             return false;
         }
 
-        string[] childArgs = [MitigatedChildFlag, .. args];
+        var childArgs = new List<string>();
 
-        var commandLine = BuildCommandLine(processPath, childArgs);
+        // Environment.ProcessPath is SharpEmu.exe for apphost execution, but it
+        // is dotnet.exe when SharpEmu is started as "dotnet SharpEmu.dll".
+        // In the latter case the entry assembly must be passed back to dotnet
+        // before SharpEmu's internal child flag.
+        if (string.Equals(
+                Path.GetFileNameWithoutExtension(processPath),
+                "dotnet",
+                StringComparison.OrdinalIgnoreCase))
+        {
+        // When hosted by dotnet.exe, resolve the managed entry assembly from
+        // the original command line instead of Assembly.Location. The latter
+        // is incompatible with single-file publishing and triggers IL3000.
+        string? entryAssemblyPath = null;
+        var commandLineArgs = Environment.GetCommandLineArgs();
+
+        if (commandLineArgs.Length > 1)
+        {
+            var candidatePath = commandLineArgs[1];
+
+            if (!Path.IsPathFullyQualified(candidatePath))
+            {
+                candidatePath = Path.GetFullPath(
+                    candidatePath,
+                    Environment.CurrentDirectory);
+            }
+
+            if (File.Exists(candidatePath))
+            {
+                entryAssemblyPath = candidatePath;
+            }
+        }
+
+        // Defensive fallback for unusual dotnet-host invocation shapes.
+        if (string.IsNullOrWhiteSpace(entryAssemblyPath))
+        {
+            var entryAssemblyName = typeof(Program).Assembly.GetName().Name;
+
+            if (!string.IsNullOrWhiteSpace(entryAssemblyName))
+            {
+                var candidatePath = Path.Combine(
+                    AppContext.BaseDirectory,
+                    entryAssemblyName + ".dll");
+
+                if (File.Exists(candidatePath))
+                {
+                    entryAssemblyPath = candidatePath;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(entryAssemblyPath) ||
+            !File.Exists(entryAssemblyPath))
+        {
+            Console.Error.WriteLine(
+                "[ERROR] Unable to resolve SharpEmu entry assembly for " +
+                "mitigated dotnet-host relaunch.");
+            childExitCode = 5;
+            return true;
+        }
+
+            childArgs.Add(entryAssemblyPath);
+        }
+
+        childArgs.Add(MitigatedChildFlag);
+        childArgs.AddRange(args);
+
+                // [V61.13.25.5.2][DOTNET_MITIGATED_CHILD_RELAUNCH]
+        // If SharpEmu itself is hosted by dotnet.exe, Environment.ProcessPath
+        // names the muxer, not SharpEmu. Preserve the entry assembly in the
+        // mitigated child command so eboot.bin is never interpreted as a
+        // managed application by dotnet.
+        IReadOnlyList<string> relaunchArgs = childArgs;
+        var processFileName = Path.GetFileName(processPath);
+        var runningViaDotNetMuxer =
+            string.Equals(
+                processFileName,
+                "dotnet.exe",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                processFileName,
+                "dotnet",
+                StringComparison.OrdinalIgnoreCase);
+
+        if (runningViaDotNetMuxer)
+        {
+            var entryAssemblyPath =
+                Path.Combine(AppContext.BaseDirectory, "SharpEmu.dll");
+            if (string.IsNullOrWhiteSpace(entryAssemblyPath) ||
+                !File.Exists(entryAssemblyPath))
+            {
+                childExitCode = 5;
+                Console.Error.WriteLine(
+                    "[LOADER][ERROR] mitigated_relaunch_dotnet_muxer " +
+                    "could not resolve SharpEmu.dll.");
+                return true;
+            }
+
+                        // [V61.13.25.5.4.1][DOTNET_CHILD_ARGS_REBUILD]
+            // Rebuild from the ORIGINAL parent args. The current local
+            // childArgs path duplicates the eboot when reused by the dotnet
+            // muxer branch.
+            relaunchArgs =
+                [entryAssemblyPath, MitigatedChildFlag, .. args];
+
+            // Runtime-visible marker: unlike a source comment, this literal is
+            // emitted to .NET metadata and can be verified in SharpEmu.dll.
+            Console.Error.WriteLine(
+                "[DEBUG] dotnet_child_args_rebuild " +
+                $"argc={args.Length} entry='{entryAssemblyPath}'");
+            Console.Error.WriteLine(
+                "[DEBUG] mitigated_relaunch_dotnet_muxer " +
+                $"entry='{entryAssemblyPath}'");
+        }
+
+        var commandLine = BuildCommandLine(processPath, relaunchArgs);
         var startupInfoEx = new STARTUPINFOEX();
         startupInfoEx.StartupInfo.cb = Marshal.SizeOf<STARTUPINFOEX>();
         ConfigureInheritedStdHandles(ref startupInfoEx.StartupInfo);
@@ -624,7 +744,9 @@ internal static partial class Program
                 }
 
                 childExitCode = unchecked((int)exitCode);
-                Console.Error.WriteLine("[DEBUG] Running in mitigated child process (CET/CFG disabled).");
+                var exitDescription = DescribeWindowsProcessExitCode(exitCode);
+                Console.Error.WriteLine(
+                    $"[DEBUG] Mitigated child exited: code=0x{exitCode:X8} ({childExitCode}) {exitDescription}");
                 return true;
             }
             finally
@@ -654,6 +776,20 @@ internal static partial class Program
             }
         }
     }
+
+    private static string DescribeWindowsProcessExitCode(uint exitCode) =>
+        exitCode switch
+        {
+            0x00000000 => "SUCCESS",
+            0xC0000005 => "ACCESS_VIOLATION",
+            0xC000001D => "ILLEGAL_INSTRUCTION",
+            0xC0000094 => "INTEGER_DIVIDE_BY_ZERO",
+            0xC00000FD => "STACK_OVERFLOW",
+            0xC0000374 => "HEAP_CORRUPTION",
+            0xC0000409 => "STACK_BUFFER_OVERRUN/FAST_FAIL",
+            0xCFFFFFFF => "APPLICATION_HANG",
+            _ => "UNCLASSIFIED",
+        };
 
     private static bool TryGetLogFileArgument(IReadOnlyList<string> args, out string path)
     {
@@ -987,6 +1123,85 @@ internal static partial class Program
         return builder.ToString();
     }
 
+    private static bool HasStandaloneBinkOption(string[] args)
+    {
+        foreach (var argument in args)
+        {
+            if (string.Equals(argument, "--play-bink", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("--play-bink=", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int RunStandaloneBink(string[] args)
+    {
+        var filteredArgs = new List<string>(args.Length);
+        string? moviePath = null;
+        for (var index = 0; index < args.Length; index++)
+        {
+            var argument = args[index];
+            if (string.Equals(argument, "--play-bink", StringComparison.OrdinalIgnoreCase))
+            {
+                if (moviePath is not null || index + 1 >= args.Length)
+                {
+                    Log.Error("--play-bink requires exactly one movie path.");
+                    return 1;
+                }
+                moviePath = args[++index];
+                filteredArgs.Add(moviePath);
+                continue;
+            }
+
+            const string prefix = "--play-bink=";
+            if (argument.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                if (moviePath is not null || argument.Length == prefix.Length)
+                {
+                    Log.Error("--play-bink requires exactly one movie path.");
+                    return 1;
+                }
+                moviePath = argument[prefix.Length..];
+                filteredArgs.Add(moviePath);
+                continue;
+            }
+
+            filteredArgs.Add(argument);
+        }
+
+        if (moviePath is null ||
+            !TryParseArguments(
+                filteredArgs.ToArray(),
+                out var parsedMoviePath,
+                out _,
+                out var videoOptions,
+                out var logLevel,
+                out var logFilePath))
+        {
+            PrintUsage();
+            return 1;
+        }
+
+        if (!string.IsNullOrWhiteSpace(logFilePath))
+        {
+            TryEnableConsoleFileMirror(logFilePath);
+        }
+
+        SharpEmuLog.MinimumLevel = logLevel;
+        if (!HostVideoHost.TryConfigureVideo(videoOptions))
+        {
+            Console.Error.WriteLine("[BINK-STANDALONE][ERROR] Video options cannot change while a presenter is active.");
+            return 3;
+        }
+
+        Log.Info(BuildInfo.Banner);
+        Log.Info(HostSystemInfo.Summary);
+        parsedMoviePath = Path.GetFullPath(parsedMoviePath);
+        Console.Error.WriteLine($"[BINK-STANDALONE] Full path: {parsedMoviePath}");
+        return StandaloneBinkPlayer.Play(parsedMoviePath);
+    }
     private static void PrintUsage()
     {
         Log.Info("Usage: SharpEmu.CLI [--strict] [--trace-imports[=N]] [--cpu-engine=<native>] [--log-level=<level>] [--log-file[=<path>]] [--window-mode=<windowed|borderless|exclusive>] [--resolution=<WIDTHxHEIGHT>] [--display=<N>] [--refresh-rate=<HZ>] [--scaling=<fit|cover|stretch|integer>] [--vsync=<on|off>] [--hdr=<auto|on|off>] [--debug-server[=host:port]] <path-to-eboot.bin>");

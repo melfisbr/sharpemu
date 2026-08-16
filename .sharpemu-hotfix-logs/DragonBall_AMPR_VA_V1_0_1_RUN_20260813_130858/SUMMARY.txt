@@ -1,0 +1,10 @@
+﻿[DBFZ-AMPR-RUNNER] Dragon Ball FighterZ AMPR VA V1.0.1 result
+Timestamp=20260813_130858
+RuntimeExitCode=-1073741819
+AMPRMarker=True
+CorrectMemoryRange=True
+OldBadRange=False
+TargetNidStillUnresolved=False
+OldAVTarget=False
+NativeException=True
+Log=C:\Users\Edpo\Documents\GitHub\sharpemu\.sharpemu-hotfix-logs\DragonBall_AMPR_VA_V1_0_1_RUN_20260813_130858\dragonball_stdout_stderr.log

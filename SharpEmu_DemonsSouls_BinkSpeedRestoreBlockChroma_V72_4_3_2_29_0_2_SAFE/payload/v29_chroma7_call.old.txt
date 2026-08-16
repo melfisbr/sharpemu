@@ -1,0 +1,27 @@
+                    // V72.4.3.2.29 DIRECT_PACKED_CHROMA_SMOOTH
+                    // V27/V28 repaired planar chroma, but the active exact633
+                    // path reads the packed PGM payload directly. Smooth here.
+                    var chromaCenterX = chromaX + 1;
+                    var chromaCenterY = targetY * 3 + 1;
+
+                    var uValue =
+                        SampleV724329PackedChroma7x7(
+                            payload,
+                            yBytes,
+                            sourceWidth,
+                            sourceChromaWidth,
+                            sourceChromaHeight,
+                            chromaCenterX,
+                            chromaCenterY,
+                            vPlane: false);
+
+                    var vValue =
+                        SampleV724329PackedChroma7x7(
+                            payload,
+                            yBytes,
+                            sourceWidth,
+                            sourceChromaWidth,
+                            sourceChromaHeight,
+                            chromaCenterX,
+                            chromaCenterY,
+                            vPlane: true);

@@ -1,0 +1,13 @@
+SharpEmu Demon's Souls Job-Pool Lane Packing / FastBoot
+Version: V74.0.26
+Type: SAFE runtime-profile experiment; no source rewrite
+Target: PPSA01341 eboot SHA256 22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E
+
+Purpose:
+Preserve the V74.0.25 WRITE_DATA synchronization repair and test a 10-host-lane
+guest affinity topology on hosts with >=16 logical processors. Demon's Souls
+creates guest workers for CPUs 0-12. The current source's own 16-lane benchmark
+reported its best result with 6 reserved lanes, leaving 10 guest-usable lanes.
+On a 24-thread host the ratio-based default leaves 15 usable lanes, so the
+13 BPE workers are not packed at all. RUN_4 sets SHARPEMU_RESERVED_HOST_LANES
+to ProcessorCount-10 (14 on a 24-thread host) without changing the default source.

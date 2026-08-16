@@ -1,0 +1,30 @@
+Observed after a successful 120-second V74.0.8.1 collection:
+
+    0UL : O termo '0UL' não é reconhecido ...
+    run_diagnostic.ps1:590
+    $directRequested=0UL
+
+This is a post-collection PowerShell 5.1 compatibility bug, not an emulator
+crash and not a telemetry failure.
+
+Console telemetry before the finalizer error:
+t=1s   work=132MB   private=60MB
+t=11s  work=796MB   private=6206MB
+t=22s  work=1227MB  private=6394MB
+t=32s  work=1938MB  private=6431MB
+t=43s  work=4345MB  private=9029MB
+t=54s  work=11409MB private=16731MB  gpu_ded=1692MB gpu_shared=793MB gpu=75%
+t=65s  work=9710MB  private=15030MB  gpu_ded=1756MB gpu_shared=793MB gpu=91%
+t=76s  work=5968MB  private=11235MB  gpu_ded=1756MB gpu_shared=795MB gpu=0%
+t=86-118s work≈5907MB private≈11173MB gpu≈0%
+
+Immediate conclusions from console only:
+- memory growth is not monotonic; a large working/private portion is reclaimed;
+- GPU memory observed is ~2.55 GiB, far below peak process private bytes;
+- GPU utilization becomes high during 54-65s, then drops to 0% by 76s while
+  the process remains alive and memory stabilizes;
+- therefore the remaining blocker includes a functional/scheduler/GPU-idle
+  transition, not only a memory leak.
+
+The complete internal [V74.0.8.1][MEM] / scheduler / direct-memory data already
+exists in stderr.log and will be recovered by V74.0.8.2.

@@ -1,0 +1,42 @@
+V74.0.11.2 performance and handoff root cause
+
+Uploaded result:
+SharpEmu_V74_0_11_NATURAL_BINK_FALLBACK_RESULT_20260815_150133.zip
+
+Measured stderr:
+- 1,323,706 lines
+- ~130.7 MiB
+
+High-volume guest-thread transition lines:
+- Pumping guest thread: 369,648
+- Guest thread yield at import: 369,633
+- Guest thread state lines: 369,634
+- combined: 1,108,915 lines (~84% of all stderr lines)
+- guest_thread.snapshot: 15,965 additional lines
+
+These logs are enabled by the diagnostic environment and are not necessary
+for normal emulation. They cause Console.Error formatting/writes plus the
+collector's own log processing while the guest is running.
+
+Movie truth:
+- natural ps_studios_logo.bk2 observed
+- NIHAV source 3840x2160 -> host 640x360, 255 frames, 30fps
+- bridge completed after 9.48s at frame 254
+- therefore host movie decode is not the multi-minute boot bottleneck
+
+Post-movie truth:
+- descriptorless fallback start: 1
+- fallback frame progress reached at least serial 128; decoder reached frame 254
+- descriptorless fallback end: 0
+- HostMovieBridge TryTakeOverGuestMovie still returned false unconditionally
+- the existing BinkGuestCompletionShim therefore never told the statically
+  linked guest Bink state machine that the host-rendered one-shot had ended
+
+V74.0.12:
+- removes high-volume diagnostic variables from the timed run
+- performs incremental log reads only
+- enables existing completion shim only for ps_studios_logo.bk2 and
+  logo_intro.bk2
+- keeps logo_intro_loop.bk2 guest-owned
+- presenter starts one-shot direct fallback from the render tick
+- presenter releases exclusive visual ownership as soon as host playback ends

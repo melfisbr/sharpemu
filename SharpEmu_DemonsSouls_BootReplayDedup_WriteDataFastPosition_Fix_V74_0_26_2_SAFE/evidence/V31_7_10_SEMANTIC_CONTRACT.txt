@@ -1,0 +1,13 @@
+V31.7.10 precheck contract recovered from the user's recent package history.
+
+When V31.7.9 is already present, the official cumulative precheck does NOT
+require an exact gate block. It requires these semantic markers:
+- TrySuppressV3179GuestBootReplay
+- bink2.guest_replay_deduped
+- bink2.guest_boot_reconciliation_completed
+- SHARPEMU_BINK_DEDUPE_HOST_BOOT_REPLAY
+
+The V31.7.10 diagnostic explicitly runs with:
+SHARPEMU_BINK_DEDUPE_HOST_BOOT_REPLAY=1
+
+V74.0.26.2 follows that same contract rather than rewriting HostMovieBridge.

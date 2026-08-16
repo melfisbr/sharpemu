@@ -1,0 +1,22 @@
+EBOOT_SHA256=22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E
+guest_frame_lines=1
+wait_suspended_lines=11
+ordered_fence_max_counter=1024
+options_skip_host_edges=8
+rt_sampled_lines=10
+
+Guest frames:
+[LOADER][INFO] Vulkan VideoOut presented guest frame: image=0x0000000457C00000 3840x2160
+
+WAIT_REG_MEM:
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF100 queue=dcb.graphics submission=13 command=0x0000000441500000 packet=0x00000004415007F4 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000113 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF360 queue=acb.compute[56] submission=18 command=0x000000060A1E1B00 packet=0x000000060A1E1D68 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF580 queue=acb.compute[72] submission=20 command=0x000000060A221D00 packet=0x000000060A221D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF700 queue=acb.compute[32] submission=22 command=0x000000060A261F00 packet=0x000000060A261F80 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000456CFF4C0 queue=acb.compute[40] submission=23 command=0x000000060A26A000 packet=0x000000060A26A0A4 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442EFF300 queue=acb.compute[72] submission=44 command=0x000000060A493D00 packet=0x000000060A493D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442EFF200 queue=acb.compute[40] submission=47 command=0x000000060A4DC000 packet=0x000000060A4DC064 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442DFF300 queue=acb.compute[72] submission=92 command=0x000000060A977D00 packet=0x000000060A977D44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442DFF200 queue=acb.compute[40] submission=95 command=0x000000060A9C0000 packet=0x000000060A9C0064 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442BFF300 queue=acb.compute[72] submission=140 command=0x000000060AE5BD00 packet=0x000000060AE5BD44 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended
+[LOADER][WARN] agc.wait_suspended label=0x0000000442BFF200 queue=acb.compute[40] submission=143 command=0x000000060AEA4000 packet=0x000000060AEA4064 value=0x0000000000000000 mask=0x00000000FFFFFFFF ref=0x0000000000000001 cmp=3 control=0x00000013 bits=32 form=agc-nop producer=none-observed; remaining-suspended

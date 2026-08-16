@@ -1,0 +1,5 @@
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF100 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=acb.compute[32] submission=22 packet=0x000000060A199348
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF360 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x0000000442400750
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF700 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x00000004424015DC
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF580 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x000000044240253C
+[V73.4][LABEL] write_data_applied label=0x0000000456CFF4C0 wrote=1 visible=0x00000001 latched=0x0000000000000001 queue=dcb.graphics submission=24 packet=0x0000000442403478

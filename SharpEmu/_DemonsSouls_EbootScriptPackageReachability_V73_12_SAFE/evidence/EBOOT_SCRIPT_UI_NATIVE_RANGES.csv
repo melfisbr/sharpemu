@@ -1,0 +1,13 @@
+﻿Name,Start,EndExclusive,Size,EBOOT evidence
+StartScriptRoot,0xB74910,0xB75130,0x820,StartScriptRoot %s
+ScriptPackagePrimary,0xEE9500,0xEEA0E0,0xBE0,Primary Script: (%s) %s 
+ScriptPackageCommonApply,0xC7C900,0xC7D020,0x720,CPOLdrScriptPackageCommon::ApplyProperties
+FinalizeGameObjectsJob,0xEABF90,0xEAC270,0x2E0,LoadScriptPackageHelper::FinalizeGameObjectsJob
+CreateGameObjects,0xEACCA0,0xEAD010,0x370,LoadScriptPackageHelper::CreateGameObjects
+ScriptPackageAutoLoadApply,0xEAF210,0xEAF590,0x380,CCPLdrScriptPackageAutoLoad::ApplyProperties
+LoadScriptRegion,0xEAF760,0xEB0000,0x8A0,LoadScript %s
+ScriptPackageManualLoadApply,0xEB0940,0xEB0C20,0x2E0,CCPLdrScriptPackageManualLoad::ApplyProperties
+StartMenuLoaderSourceRegion,0x148DF90,0x148E7B0,0x820,CCPLdrUIBehaviorStartMenuInputHandler.cpp
+IsSceneFullyLoadedExact,0xDC1E80,0xDC20D0,0x250,UIManager::IsSceneFullyLoaded
+ShowHUDSceneImplExact,0xDC3D70,0xDC4290,0x520,UIManager::ShowHUDSceneImpl
+AdvanceMenuTransitionsExact,0xDC7E10,0xDC81D0,0x3C0,UIManager::AdvanceMenuStackSceneTransitions

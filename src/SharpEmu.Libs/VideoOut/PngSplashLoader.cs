@@ -3,6 +3,7 @@
 
 using System.Buffers.Binary;
 using System.IO.Compression;
+using SharpEmu.Libs.Codec;
 
 namespace SharpEmu.Libs.VideoOut;
 
@@ -73,124 +74,22 @@ internal static class PngSplashLoader
         pixels = [];
         width = 0;
         height = 0;
-        if (png.Length < 33 || !png[..8].SequenceEqual(PngSignature))
+        if (!PngDecoder.TryDecodeRgba(png, out var rgba, out var info))
         {
             return false;
         }
 
-        byte bitDepth = 0;
-        byte colorType = 0;
-        byte interlace = 0;
-        using var compressed = new MemoryStream();
-        var offset = 8;
-        while (offset <= png.Length - 12)
+        width = info.Width;
+        height = info.Height;
+        pixels = rgba;
+        if (!requestRgba)
         {
-            var chunkLength = BinaryPrimitives.ReadUInt32BigEndian(png.Slice(offset, 4));
-            if (chunkLength > int.MaxValue || offset > png.Length - 12 - (int)chunkLength)
+            for (var offset = 0; offset < pixels.Length; offset += 4)
             {
-                return false;
+                var red = pixels[offset];
+                pixels[offset] = pixels[offset + 2];
+                pixels[offset + 2] = red;
             }
-
-            var chunkType = png.Slice(offset + 4, 4);
-            var chunkData = png.Slice(offset + 8, (int)chunkLength);
-            var expectedCrc = BinaryPrimitives.ReadUInt32BigEndian(
-                png.Slice(offset + 8 + (int)chunkLength, 4));
-            if (CalculateCrc(chunkType, chunkData) != expectedCrc)
-            {
-                return false;
-            }
-
-            if (chunkType.SequenceEqual("IHDR"u8))
-            {
-                if (chunkData.Length != 13)
-                {
-                    return false;
-                }
-
-                width = BinaryPrimitives.ReadUInt32BigEndian(chunkData[..4]);
-                height = BinaryPrimitives.ReadUInt32BigEndian(chunkData.Slice(4, 4));
-                bitDepth = chunkData[8];
-                colorType = chunkData[9];
-                interlace = chunkData[12];
-            }
-            else if (chunkType.SequenceEqual("IDAT"u8))
-            {
-                compressed.Write(chunkData);
-            }
-            else if (chunkType.SequenceEqual("IEND"u8))
-            {
-                break;
-            }
-
-            offset += checked((int)chunkLength + 12);
-        }
-
-        var sourceBytesPerPixel = colorType switch
-        {
-            2 => 3,
-            6 => 4,
-            _ => 0,
-        };
-        if (width == 0 ||
-            height == 0 ||
-            width > 16384 ||
-            height > 16384 ||
-            bitDepth != 8 ||
-            interlace != 0 ||
-            sourceBytesPerPixel == 0 ||
-            compressed.Length == 0)
-        {
-            return false;
-        }
-
-        var stride = checked((int)width * sourceBytesPerPixel);
-        var scanlineLength = checked(stride + 1);
-        var decompressedLength = checked(scanlineLength * (int)height);
-        var scanlines = GC.AllocateUninitializedArray<byte>(decompressedLength);
-        compressed.Position = 0;
-        using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
-        {
-            zlib.ReadExactly(scanlines);
-            if (zlib.ReadByte() != -1)
-            {
-                return false;
-            }
-        }
-
-        var reconstructed = GC.AllocateUninitializedArray<byte>(checked(stride * (int)height));
-        for (var y = 0; y < (int)height; y++)
-        {
-            var sourceLine = scanlines.AsSpan(y * scanlineLength + 1, stride);
-            var targetLine = reconstructed.AsSpan(y * stride, stride);
-            var previousLine = y == 0
-                ? ReadOnlySpan<byte>.Empty
-                : reconstructed.AsSpan((y - 1) * stride, stride);
-            if (!TryUnfilter(
-                    scanlines[y * scanlineLength],
-                    sourceLine,
-                    previousLine,
-                    targetLine,
-                    sourceBytesPerPixel))
-            {
-                return false;
-            }
-        }
-
-        pixels = GC.AllocateUninitializedArray<byte>(checked((int)width * (int)height * 4));
-        for (int sourceOffset = 0, targetOffset = 0;
-             sourceOffset < reconstructed.Length;
-             sourceOffset += sourceBytesPerPixel, targetOffset += 4)
-        {
-            pixels[targetOffset] = requestRgba
-                ? reconstructed[sourceOffset]
-                : reconstructed[sourceOffset + 2];
-            pixels[targetOffset + 1] = reconstructed[sourceOffset + 1];
-            pixels[targetOffset + 2] = requestRgba
-                ? reconstructed[sourceOffset + 2]
-                : reconstructed[sourceOffset];
-            pixels[targetOffset + 3] = sourceBytesPerPixel == 4
-                ? reconstructed[sourceOffset + 3]
-                : (byte)0xFF;
         }
 
         return true;

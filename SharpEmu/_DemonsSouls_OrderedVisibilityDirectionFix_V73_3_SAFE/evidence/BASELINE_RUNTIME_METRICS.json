@@ -1,0 +1,11 @@
+{
+  "ordered_action_fence_wait_sample_lines": 14,
+  "ordered_action_fence_wait_max_counter": 512,
+  "guest_queue_backpressure_lines": 8,
+  "guest_queue_backpressure_max_counter": 8,
+  "wait_suspended_lines": 7,
+  "queue_resumed_lines": 0,
+  "event_fastpath_max_n": 2048,
+  "dispatch_reject_lines": 43,
+  "device_lost_true": 0
+}

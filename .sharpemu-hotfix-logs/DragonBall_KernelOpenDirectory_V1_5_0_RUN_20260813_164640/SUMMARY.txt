@@ -1,0 +1,12 @@
+﻿Dragon Ball FighterZ KernelOpen Directory Compat V1.5.0 Result
+ExitCode=-1073741819
+DirectoryOpenTraceCount=5
+InvalidDirectoryOpen=True
+OldAV40=True
+NativeException=True
+UnresolvedSaKib=True
+AmprStillMaterialized=True
+AsyncLoadingThread=True
+ProjectFileNotFound=False
+GEngineLoopPreInitFailed=False
+OpaqueOwnerSyncStillPresent=True

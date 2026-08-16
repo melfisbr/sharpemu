@@ -1,0 +1,16 @@
+﻿Module,NID,Function,SharpEmu,PLT_or_stub,Eboot_call_evidence,Validation
+libSceAmpr,mQ16-QdKv7k,sceAmprAprCommandBufferReadFile,IMPLEMENTED,0x1F03C50,0x1DC161F,"ABI validated from eboot wrapper: RDI commandBuffer, RCX fileId, R8 destination, R9 size, [RSP+8] fileOffset"
+libKernel,WT-5NKy42fw,sceKernelAprResolveFilepathsToIds,IMPLEMENTED,0x1F03CD0,0x1DC16D4,"Thin wrapper; current RDI path-list, RSI count, RDX ids contract matches"
+libKernel,gEpBkcwxUjw,sceKernelAprResolveFilepathsToIdsAndFileSizes,IMPLEMENTED,0x1F03CE0,0x1DC1709,"Wrapper rejects RCX==0; caller 0x815AD5 passes &path,count=1,ids,sizes,error-index exactly as current HLE"
+libKernel,w5fcCG+t31g,sceKernelAprResolveFilepathsWithPrefixToIdsAndFileSizes,IMPLEMENTED,0x1F03D00,0x1DC1773,"Wrapper requires RDI and R8 non-null, matching prefix at RDI and sizes at R8"
+libKernel,ApkYaHb8Sek,sceKernelAprGetFileStat,IMPLEMENTED,0x1F03D60,0x1DC1884,Thin wrapper; fileId/stat HLE present
+libKernel,Cg4srZ6TKbU,sceKernelRead,IMPLEMENTED,,multiple,Current implementation shares _read body; V73.7 fixes close/read synchronization race
+libKernel,DRuBt2pvICk,_read,IMPLEMENTED,,indirect/libc,Same read body; V73.7 serializes fd lookup+read against close
+libKernel,+r3...,sceKernelPread,IMPLEMENTED,,1 direct call,Already uses RandomAccess.Read + stream monitor in current source
+libKernel,eV9wAD2riIA,sceKernelStat,IMPLEMENTED,,8 direct calls,Path resolver/stat implementation present
+libKernel,j2AIqSqJP0w,sceKernelGetdents,IMPLEMENTED,,1 direct call,Not active in latest Demon’s resource-gather run (dirent_calls=0)
+libc,xeYO4u7uyJ0,fopen,IMPLEMENTED,,,stdio HLE present
+libc,lbB+UlZqVG0,fread,IMPLEMENTED,,,stdio HLE present
+libc,rQFVBXp-Cxg,fseek,IMPLEMENTED,,,stdio HLE present
+libc,Qazy8LmXTvw,ftell,IMPLEMENTED,,,stdio HLE present
+libc,uodLYyUip20,fclose,IMPLEMENTED,,,stdio HLE present

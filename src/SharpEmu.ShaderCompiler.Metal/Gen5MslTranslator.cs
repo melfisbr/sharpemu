@@ -49,6 +49,8 @@ public static partial class Gen5MslTranslator
 {
     private const uint ScalarRegisterFileCount = 128;
     private const uint VectorRegisterFileCount = 256;
+    // GFX10/RDNA M0 architectural SGPR used by V_MOVREL* VGPR indexing.
+    private const uint M0Register = 124;
     private const uint LdsDwordCount = 8192;
     private const uint LdsDwordMask = LdsDwordCount - 1;
     // Graphics stages model LDS as per-invocation scratch; a full 32 KB array
@@ -362,7 +364,9 @@ public static partial class Gen5MslTranslator
                 DeclareImageKinds();
                 foreach (var instruction in _state.Program.Instructions)
                 {
-                    _usesLds |= instruction.Control is Gen5DataShareControl { Gds: false };
+                    // GDS currently uses the bounded threadgroup DS arena as a
+                    // compatibility lowering, so it needs the same allocation.
+                    _usesLds |= instruction.Control is Gen5DataShareControl;
                     _usesFormatLoads |= IsFormatBufferLoad(instruction.Opcode);
                     if (instruction.Control is Gen5InterpolationControl interpolationControl)
                     {
@@ -1491,11 +1495,9 @@ public static partial class Gen5MslTranslator
             out string error)
         {
             error = string.Empty;
-            if (control.Gds)
-            {
-                error = "GDS data share is not implemented";
-                return false;
-            }
+            // Keep GDS shaders executable using the DS arena. This models the
+            // complete instruction semantics for single-threadgroup workloads;
+            // cross-threadgroup persistence requires a future device buffer.
 
             var ldsMask = _stage == Gen5MslStage.Compute
                 ? LdsDwordMask
@@ -1886,6 +1888,18 @@ public static partial class Gen5MslTranslator
                 return;
             }
 
+            if (guardWithExec)
+            {
+                Line($"if (exec) {{ v[{register}] = {expression}; }}");
+            }
+            else
+            {
+                Line($"v[{register}] = {expression};");
+            }
+        }
+
+        private void StoreVectorDynamic(string register, string expression, bool guardWithExec = true)
+        {
             if (guardWithExec)
             {
                 Line($"if (exec) {{ v[{register}] = {expression}; }}");

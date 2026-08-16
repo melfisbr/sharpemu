@@ -1,0 +1,33 @@
+{
+  "version": "74.0.25",
+  "source_changes": [
+    "src/SharpEmu.Libs/Agc/AgcExports.cs"
+  ],
+  "runtime_gate": "SHARPEMU_WRITE_DATA_PACKET_POSITION=1 (RUN_4 only; default off)",
+  "preserved": [
+    "V74.0.21 EBOOT entry ABI/_init_env LLE",
+    "V74.0.15 320MiB array single-flight",
+    "V74.0.23.1 large-array sparse baseline",
+    "V74.0.24 fresh stale texture source",
+    "HostMovieBridge/guest-owned boot"
+  ],
+  "forbidden": [
+    "force WAIT_REG_MEM labels",
+    "fabricate producer values",
+    "HostMovieBridge rewrite",
+    "boot-order injection",
+    "Presenter rewrite"
+  ],
+  "evidence": {
+    "v74_0_24": {
+      "startup_waits": 7,
+      "startup_wait_resumes": 0,
+      "natural_bink": 0,
+      "peak_working_mb": 7111.2,
+      "peak_private_mb": 12672.0,
+      "stale_repeat_pairs": 1,
+      "array_missing_baseline": 0
+    },
+    "historical": "same label families completed via real WRITE_DATA producers and queue resumes"
+  }
+}

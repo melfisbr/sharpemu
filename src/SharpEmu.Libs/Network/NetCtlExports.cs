@@ -33,6 +33,12 @@ public static class NetCtlExports
     private const int NetCtlIpConfigStatic = 0;
     private static readonly object CallbackGate = new();
     private static readonly CallbackRegistration[] Callbacks = new CallbackRegistration[MaxCallbacks];
+    // V33: NetCtl callback lifecycle and event pump.
+    // No synthetic "connected" state is fabricated. Events are delivered only
+    // when a real HLE producer explicitly queues a state-change notification.
+    private static readonly Queue<int> PendingEvents = new();
+    private static int _initialized;
+    private static long _v33CallbackDispatchCount;
 
     private readonly record struct CallbackRegistration(ulong Function, ulong Argument);
 
@@ -43,8 +49,50 @@ public static class NetCtlExports
         LibraryName = "libSceNetCtl")]
     public static int NetCtlInit(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        lock (CallbackGate)
+        {
+            Volatile.Write(ref _initialized, 1);
+            PendingEvents.Clear();
+        }
+
+        return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
+    }
+    [SysAbiExport(
+        Nid = "Z4wwCFiBELQ",
+        ExportName = "sceNetCtlTerm",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceNetCtl")]
+    public static int NetCtlTerm(CpuContext ctx)
+    {
+        lock (CallbackGate)
+        {
+            Array.Clear(Callbacks, 0, Callbacks.Length);
+            PendingEvents.Clear();
+            Volatile.Write(ref _initialized, 0);
+        }
+
+        return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
+    }
+
+    [SysAbiExport(
+        Nid = "Rqm2OnZMCz0",
+        ExportName = "sceNetCtlUnregisterCallback",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceNetCtl")]
+    public static int NetCtlUnregisterCallback(CpuContext ctx)
+    {
+        var callbackId = unchecked((int)ctx[CpuRegister.Rdi]);
+        if ((uint)callbackId >= (uint)Callbacks.Length)
+        {
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT, typeof(long));
+        }
+
+        lock (CallbackGate)
+        {
+            Callbacks[callbackId] = default;
+        }
+
+        return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
     }
 
     [SysAbiExport(
@@ -87,7 +135,82 @@ public static class NetCtlExports
         LibraryName = "libSceNetCtl")]
     public static int NetCtlCheckCallback(CpuContext ctx)
     {
-        return ctx.SetReturn(0, typeof(long));
+        var pending = new List<int>();
+        CallbackRegistration[] callbacks;
+
+        lock (CallbackGate)
+        {
+            if (Volatile.Read(ref _initialized) == 0 || PendingEvents.Count == 0)
+            {
+                return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
+            }
+
+            pending.EnsureCapacity(Math.Min(PendingEvents.Count, 32));
+            while (PendingEvents.Count != 0 && pending.Count < 32)
+            {
+                pending.Add(PendingEvents.Dequeue());
+            }
+
+            var callbackList = new List<CallbackRegistration>();
+            foreach (var callback in Callbacks)
+            {
+                if (callback.Function != 0)
+                {
+                    callbackList.Add(callback);
+                }
+            }
+            callbacks = callbackList.ToArray();
+        }
+
+        if (pending.Count == 0 || callbacks.Length == 0)
+        {
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
+        }
+
+        var scheduler = GuestThreadExecution.Scheduler;
+        if (scheduler is null)
+        {
+            lock (CallbackGate)
+            {
+                foreach (var eventType in pending)
+                {
+                    PendingEvents.Enqueue(eventType);
+                }
+            }
+            return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
+        }
+
+        foreach (var eventType in pending)
+        {
+            foreach (var callback in callbacks)
+            {
+                if (!scheduler.TryCallGuestFunction(
+                        ctx,
+                        callback.Function,
+                        unchecked((ulong)(uint)eventType),
+                        callback.Argument,
+                        0,
+                        0,
+                        "sceNetCtlCheckCallback",
+                        out var error))
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][WARN] netctl.callback_failed event={eventType} " +
+                        $"callback=0x{callback.Function:X16} error={error ?? "unknown"}");
+                    continue;
+                }
+
+                var count = Interlocked.Increment(ref _v33CallbackDispatchCount);
+                if (count <= 16 || (count & (count - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][TRACE] netctl.callback_dispatch count={count} " +
+                        $"event={eventType} callback=0x{callback.Function:X16}");
+                }
+            }
+        }
+
+        return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_OK, typeof(long));
     }
 
     [SysAbiExport(
@@ -226,5 +349,20 @@ public static class NetCtlExports
         return ctx.Memory.TryWrite(address, bytes)
             ? ctx.SetReturn(0, typeof(long))
             : ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT, typeof(long));
+    }
+    internal static void QueueNetCtlEvent(int eventType)
+    {
+        if (Volatile.Read(ref _initialized) == 0)
+        {
+            return;
+        }
+
+        lock (CallbackGate)
+        {
+            if (PendingEvents.Count < 256)
+            {
+                PendingEvents.Enqueue(eventType);
+            }
+        }
     }
 }

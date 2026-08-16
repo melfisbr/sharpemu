@@ -14,6 +14,7 @@ using SharpEmu.Core.Loader;
 using SharpEmu.Core.Memory;
 using SharpEmu.HLE;
 using SharpEmu.Libs.Diagnostics;
+using SharpEmu.Libs.Kernel;
 
 namespace SharpEmu.Core.Cpu.Native;
 
@@ -287,6 +288,30 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 	private ImportStubEntry[] _importEntries = Array.Empty<ImportStubEntry>();
 
 	private readonly List<nint> _importHandlerTrampolines = new List<nint>();
+	// SHARPEMU_DB_FZ_EXEC_SETUP_CACHE_V1_8_17
+	// Module initializers re-enter TryExecute with the same merged import table.
+	// Import trampolines and TLS pattern patches are process-image setup, not
+	// per-initializer state. Cache them until the table shape changes.
+	private bool _executionSetupPrepared;
+	private int _preparedImportStubCount = -1;
+	private int _preparedRuntimeSymbolCount = -1;
+	private ulong _preparedImportStubFingerprint;
+
+	private static ulong ComputeImportSetupFingerprint(
+		IReadOnlyDictionary<ulong, string> importStubs)
+	{
+		const ulong offset = 14695981039346656037UL;
+		const ulong prime = 1099511628211UL;
+		ulong hash = offset;
+		foreach (var pair in importStubs)
+		{
+			hash ^= pair.Key;
+			hash *= prime;
+			hash ^= StableHash64(pair.Value);
+			hash *= prime;
+		}
+		return hash;
+	}
 
 	private const int GuestContextTransferFrameQwords = 20;
 
@@ -749,6 +774,13 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 	private long _lastProgressTimestamp;
 
+	// Native Windows thread currently executing the top-level module/entry call.
+	// Guest pthread workers already carry HostThreadId, but the initial module
+	// initializer executes directly on the calling host thread.
+	private int _entryHostThreadId;
+
+	private int _entryManagedThreadId;
+
 	private int _stallWatchdogTriggered;
 
 	private volatile bool _stallWatchdogStop;
@@ -890,6 +922,58 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		return *(ulong*)((byte*)contextRecord + offset);
 	}
 
+	// SHARPEMU_V73_20_1_RENDERER_NATIVE_WORKER
+	// CLR FailFast evidence repeatedly points at the managed-thread
+	// CallNativeEntry path for Demon's Souls HighGraphics (0x801104E90).
+	// The two NexusRevolution workers use the same title entry point.
+	// Keep native-worker migration selective: the source history records
+	// regressions when every guest pthread was migrated.
+	private static int _v73201NativeWorkerTraceCount;
+
+	private static bool RequiresNativeGuestWorker(string name)
+	{
+		var required =
+			string.Equals(name, "tbb_thead", StringComparison.Ordinal) ||
+			string.Equals(name, "HighGraphics", StringComparison.Ordinal) ||
+			// SHARPEMU_V73_20_3_1_RESOURCE_THREAD_FAMILY_NATIVE
+			name.StartsWith("Core.Res.", StringComparison.Ordinal) ||
+			string.Equals(name, "NexusRevolution Event", StringComparison.Ordinal) ||
+			string.Equals(name, "NexusRevolution Surveillance", StringComparison.Ordinal);
+
+		if (required &&
+			Interlocked.Increment(ref _v73201NativeWorkerTraceCount) <= 32)
+		{
+			Console.Error.WriteLine(
+				$"[V73.20.1][NATIVE] guest_native_worker name='{name}' " +
+				$"managed_tid={Environment.CurrentManagedThreadId}");
+		}
+
+		return required;
+	}
+	// SHARPEMU_V73_20_2_PREFERRED_NATIVE_GUEST_EXECUTION
+	// Every guest pthread now enters through RunGuestEntryStub, whose preferred
+	// Windows path is the pooled raw-OS-thread NativeGuestExecutor. The V73.20.1
+	// classifier remains meaningful: selected renderer/TBB workers are REQUIRED
+	// native, while all other guest threads are PREFERRED native and may use the
+	// backend's centrally-managed fallback only if no worker can be obtained.
+	private static int _v73202PreferredNativeTraceCount;
+
+	private static void TraceV73202PreferredNativeGuestExecution(
+		string phase,
+		string name,
+		bool required)
+	{
+		var n = Interlocked.Increment(
+			ref _v73202PreferredNativeTraceCount);
+
+		if (n <= 96)
+		{
+			Console.Error.WriteLine(
+				$"[V73.20.2][GUESTEXEC] phase={phase} name='{name}' " +
+				$"policy={(required ? "required-native" : "preferred-native")} " +
+				$"managed_tid={Environment.CurrentManagedThreadId}");
+		}
+	}
 	private unsafe static int CallNativeEntry(void* entry)
 	{
 		var nativeEntry = (delegate* unmanaged[Cdecl]<int>)entry;
@@ -1107,7 +1191,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		{
 			throw new OutOfMemoryException("Failed to allocate VEH managed-entry lock");
 		}
-		// owner (nint) + depth (int); recursive — nested VEH on same thread must reenter.
+		// owner (nint) + depth (int); recursive â€” nested VEH on same thread must reenter.
 		*(nint*)_vehManagedEntryLock = 0;
 		*(int*)(_vehManagedEntryLock + sizeof(nint)) = 0;
 		_unresolvedReturnStub = CreateUnresolvedReturnStub();
@@ -1123,8 +1207,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 				"[LOADER][WARN] Worker abort stub unavailable; TBB execute-fault recover will use host_exit");
 		}
 		SetupExceptionHandler();
-		// Cover the Astro TBB spawn storm (often 8–12 concurrent tbb_thead).
-		PrewarmNativeGuestWorkers(Math.Max(NativeWorkerMaxConcurrent, 4));
+		// Cover the Astro TBB spawn storm (often 8â€“12 concurrent tbb_thead).
+		PrewarmNativeGuestWorkers(Math.Min(NativeWorkerMaxConcurrent, 8));
 	}
 
 	public bool TryExecute(CpuContext context, ulong entryPoint, Generation generation, IReadOnlyDictionary<ulong, string> importStubs, IReadOnlyDictionary<string, ulong> runtimeSymbols, CpuExecutionOptions executionOptions, out OrbisGen2Result result)
@@ -1164,7 +1248,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		_logBootstrap = string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_BOOTSTRAP"), "1", StringComparison.Ordinal);
 		_logAllImports = string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_ALL_IMPORTS"), "1", StringComparison.Ordinal);
 		// Periodic Import# spam (every 100k, early bands, NID samples) is on
-		// only when explicitly requested — default stderr traffic was a measurable tax.
+		// only when explicitly requested â€” default stderr traffic was a measurable tax.
 		_logImportPeriodic = string.Equals(
 			Environment.GetEnvironmentVariable("SHARPEMU_LOG_IMPORT_PERIODIC"),
 			"1",
@@ -1209,18 +1293,41 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		GuestThreadExecution.Scheduler = this;
 		try
 		{
-			if (!SetupImportStubs(importStubs))
+			var importSetupFingerprint = ComputeImportSetupFingerprint(importStubs);
+			var canReuseExecutionSetup =
+				_executionSetupPrepared &&
+				_preparedImportStubCount == importStubs.Count &&
+				_preparedRuntimeSymbolCount == runtimeSymbols.Count &&
+				_preparedImportStubFingerprint == importSetupFingerprint;
+
+			if (!canReuseExecutionSetup)
 			{
-				if (string.IsNullOrEmpty(LastError))
+				if (!SetupImportStubs(importStubs))
 				{
-					LastError = "SetupImportStubs failed";
+					if (string.IsNullOrEmpty(LastError))
+					{
+						LastError = "SetupImportStubs failed";
+					}
+					result = OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+					return false;
 				}
-				result = OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
-				return false;
+
+				CreateTlsHandler();
+				PatchTlsPatterns();
+
+				_preparedImportStubCount = importStubs.Count;
+				_preparedRuntimeSymbolCount = runtimeSymbols.Count;
+				_preparedImportStubFingerprint = importSetupFingerprint;
+				_executionSetupPrepared = true;
+				Console.Error.WriteLine(
+					$"[LOADER][INFO] exec_setup_cache.v1817 primed imports={importStubs.Count} symbols={runtimeSymbols.Count} fp=0x{importSetupFingerprint:X16}");
 			}
-			CreateTlsHandler();
-			PatchTlsPatterns();
-			return ExecuteEntry(context, entryPoint, out result);
+			else
+			{
+				Console.Error.WriteLine(
+					$"[LOADER][INFO] exec_setup_cache.v1817 hit imports={importStubs.Count} symbols={runtimeSymbols.Count} fp=0x{importSetupFingerprint:X16}");
+			}
+			return ExecuteEntry(context, entryPoint, executionOptions.IgnoreGuestReturnValue, out result);
 		}
 		catch (Exception ex)
 		{
@@ -1266,7 +1373,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 				IsLeafImport(text2),
 				IsNoBlockLeafImport(text2),
 				ShouldSuppressStrlenTrace(text2),
-				IsImportLoopGuardBoundary(text2),
+				(IsImportLoopGuardBoundary(text2) || IsSynchronizationProgressBoundaryV1763(text2) || IsPureLibcMathProgressBoundaryV48(resolvedExport)),
 				StableHash64(text2));
 			if ((num4 >= 34393242112L && num4 <= 34393242624L) || (num4 >= 34393258496L && num4 <= 34393259008L))
 			{
@@ -1335,10 +1442,27 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 	private unsafe bool TryCreateNativeImportIntrinsic(string nid, out nint address)
 	{
-		if (IsHlePreferredNid(nid))
+		// SHARPEMU_V74_0_18_NATIVE_MEMCPY_INTRINSIC
+		// The native memcpy intrinsic already exists below, but memcpy is globally
+		// HLE-preferred. Keep that policy by default and allow an explicit Demon's
+		// Souls A/B to bypass tens of millions of managed import dispatches.
+		var allowNativeMemcpyV74018 =
+		    string.Equals(nid, "Q3VBxCXhUHs", StringComparison.Ordinal) &&
+		    string.Equals(
+		        Environment.GetEnvironmentVariable("SHARPEMU_NATIVE_MEMCPY_INTRINSIC"),
+		        "1",
+		        StringComparison.Ordinal);
+
+		if (IsHlePreferredNid(nid) && !allowNativeMemcpyV74018)
 		{
-			address = 0;
-			return false;
+		    address = 0;
+		    return false;
+		}
+
+		if (allowNativeMemcpyV74018)
+		{
+		    Console.Error.WriteLine(
+		        "[V74.0.18][MEMCPY_FASTPATH] native intrinsic enabled for libc:memcpy (Q3VBxCXhUHs)");
 		}
 
 		if (nid == "1jfXLRVzisc" &&
@@ -1705,8 +1829,13 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 	private static bool IsHlePreferredNid(string nid)
 	{
-		return string.Equals(nid, "QrZZdJ8XsX0", StringComparison.Ordinal) ||
-			string.Equals(nid, "Q3VBxCXhUHs", StringComparison.Ordinal);
+				// SHARPEMU_V36_0_1_WIDE_MEMORY_HLE_PREFERRED
+		// Existing LibcCompat handlers own these NIDs; only dispatch policy is changed.
+return string.Equals(nid, "QrZZdJ8XsX0", StringComparison.Ordinal) ||
+			string.Equals(nid, "Q3VBxCXhUHs", StringComparison.Ordinal) ||
+			string.Equals(nid, "fL3O02ypZFE", StringComparison.Ordinal) ||
+			string.Equals(nid, "Noj9PsJrsa8", StringComparison.Ordinal) ||
+			string.Equals(nid, "QJ5xVfKkni0", StringComparison.Ordinal);
 	}
 
 	private static bool IsLibcLibrary(string libraryName)
@@ -1806,17 +1935,22 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		};
 	}
 
-	private static bool IsSafeLleLibcExport(string exportName)
+	// SHARPEMU_V74_0_21_LLE_INIT_ENV_GATE
+private static bool IsSafeLleLibcExport(string exportName)
+{
+	return exportName switch
 	{
-		return exportName switch
-		{
-			"memcpy" or
-			"memmove" or
-			"memset" or
-			"memcmp" => true,
-			_ => false,
-		};
-	}
+		"_init_env" => string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_LLE_INIT_ENV"),
+			"1",
+			StringComparison.Ordinal),
+		"memcpy" or
+		"memmove" or
+		"memset" or
+		"memcmp" => true,
+		_ => false,
+	};
+}
 
 	private static IEnumerable<string> EnumerateRuntimeSymbolCandidates(string exportName)
 	{
@@ -2406,10 +2540,13 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 		byte* code = (byte*)ptr;
 		int offset = 0;
-		EmitByte(code, ref offset, 0x48); // sub rsp, 0x20
+		// RAX is the guest function's return value. TlsGetValue also returns in RAX, so
+		// park the guest value across the lookup and route the host-RSP slot through R10.
+		EmitByte(code, ref offset, 0x50); // push rax
+		EmitByte(code, ref offset, 0x48); // sub rsp, 0x28
 		EmitByte(code, ref offset, 0x83);
 		EmitByte(code, ref offset, 0xEC);
-		EmitByte(code, ref offset, 0x20);
+		EmitByte(code, ref offset, 0x28);
 		EmitByte(code, ref offset, 0xB9); // mov ecx, tlsIndex
 		EmitUInt32(code, ref offset, _hostRspSlotTlsIndex);
 		EmitByte(code, ref offset, 0x48); // mov rax, TlsGetValue
@@ -2418,13 +2555,17 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		offset += sizeof(ulong);
 		EmitByte(code, ref offset, 0xFF); // call rax
 		EmitByte(code, ref offset, 0xD0);
-		EmitByte(code, ref offset, 0x48); // add rsp, 0x20
+		EmitByte(code, ref offset, 0x48); // add rsp, 0x28
 		EmitByte(code, ref offset, 0x83);
 		EmitByte(code, ref offset, 0xC4);
-		EmitByte(code, ref offset, 0x20);
-		EmitByte(code, ref offset, 0x48); // mov rsp, [rax]
+		EmitByte(code, ref offset, 0x28);
+		EmitByte(code, ref offset, 0x4C); // mov r10, [rax]
 		EmitByte(code, ref offset, 0x8B);
-		EmitByte(code, ref offset, 0x20);
+		EmitByte(code, ref offset, 0x10);
+		EmitByte(code, ref offset, 0x58); // pop rax
+		EmitByte(code, ref offset, 0x4C); // mov rsp, r10
+		EmitByte(code, ref offset, 0x89);
+		EmitByte(code, ref offset, 0xD4);
 		EmitHostNonvolatileXmmRestore(code, ref offset);
 		EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x5F);
 		EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x5E);
@@ -2448,7 +2589,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 	/// <summary>
 	/// After a TBB execute-fault, VEH redirects here on a host stack.
-	/// SetEvent(done) then park forever — ExitThread from VEH CONTINUE_EXECUTION
+	/// SetEvent(done) then park forever â€” ExitThread from VEH CONTINUE_EXECUTION
 	/// was taking down the whole process (recover logged, no respawning). The
 	/// renter TerminateThread's the parked worker and respawns a clean loop.
 	/// </summary>
@@ -2584,7 +2725,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		// FastFail / CLR / MSVC C++ / stack-overflow the same way as
 		// WindowsFaultHandling.CreateHandlerThunk: entering managed VEH while
 		// the thread is in cooperative GC mode fail-fasts with
-		// "UnmanagedCallersOnly method from managed code" (tLT18–22).
+		// "UnmanagedCallersOnly method from managed code" (tLT18â€“22).
 		// Extra headroom for native tbb abort + recursive managed-entry spinlock.
 		const uint stubSize = 2048u;
 		void* ptr = VirtualAlloc(null, stubSize, 12288u, 64u);
@@ -2794,7 +2935,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		EmitByte(code, ref offset, 0x49); EmitByte(code, ref offset, 0x89); EmitByte(code, ref offset, 0xCD); // mov r13, rcx
 
 		// Native worker EXECUTE-AV abort without managed VEH.
-		// Do NOT catch read/write AVs — workers need managed lazy-commit (tLTJ
+		// Do NOT catch read/write AVs â€” workers need managed lazy-commit (tLTJ
 		// silent-die when every worker AV was aborted). Execute faults on
 		// tbb_thead are the concurrent-managed FailFast case (tLTC).
 		int tbbFallthroughJump = -1;
@@ -2810,7 +2951,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			tbbFallthroughJump = offset;
 			EmitUInt32(code, ref offset, 0u); // jne fallthrough
 
-			// ExceptionInformation[0] == 8 → EXECUTE (DEP). Offset 32 on x64 RECORD.
+			// ExceptionInformation[0] == 8 â†’ EXECUTE (DEP). Offset 32 on x64 RECORD.
 			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0x83);
 			EmitByte(code, ref offset, 0xB8); EmitUInt32(code, ref offset, 32u);
 			EmitByte(code, ref offset, 0x08); // cmp qword [rax+32], 8
@@ -2908,6 +3049,25 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0x82); // jb guestStack
 		int belowStackJump = offset;
 		EmitUInt32(code, ref offset, 0u);
+		// SHARPEMU_V74_0_3_4_VEH_HOST_STACK_BYPASS
+		// RSP inside the TEB OS-stack interval means this exception occurred
+		// while host/native/CLR code was active. Do not reverse-P/Invoke the
+		// SharpEmu managed VEH from that state: let CLR/driver/OS handlers see it.
+		// Guest-stack faults take aboveStackJump/belowStackJump before this point
+		// and continue through the existing SharpEmu recovery path unchanged.
+		var allowManagedHostStackVeh = string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_VEH_HOST_MANAGED"),
+			"1",
+			StringComparison.Ordinal);
+
+		int hostManagedBypassJump = -1;
+		if (!allowManagedHostStackVeh)
+		{
+			EmitByte(code, ref offset, 0xE9); // jmp passThroughOffset
+			hostManagedBypassJump = offset;
+			EmitUInt32(code, ref offset, 0u);
+		}
+
 
 		EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0x83); EmitByte(code, ref offset, 0xEC); EmitByte(code, ref offset, 0x28);
 		// Serialize managed VEH entry (recursive spinlock). Concurrent UnmanagedCallersOnly
@@ -2929,7 +3089,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0x85);
 		int hostPauseJump = offset;
 		EmitUInt32(code, ref offset, 0u);
-		EmitByte(code, ref offset, 0xF0); EmitByte(code, ref offset, 0x4C);
+		EmitByte(code, ref offset, 0xF0); EmitByte(code, ref offset, 0x4D);
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0xB1); EmitByte(code, ref offset, 0x11); // lock cmpxchg [r9], r10
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0x85);
 		int hostRetryJump = offset;
@@ -3012,7 +3172,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0x85);
 		int guestPauseJump = offset;
 		EmitUInt32(code, ref offset, 0u);
-		EmitByte(code, ref offset, 0xF0); EmitByte(code, ref offset, 0x4C);
+		EmitByte(code, ref offset, 0xF0); EmitByte(code, ref offset, 0x4D);
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0xB1); EmitByte(code, ref offset, 0x11);
 		EmitByte(code, ref offset, 0x0F); EmitByte(code, ref offset, 0x85);
 		int guestRetryJump = offset;
@@ -3073,8 +3233,17 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		*(int*)(code + missingTlsJump) = passThroughOffset - (missingTlsJump + sizeof(int));
 		*(int*)(code + missingHostStackJump) = passThroughOffset - (missingHostStackJump + sizeof(int));
 		*(int*)(code + guestRestoreJump) = restoreOffset - (guestRestoreJump + sizeof(int));
+		// SHARPEMU_V74_0_3_4_VEH_HOST_STACK_BYPASS_FIXUP
+		if (hostManagedBypassJump >= 0)
+		{
+			*(int*)(code + hostManagedBypassJump) =
+				passThroughOffset - (hostManagedBypassJump + sizeof(int));
+		}
 
-		if (offset > (int)stubSize)
+				Console.Error.WriteLine(
+			$"[V74.0.3.4][VEH] host_stack_policy=" +
+			$"{(allowManagedHostStackVeh ? "legacy-managed" : "native-continue-search")}");
+if (offset > (int)stubSize)
 		{
 			Console.Error.WriteLine(
 				$"[LOADER][ERROR] Exception handler trampoline overflow: used={offset} cap={stubSize}");
@@ -3082,6 +3251,10 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			return 0;
 		}
 
+		Console.Error.WriteLine(
+			$"[LOADER][INFO] VEH trampoline map: base=0x{(ulong)(nuint)ptr:X16} " +
+			$"host_acquire=0x{hostAcquireSpin:X} host_pause=0x{hostPauseOffset:X} " +
+			$"guest_acquire=0x{guestAcquireSpin:X} guest_pause=0x{guestPauseOffset:X}");
 		Console.Error.WriteLine(
 			$"[LOADER][INFO] VEH trampoline built: bytes={offset} native_worker_abort=" +
 			$"{(_workerAbortStub != 0 && _hostRspSlotTlsIndex != uint.MaxValue)}");
@@ -3142,62 +3315,152 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 	private unsafe void PatchTlsPatterns()
 	{
-        // Large Gen5 executables can keep valid code well past the first 32 MiB.
-        // Astro Bot, for example, has an FS:[0] TLS load near +0x70A0000.
-        const ulong MaxScanBytes = 134217728uL;
-		ulong num = _entryPoint;
-		ulong num2 = num + MaxScanBytes;
-		int num3 = 0;
-		int num4 = 0;
-		int num9 = 0;
+		const ulong CanonicalGen5Base = 0x0000000800000000UL;
+		const ulong CanonicalGen5Limit = 0x0000000810000000UL;
+		const ulong MaxForwardScanBytes = 134217728UL;
+
+		int tlsLoadPatchCount = 0;
+		int stackCanaryPatchCount = 0;
+		int tlsStorePatchCount = 0;
 		int sse4aPatchCount = 0;
-		while (num < num2)
+
+		if (_entryPoint > CanonicalGen5Base &&
+			_entryPoint < CanonicalGen5Limit)
 		{
-			if (VirtualQuery((void*)num, out var lpBuffer, (nuint)sizeof(MEMORY_BASIC_INFORMATION64)) == 0 || lpBuffer.RegionSize == 0)
+			PatchTlsRange(
+				CanonicalGen5Base,
+				_entryPoint,
+				ref tlsLoadPatchCount,
+				ref tlsStorePatchCount,
+				ref stackCanaryPatchCount,
+				ref sse4aPatchCount);
+		}
+
+		ulong forwardEnd =
+			ulong.MaxValue - _entryPoint < MaxForwardScanBytes
+				? ulong.MaxValue
+				: _entryPoint + MaxForwardScanBytes;
+
+		PatchTlsRange(
+			_entryPoint,
+			forwardEnd,
+			ref tlsLoadPatchCount,
+			ref tlsStorePatchCount,
+			ref stackCanaryPatchCount,
+			ref sse4aPatchCount);
+
+		// SHARPEMU_TITLE_SCOPED_DBFZ_NATIVE_PATCHES_V73_0_13
+		// These patches contain DBFZ eboot addresses. Signature checks remain as a
+		// second guard, but another title must not be scanned/patched at all.
+		if (KernelMemoryCompatExports.IsConfiguredApplicationTitle("PPSA09790"))
+		{
+			TryPatchDragonBallFighterZNullSharedPtrAssignCompat();
+			TryPatchDragonBallFighterZDerivedNullContainerCompat();
+			TryPatchDragonBallFighterZNullResourceFallback();
+		}
+
+		Console.Error.WriteLine(
+			$"[LOADER][INFO] Patched {tlsLoadPatchCount} TLS loads, " +
+			$"{tlsStorePatchCount} TLS stores, {stackCanaryPatchCount} " +
+			$"stack-canary accesses, {sse4aPatchCount} SSE4a EXTRQ blends");
+	}
+
+	private unsafe void PatchTlsRange(
+		ulong rangeStart,
+		ulong rangeEnd,
+		ref int tlsLoadPatchCount,
+		ref int tlsStorePatchCount,
+		ref int stackCanaryPatchCount,
+		ref int sse4aPatchCount)
+	{
+		if (rangeEnd <= rangeStart)
+		{
+			return;
+		}
+
+		ulong address = rangeStart;
+		while (address < rangeEnd)
+		{
+			if (VirtualQuery(
+					(void*)address,
+					out var memoryInfo,
+					(nuint)sizeof(MEMORY_BASIC_INFORMATION64)) == 0 ||
+				memoryInfo.RegionSize == 0)
 			{
-				num += 4096uL;
+				address += 4096UL;
 				continue;
 			}
-			ulong num5 = Math.Max(num, lpBuffer.BaseAddress);
-			ulong num6 = lpBuffer.BaseAddress + lpBuffer.RegionSize;
-			if (num6 > num2)
+
+			ulong regionStart = Math.Max(address, memoryInfo.BaseAddress);
+			ulong regionEnd =
+				ulong.MaxValue - memoryInfo.BaseAddress < memoryInfo.RegionSize
+					? ulong.MaxValue
+					: memoryInfo.BaseAddress + memoryInfo.RegionSize;
+
+			if (regionEnd > rangeEnd)
 			{
-				num6 = num2;
+				regionEnd = rangeEnd;
 			}
-			uint num7 = lpBuffer.Protect & 0xFF;
-			bool flag = lpBuffer.State == 4096 && (lpBuffer.Protect & PAGE_GUARD) == 0 && num7 != PAGE_NOACCESS;
-			bool flag2 = num7 == PAGE_EXECUTE || num7 == 32 || num7 == 64 || num7 == PAGE_EXECUTE_WRITECOPY;
-			if (flag && flag2 && num6 > num5 + MinTlsPatchInstructionBytes)
+
+			uint protection = memoryInfo.Protect & 0xFF;
+			bool isCommitted =
+				memoryInfo.State == 4096 &&
+				(memoryInfo.Protect & PAGE_GUARD) == 0 &&
+				protection != PAGE_NOACCESS;
+			bool isExecutable =
+				protection == PAGE_EXECUTE ||
+				protection == PAGE_EXECUTE_READ ||
+				protection == PAGE_EXECUTE_READWRITE ||
+				protection == PAGE_EXECUTE_WRITECOPY;
+
+			if (isCommitted &&
+				isExecutable &&
+				regionEnd > regionStart + MinTlsPatchInstructionBytes)
 			{
-				byte* ptr = (byte*)num5;
-				int scanBytes = (int)(num6 - num5);
-				for (int i = 0; i <= scanBytes - MinTlsPatchInstructionBytes; i++)
+				byte* code = (byte*)regionStart;
+				int scanBytes = checked((int)(regionEnd - regionStart));
+				for (int i = 0;
+					i <= scanBytes - MinTlsPatchInstructionBytes;
+					i++)
 				{
-					nint address = (nint)(ptr + i);
+					nint patchAddress = (nint)(code + i);
 					int remainingBytes = scanBytes - i;
-					if (TryPatchTlsLoadInstruction(address, ptr + i, remainingBytes))
+
+					if (TryPatchTlsLoadInstruction(
+							patchAddress,
+							code + i,
+							remainingBytes))
 					{
-						num3++;
+						tlsLoadPatchCount++;
 					}
-					else if (remainingBytes >= 12 && TryPatchTlsImmediateStoreInstruction(address, ptr + i))
+					else if (remainingBytes >= 12 &&
+						TryPatchTlsImmediateStoreInstruction(
+							patchAddress,
+							code + i))
 					{
-						num9++;
+						tlsStorePatchCount++;
 					}
-					else if (remainingBytes >= 12 && TryPatchSse4aExtrqBlend(address, ptr + i))
+					else if (remainingBytes >= 12 &&
+						TryPatchSse4aExtrqBlend(
+							patchAddress,
+							code + i))
 					{
 						sse4aPatchCount++;
 					}
-					else if (TryPatchStackCanaryInstruction(address, ptr + i))
+					else if (TryPatchStackCanaryInstruction(
+							patchAddress,
+							code + i))
 					{
-						num4++;
+						stackCanaryPatchCount++;
 					}
 				}
 			}
-			num = num6 > num ? num6 : num + 4096uL;
-		}
-		Console.Error.WriteLine($"[LOADER][INFO] Patched {num3} TLS loads, {num9} TLS stores, {num4} stack-canary accesses, {sse4aPatchCount} SSE4a EXTRQ blends");
-	}
 
+			address = regionEnd > address
+				? regionEnd
+				: address + 4096UL;
+		}
+	}
 	private unsafe bool TryPatchSse4aExtrqBlend(nint address, byte* source)
 	{
 		// Rosetta does not implement AMD SSE4a EXTRQ. Recognize the compiler's
@@ -3661,6 +3924,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			$"entry=0x{thread.EntryPoint:X16} arg=0x{thread.Argument:X16} priority={thread.Priority} " +
 			$"host_priority={MapGuestThreadPriority(thread.Priority)} affinity=0x{thread.AffinityMask:X}");
 		LoadProgressDiagnostics.ArmIfNorthAudioThread(thread.Name);
+		// SHARPEMU_V46_2_HIGHGRAPHICS_PRERUN_PROBE
+		ProbeDemonThreadStartV462(thread);
 		Pump(creatorContext, "pthread_create");
 		// Pump is suppressed while another cooperative dispatch is active. The
 		// background dispatcher would eventually observe this thread, but an
@@ -4054,6 +4319,33 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			arg0,
 			arg1,
 			0,
+			stackAddress,
+			stackSize,
+			reason,
+			out _,
+			out error);
+	}
+
+	// V61.5.0.7: compatibility overload for callers/interfaces that supply arg2
+	// but do not consume the guest callback return value. Keep one canonical
+	// implementation below and discard the return value here.
+	public bool TryCallGuestFunction(
+		CpuContext callerContext,
+		ulong entryPoint,
+		ulong arg0,
+		ulong arg1,
+		ulong arg2,
+		ulong stackAddress,
+		ulong stackSize,
+		string reason,
+		out string? error)
+	{
+		return TryCallGuestFunction(
+			callerContext,
+			entryPoint,
+			arg0,
+			arg1,
+			arg2,
 			stackAddress,
 			stackSize,
 			reason,
@@ -5346,8 +5638,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 	{
 		// Reserve the top lanes for the emulator itself. A title sized for a
 		// console's dedicated cores will happily keep a worker per guest CPU
-		// spinning on an empty queue — Demon's Souls' job pool runs ~90% busy
-		// doing nothing — and spreading those across every host lane leaves the
+		// spinning on an empty queue â€” Demon's Souls' job pool runs ~90% busy
+		// doing nothing â€” and spreading those across every host lane leaves the
 		// GPU translation and present threads fighting them for a slice. Packing
 		// near-idle spinners tighter costs them almost nothing and buys back
 		// whole cores for the work that actually produces frames.
@@ -5362,7 +5654,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 	/// <summary>
 	/// Host lanes kept away from guest threads. Measured on a 16-lane host with
 	/// Demon's Souls: reserving 0/4/6/8 lanes gave 6.08/6.78/7.20/5.62 fps, so
-	/// the useful range is a bit over a third of the machine — too few and the
+	/// the useful range is a bit over a third of the machine â€” too few and the
 	/// emulator is crowded out, too many and the guest cannot make progress.
 	/// </summary>
 	private static readonly int EmulatorReservedLanes =
@@ -5785,22 +6077,10 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			try
 			{
 				// TBB execute-AV recover needs native-worker TLS (eligible/done).
-				// Other guests stay on CallNativeEntry — full native-worker migration
+				// Other guests stay on CallNativeEntry â€” full native-worker migration
 				// increased splash hangs / UnmanagedCallersOnly (tLTN/tLTO).
-				int nativeReturn;
-				if (name == "tbb_thead")
-				{
-					nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true);
-				}
-				else
-				{
-					if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot))
-					{
-						reason = "failed to bind host-RSP storage for guest thread stub";
-						return GuestNativeCallExitReason.Exception;
-					}
-					nativeReturn = CallNativeEntry(ptr);
-				}
+				int nativeReturn; 				if (RequiresNativeGuestWorker(name)) 				{ 				    nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true); 				} 				else 				{ 				    if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot)) 				    { 				        reason = "failed to bind host-RSP storage for guest thread stub"; 				        return GuestNativeCallExitReason.Exception; 				    } 				    // SHARPEMU_V73_20_4_1_DEDICATED_GUEST_EXECUTOR_CALL
+					nativeReturn = RunGuestEntryStubDedicated(ptr, hostRspSlot); 				}
 				if (ActiveGuestThreadYieldRequested)
 				{
 					reason = ActiveGuestThreadYieldReason ?? "guest thread blocked";
@@ -5950,20 +6230,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			ActiveGuestThreadYieldReason = null;
 			try
 			{
-				int nativeReturn;
-				if (name == "tbb_thead")
-				{
-					nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true);
-				}
-				else
-				{
-					if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot))
-					{
-						reason = "failed to bind host-RSP storage for guest continuation stub";
-						return GuestNativeCallExitReason.Exception;
-					}
-					nativeReturn = CallNativeEntry(ptr);
-				}
+				int nativeReturn; 				if (RequiresNativeGuestWorker(name)) 				{ 				    nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true); 				} 				else 				{ 				    if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot)) 				    { 				        reason = "failed to bind host-RSP storage for guest continuation stub"; 				        return GuestNativeCallExitReason.Exception; 				    } 				    // SHARPEMU_V73_20_4_1_DEDICATED_GUEST_EXECUTOR_CALL
+					nativeReturn = RunGuestEntryStubDedicated(ptr, hostRspSlot); 				}
 				if (ActiveGuestThreadYieldRequested)
 				{
 					reason = ActiveGuestThreadYieldReason ?? "guest thread blocked";
@@ -6110,7 +6378,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		}
 	}
 
-	private unsafe bool ExecuteEntry(CpuContext context, ulong entryPoint, out OrbisGen2Result result)
+	private unsafe bool ExecuteEntry(CpuContext context, ulong entryPoint, bool ignoreGuestReturnValue, out OrbisGen2Result result)
 	{
 		Console.Error.WriteLine($"[LOADER][INFO] ExecuteEntry starting at 0x{entryPoint:X16}");
 		Console.Error.WriteLine($"[LOADER][INFO] RSP=0x{context[CpuRegister.Rsp]:X16}, RDI=0x{context[CpuRegister.Rdi]:X16}");
@@ -6291,9 +6559,16 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			StartStallWatchdog();
 			StartReadyThreadDispatcher();
 			int num6 = -1;
+			bool guestCallCompleted = false;
 			try
 			{
-				num6 = CallNativeEntry(ptr);
+				Volatile.Write(ref _entryHostThreadId, unchecked((int)GetCurrentThreadId()));
+				Volatile.Write(ref _entryManagedThreadId, Environment.CurrentManagedThreadId);
+								// SHARPEMU_V74_0_1_TOP_LEVEL_NATIVE_EXECUTION
+				num6 = RunTopLevelGuestEntryStub(context, ptr, num2);
+				guestCallCompleted = true;
+				Volatile.Write(ref _entryHostThreadId, 0);
+				Volatile.Write(ref _entryManagedThreadId, 0);
 				Console.Error.WriteLine($"[LOADER][INFO] Guest returned: {num6}");
 				// A host stop has already invalidated the session. Draining guest
 				// continuations here can re-enter a blocked HLE call after its owner
@@ -6329,8 +6604,13 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 				Console.Error.WriteLine("[LOADER][ERROR] " + LastError);
 				return false;
 			}
-			if (num6 == 0)
+			if (num6 == 0 || (guestCallCompleted && ignoreGuestReturnValue))
 			{
+				if (num6 != 0)
+				{
+					Console.Error.WriteLine(
+						$"[LOADER][INFO] Guest returned non-zero ({num6}) from ELF initializer; return value ignored.");
+				}
 				result = OrbisGen2Result.ORBIS_GEN2_OK;
 				LastError = null;
 				return true;
@@ -6457,11 +6737,19 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 					MarkExecutionProgress();
 					continue;
 				}
+				if (HasNativeGuestExecutionProgress(out var nativeProgressDetail))
+				{
+					Console.Error.WriteLine(
+						$"[LOADER][WARN] No import progress for {stallWatchdogSeconds}s, but native guest execution is advancing ({nativeProgressDetail}); continuing.");
+					Console.Error.Flush();
+					MarkExecutionProgress();
+					continue;
+				}
 				if (Interlocked.Exchange(ref _stallWatchdogTriggered, 1) != 0)
 				{
 					continue;
 				}
-				LastError = $"Execution stalled with no import progress for {stallWatchdogSeconds}s (imports={Volatile.Read(ref _importDispatchCount)}).";
+				LastError = $"Execution stalled with no guest execution progress for {stallWatchdogSeconds}s (imports={Volatile.Read(ref _importDispatchCount)}).";
 				Console.Error.WriteLine("[LOADER][ERROR] " + LastError);
 				LogStallWatchdogSnapshot();
 				Console.Error.Flush();
@@ -6524,6 +6812,124 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		return false;
 	}
 
+	private bool HasNativeGuestExecutionProgress(out string detail)
+	{
+		detail = "no-runnable-native-threads";
+		if (!OperatingSystem.IsWindows())
+		{
+			return false;
+		}
+
+		var threadIds = new List<int>(16);
+		var entryHostThreadId = Volatile.Read(ref _entryHostThreadId);
+		if (entryHostThreadId != 0)
+		{
+			threadIds.Add(entryHostThreadId);
+		}
+
+		foreach (var thread in SnapshotGuestThreads())
+		{
+			if (thread.State != GuestThreadRunState.Running)
+			{
+				continue;
+			}
+
+			var hostThreadId = Volatile.Read(ref thread.HostThreadId);
+			if (hostThreadId != 0 && !threadIds.Contains(hostThreadId))
+			{
+				threadIds.Add(hostThreadId);
+			}
+		}
+
+		if (threadIds.Count == 0)
+		{
+			return false;
+		}
+
+		const int sampleCount = 8;
+		const int sampleDelayMs = 35;
+		var samples = new Dictionary<int, List<ulong>>(threadIds.Count);
+		foreach (var threadId in threadIds)
+		{
+			samples[threadId] = new List<ulong>(sampleCount);
+		}
+
+		for (var sample = 0; sample < sampleCount; sample++)
+		{
+			foreach (var threadId in threadIds)
+			{
+				if (TryCaptureHostThreadContext(threadId, out var context))
+				{
+					samples[threadId].Add(context.Rip);
+				}
+			}
+
+			if (sample + 1 < sampleCount)
+			{
+				Thread.Sleep(sampleDelayMs);
+			}
+		}
+
+		var sampled = 0;
+		var moved = 0;
+		var stationary = 0;
+		var shortCycle = 0;
+		var productive = 0;
+		var diagnostics = new List<string>(threadIds.Count);
+		foreach (var pair in samples)
+		{
+			var rips = pair.Value;
+			if (rips.Count < 2)
+			{
+				continue;
+			}
+
+			sampled++;
+			var distinct = new HashSet<ulong>(rips);
+			var minRip = rips.Min();
+			var maxRip = rips.Max();
+			var span = maxRip >= minRip ? maxRip - minRip : ulong.MaxValue;
+			string classification;
+			if (distinct.Count == 1)
+			{
+				stationary++;
+				classification = "stationary";
+			}
+			else
+			{
+				moved++;
+				if (distinct.Count <= 4 && span <= 0x100)
+				{
+					shortCycle++;
+					classification = "short-cycle";
+				}
+				else
+				{
+					productive++;
+					classification = "productive";
+				}
+			}
+
+			diagnostics.Add(
+				$"tid={pair.Key}:{classification}:distinct={distinct.Count}:span=0x{span:X}:rip=0x{rips[0]:X16}->0x{rips[^1]:X16}");
+		}
+
+		if (sampled == 0)
+		{
+			detail = "host-context-unavailable";
+			return false;
+		}
+
+		detail = $"threads_moved={moved}/{sampled} productive={productive} short_cycle={shortCycle} stationary={stationary}";
+		Console.Error.WriteLine($"[LOADER][SPIN] Native execution classification: {detail}");
+		foreach (var diagnostic in diagnostics)
+		{
+			Console.Error.WriteLine($"[LOADER][SPIN] {diagnostic}");
+		}
+
+		return moved > 0;
+	}
+
 	private void StopStallWatchdog()
 	{
 		_stallWatchdogStop = true;
@@ -6549,8 +6955,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 	// guest thread calls Pump (which happens inside blocking HLE primitives:
 	// waits, usleep, pthread_create, entry_return). That leaves a starvation
 	// hole: a guest thread that spins on a non-blocking HLE call (e.g.
-	// sceAudioOutOutput) never pumps, so any thread that was made Ready — for
-	// example a job worker woken by sceKernelSetEventFlag — sits in the ready
+	// sceAudioOutOutput) never pumps, so any thread that was made Ready â€” for
+	// example a job worker woken by sceKernelSetEventFlag â€” sits in the ready
 	// queue forever. Import progress keeps advancing (the spin), so the stall
 	// watchdog never fires either, and the whole game deadlocks with 0 draws.
 	//
@@ -6760,6 +7166,72 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 				Console.Error.WriteLine($"[LOADER][ERROR] Stall stack: [rsp]=0x{value:X16} [rsp+8]=0x{value2:X16}");
 			}
 
+			var entryHostThreadId = Volatile.Read(ref _entryHostThreadId);
+			var entryManagedThreadId = Volatile.Read(ref _entryManagedThreadId);
+			if (entryHostThreadId != 0)
+			{
+				if (TryCaptureHostThreadContext(entryHostThreadId, out var entryHostContext))
+				{
+					Console.Error.WriteLine(
+						$"[LOADER][ERROR] Stall entry-thread: managed={entryManagedThreadId} " +
+						$"host_tid={entryHostThreadId} host_rip=0x{entryHostContext.Rip:X16} " +
+						$"host_rsp=0x{entryHostContext.Rsp:X16} host_rbp=0x{entryHostContext.Rbp:X16} " +
+						$"host_rax=0x{entryHostContext.Rax:X16} host_rbx=0x{entryHostContext.Rbx:X16} " +
+						$"host_rcx=0x{entryHostContext.Rcx:X16} host_rdx=0x{entryHostContext.Rdx:X16}");
+
+					Span<byte> entryBytes = stackalloc byte[32];
+					if (cpuContext.Memory.TryRead(entryHostContext.Rip, entryBytes))
+					{
+						Console.Error.WriteLine(
+							$"[LOADER][ERROR] Stall entry-thread guest bytes @host_rip: " +
+							BitConverter.ToString(entryBytes.ToArray()).Replace("-", " "));
+					}
+				}
+				else
+				{
+					Console.Error.WriteLine(
+						$"[LOADER][ERROR] Stall entry-thread: managed={entryManagedThreadId} " +
+						$"host_tid={entryHostThreadId} host_ctx=unavailable");
+				}
+			}
+
+			if (_vehManagedEntryLock != 0)
+			{
+				var vehOwnerRaw = *(nint*)_vehManagedEntryLock;
+				var vehDepth = *(int*)(_vehManagedEntryLock + sizeof(nint));
+				var vehOwnerTid = unchecked((int)(nuint)vehOwnerRaw);
+				Console.Error.WriteLine(
+					$"[LOADER][ERROR] VEH lock state: address=0x{(ulong)(nuint)_vehManagedEntryLock:X16} " +
+					$"owner_tid={vehOwnerTid} depth={vehDepth} entry_tid={entryHostThreadId}");
+
+				if (vehOwnerTid != 0 &&
+					vehOwnerTid != entryHostThreadId &&
+					TryCaptureExtendedHostThreadContext(
+						vehOwnerTid,
+						out var vehOwnerContext))
+				{
+					Console.Error.WriteLine(
+						$"[LOADER][ERROR] VEH lock owner-thread: host_tid={vehOwnerTid} " +
+						$"host_rip=0x{vehOwnerContext.Rip:X16} host_rsp=0x{vehOwnerContext.Rsp:X16} " +
+						$"host_rbp=0x{vehOwnerContext.Rbp:X16} host_rax=0x{vehOwnerContext.Rax:X16} " +
+						$"host_rbx=0x{vehOwnerContext.Rbx:X16} host_rcx=0x{vehOwnerContext.Rcx:X16} " +
+						$"host_rdx=0x{vehOwnerContext.Rdx:X16} host_r9=0x{vehOwnerContext.R9:X16} " +
+						$"host_r10=0x{vehOwnerContext.R10:X16} host_r12=0x{vehOwnerContext.R12:X16} " +
+						$"host_r13=0x{vehOwnerContext.R13:X16}");
+				}
+			}
+
+			if (entryHostThreadId != 0 &&
+				TryCaptureExtendedHostThreadContext(
+					entryHostThreadId,
+					out var entryStubContext))
+			{
+				Console.Error.WriteLine(
+					$"[LOADER][ERROR] Stall entry-thread extended: host_tid={entryHostThreadId} " +
+					$"host_r9=0x{entryStubContext.R9:X16} host_r10=0x{entryStubContext.R10:X16} " +
+					$"host_r12=0x{entryStubContext.R12:X16} host_r13=0x{entryStubContext.R13:X16}");
+			}
+
 			var threads = SnapshotGuestThreads();
 			if (threads.Length != 0)
 			{
@@ -6797,6 +7269,95 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		}
 		catch
 		{
+		}
+	}
+
+	private readonly record struct ExtendedHostThreadContextSnapshot(
+		bool IsValid,
+		ulong Rip,
+		ulong Rsp,
+		ulong Rbp,
+		ulong Rax,
+		ulong Rbx,
+		ulong Rcx,
+		ulong Rdx,
+		ulong R9,
+		ulong R10,
+		ulong R12,
+		ulong R13,
+		// V73.11 diagnostic: the Demon's Souls generic job-wait helper keeps
+		// the compared target in R14 and the actual wait-value pointer in R15.
+		ulong R14,
+		ulong R15);
+
+	private unsafe static bool TryCaptureExtendedHostThreadContext(
+		int hostThreadId,
+		out ExtendedHostThreadContextSnapshot snapshot)
+	{
+		snapshot = default;
+		if (hostThreadId == 0 ||
+			unchecked((uint)hostThreadId) == GetCurrentThreadId())
+		{
+			return false;
+		}
+
+		var threadHandle = OpenThread(
+			ThreadGetContext | ThreadSuspendResume,
+			false,
+			unchecked((uint)hostThreadId));
+		if (threadHandle == 0)
+		{
+			return false;
+		}
+
+		void* contextRecord = null;
+		var suspended = false;
+		try
+		{
+			if (SuspendThread(threadHandle) == uint.MaxValue)
+			{
+				return false;
+			}
+
+			suspended = true;
+			contextRecord = NativeMemory.AllocZeroed((nuint)Win64ContextSize);
+			WriteCtxU32(
+				contextRecord,
+				Win64ContextFlagsOffset,
+				ContextAmd64ControlInteger);
+			if (!GetThreadContext(threadHandle, contextRecord))
+			{
+				return false;
+			}
+
+			snapshot = new ExtendedHostThreadContextSnapshot(
+				true,
+				ReadCtxU64(contextRecord, CTX_RIP),
+				ReadCtxU64(contextRecord, CTX_RSP),
+				ReadCtxU64(contextRecord, CTX_RBP),
+				ReadCtxU64(contextRecord, CTX_RAX),
+				ReadCtxU64(contextRecord, CTX_RBX),
+				ReadCtxU64(contextRecord, CTX_RCX),
+				ReadCtxU64(contextRecord, CTX_RDX),
+				ReadCtxU64(contextRecord, CTX_R9),
+				ReadCtxU64(contextRecord, CTX_R10),
+				ReadCtxU64(contextRecord, CTX_R12),
+				ReadCtxU64(contextRecord, CTX_R13),
+				ReadCtxU64(contextRecord, CTX_R14),
+				ReadCtxU64(contextRecord, CTX_R15));
+			return true;
+		}
+		finally
+		{
+			if (contextRecord != null)
+			{
+				NativeMemory.Free(contextRecord);
+			}
+			if (suspended)
+			{
+				_ = ResumeThread(threadHandle);
+			}
+			_ = CloseHandle(threadHandle);
 		}
 	}
 
@@ -7207,3 +7768,6 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		return result;
 	}
 }
+
+
+

@@ -53,12 +53,50 @@ internal sealed class MediaFramePlayback : IDisposable
         FramesPerSecondNumerator = decoder.FramesPerSecondNumerator;
         FramesPerSecondDenominator = decoder.FramesPerSecondDenominator;
 
+        // V61.19.0_NIHAV_WALLCLOCK_DEFAULT
+        // A host-decoded NIHAV movie does not own the global guest AudioOut
+        // clock. Following that unrelated clock made Demon's Souls video slow
+        // down whenever guest audio advanced irregularly. Explicit
+        // SHARPEMU_MOVIE_CLOCK=audio still opts back into audio-clock pacing.
+        var configuredClock = Environment.GetEnvironmentVariable("SHARPEMU_MOVIE_CLOCK");
+        _followGuestAudioClock =
+            string.Equals(configuredClock, "audio", StringComparison.OrdinalIgnoreCase) ||
+            (string.IsNullOrWhiteSpace(configuredClock) && decoder is not NihavBink2Decoder);
+
         var frameBytes = checked((int)((ulong)Width * Height * 4));
         for (var index = 0; index < BufferCount; index++)
         {
             _freeBuffers.Enqueue(GC.AllocateUninitializedArray<byte>(frameBytes));
         }
 
+        // SHARPEMU_V73_19_1_NIHAV_FIRST_FRAME_PRIME 
+        // Nihav TryOpen already waits for the streaming process to produce a 
+        // complete first frame. Publish one frame synchronously before the 
+        // presenter can observe an empty playback queue. 
+        if (decoder is NihavBink2Decoder && _freeBuffers.Count > 0) 
+        { 
+            var firstBuffer = _freeBuffers.Dequeue(); 
+            try 
+            { 
+                if (_decoder.TryDecodeNextFrame(firstBuffer)) 
+                { 
+                    var firstIndex = _nextDecodedFrameIndex++; 
+                    _decodedFrames.Enqueue(new DecodedFrame(firstIndex, firstBuffer)); 
+                    Console.Error.WriteLine( 
+                        $"[LOADER][INFO] bink2.first_frame_primed " + 
+                        $"size={Width}x{Height} frame={firstIndex}"); 
+                } 
+                else 
+                { 
+                    _freeBuffers.Enqueue(firstBuffer); 
+                } 
+            } 
+            catch 
+            { 
+                _freeBuffers.Enqueue(firstBuffer); 
+                throw; 
+            } 
+        } 
         _decoderThread = new Thread(DecodeLoop)
         {
             IsBackground = true,
@@ -194,10 +232,7 @@ internal sealed class MediaFramePlayback : IDisposable
     /// not advance at wall-clock rate on a slow frame. Following the audio keeps
     /// the two together; SHARPEMU_MOVIE_CLOCK=wall restores the old behaviour.
     /// </summary>
-    private static readonly bool _followGuestAudioClock = !string.Equals(
-        Environment.GetEnvironmentVariable("SHARPEMU_MOVIE_CLOCK"),
-        "wall",
-        StringComparison.OrdinalIgnoreCase);
+    private readonly bool _followGuestAudioClock;
 
     /// <summary>
     /// Seconds of playback elapsed on the movie's time base. Falls back to wall

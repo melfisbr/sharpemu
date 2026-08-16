@@ -1,0 +1,19 @@
+﻿RAD PE EXPORT AUDIT
+RAD_ROOT=C:\Program Files (x86)\RADVideo
+PE_FILES=5
+EXPORT_TOOLS_FOUND=
+
+===== C:\Program Files (x86)\RADVideo\binkplay.exe =====
+[no PE export tool available on host]
+
+===== C:\Program Files (x86)\RADVideo\radvideo32.exe =====
+[no PE export tool available on host]
+
+===== C:\Program Files (x86)\RADVideo\radvideo64.exe =====
+[no PE export tool available on host]
+
+===== C:\Program Files (x86)\RADVideo\smackplw.exe =====
+[no PE export tool available on host]
+
+===== C:\Program Files (x86)\RADVideo\uninstall.exe =====
+[no PE export tool available on host]

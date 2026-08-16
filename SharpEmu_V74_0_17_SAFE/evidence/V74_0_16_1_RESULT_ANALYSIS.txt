@@ -1,0 +1,25 @@
+V74.0.16.1 result analysis
+==========================
+main_loop_game_seconds=31.8781
+ResourcePool::GatherResourceFileInfo()=42.1034s
+natural_movie_hits=0
+array_singleflight owner/reuse=1/15 (saved about 4800 MB duplicate array snapshots)
+peak working/private about 9178/14155 MB
+max alloc2s about 1546 MB
+DeviceLost=0
+heap corruption=0
+
+DCC history parser in the prior runner undercounted the revision suffix.
+Actual stderr count:
+  [DCC_HISTORY] seed = 64
+  [DCC_HISTORY] hit  = 0
+Therefore the V74.0.16.1 history is disabled for this test instead of expanded.
+
+The run also reached dbfz.import_progress.v1892 import=16,777,216 and emitted the
+maximum 32 pthread_opaque_owner_sync trace samples. The opaque-owner shadow sync
+was introduced as SHARPEMU_DBFZ_PTHREAD_OPAQUE_OWNER_SYNC_V1_4_5 and performs
+extra guest-memory work after adaptive mutex operations.
+
+Historical full AGC traces show labels such as 0x456CFF580 and 0x456CFF4C0 are
+later produced by dcb.graphics WRITE_DATA and the waiting compute queues resume.
+V74.0.17 therefore does NOT fabricate WAIT values or bypass WAIT_REG_MEM.

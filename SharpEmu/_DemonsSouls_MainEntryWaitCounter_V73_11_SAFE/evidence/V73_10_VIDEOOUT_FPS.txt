@@ -1,0 +1,5 @@
+[LOADER][PERF] videoout submitted_fps=0,0 presented_fps=0,1 draws=0 draw_ms=0 pipelines=0 spirv=0
+[LOADER][PERF] videoout submitted_fps=0,0 presented_fps=0,4 draws=0 draw_ms=0 pipelines=0 spirv=0
+[LOADER][PERF] videoout submitted_fps=0,0 presented_fps=17,4 draws=0 draw_ms=0 pipelines=0 spirv=0
+[LOADER][PERF] videoout submitted_fps=0,0 presented_fps=14,0 draws=0 draw_ms=0 pipelines=0 spirv=0
+[LOADER][PERF] videoout submitted_fps=0,0 presented_fps=15,3 draws=0 draw_ms=0 pipelines=0 spirv=0

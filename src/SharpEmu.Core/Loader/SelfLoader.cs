@@ -35,6 +35,7 @@ public sealed class SelfLoader : ISelfLoader
     private const uint SectionTypeRela = 4;
 
     private const long DtNull = 0;
+    private const long DtNeeded = 0x01;
     private const long DtPltRelSize = 0x02;
     private const long DtPltGot = 0x03;
     private const long DtStrTab = 0x05;
@@ -52,6 +53,9 @@ public sealed class SelfLoader : ISelfLoader
     private const long DtSceNeededModule = 0x6100000F;
     private const long DtSceExportLib = 0x61000013;
     private const long DtSceImportLib = 0x61000015;
+    // V73.1.1: Gen5 PS5 module/library identity tags observed in SceDynExec/SceDynamic PT_DYNAMIC.
+    private const long DtSceNeededModuleGen5 = 0x61000045;
+    private const long DtSceImportLibGen5 = 0x61000049;
     private const long DtSceJmpRel = 0x61000029;
     private const long DtScePltRelSize = 0x6100002D;
     private const long DtSceRela = 0x6100002F;
@@ -183,6 +187,8 @@ public sealed class SelfLoader : ISelfLoader
         ValidateElfHeader(elfHeader);
 
         var programHeaders = ParseProgramHeaders(imageData, loadContext, elfHeader);
+        ReportElfLayout(elfHeader, programHeaders);
+
         var hasTlsSegment = TryGetProgramHeader(programHeaders, ProgramHeaderType.Tls, out var processTlsHeader, out _) &&
             processTlsHeader.MemorySize != 0;
         var tlsModuleId = hasTlsSegment
@@ -193,9 +199,16 @@ public sealed class SelfLoader : ISelfLoader
             $"assigned={tlsModuleId} has_pt_tls={hasTlsSegment}");
 
         var totalImageSize = CalculateTotalImageSize(programHeaders);
+        var requiredLoadAlignment = CalculateRequiredLoadAlignment(programHeaders);
         Console.WriteLine($"Total image size needed: 0x{totalImageSize:X} ({totalImageSize} bytes)");
+        Console.Error.WriteLine($"[LOADER][ELF] required_load_alignment=0x{requiredLoadAlignment:X}");
         var isNextGen = elfHeader.AbiVersion == 2;
-        var imageBase = DetermineRequestedImageBase(virtualMemory, totalImageSize, isNextGen, clearVirtualMemory);
+        var imageBase = DetermineRequestedImageBase(
+            virtualMemory,
+            totalImageSize,
+            requiredLoadAlignment,
+            isNextGen,
+            clearVirtualMemory);
 
         if (virtualMemory is PhysicalVirtualMemory physicalVm)
         {
@@ -233,7 +246,13 @@ public sealed class SelfLoader : ISelfLoader
 
                 imageBase = allocatedBase;
             }
-            else if (!TryAllocateAdditionalImageAtExact(physicalVm, imageBase, totalImageSize, isNextGen, out imageBase))
+            else if (!TryAllocateAdditionalImageAtExact(
+                         physicalVm,
+                         imageBase,
+                         totalImageSize,
+                         requiredLoadAlignment,
+                         isNextGen,
+                         out imageBase))
             {
                 var allocatedBase = physicalVm.AllocateAt(imageBase, totalImageSize, executable: true);
                 if (allocatedBase != imageBase)
@@ -292,8 +311,16 @@ public sealed class SelfLoader : ISelfLoader
             out var initFunctionEntryPoint,
             out var preInitializerFunctions,
             out var initializerFunctions);
+        var neededModuleNames = CollectNeededModuleNames(
+            imageData,
+            loadContext,
+            programHeaders,
+            virtualMemory,
+            imageBase);
         var procParamAddress = ResolveProcParamAddress(programHeaders, imageBase);
+        var moduleParamAddress = ResolveModuleParamAddress(programHeaders, imageBase);
 
+        Console.WriteLine($"[LOADER] ELF type: 0x{elfHeader.Type:X4} ({elfHeader.ImageType})");
         Console.WriteLine($"[LOADER] ELF e_entry: 0x{elfHeader.EntryPoint:X16}");
         Console.WriteLine($"[LOADER] Generation: {(isNextGen ? "Gen5 (PS5)" : "Gen4 (PS4)")}");
         Console.WriteLine($"[LOADER] Using image base: 0x{imageBase:X16}");
@@ -301,6 +328,11 @@ public sealed class SelfLoader : ISelfLoader
         if (procParamAddress != 0)
         {
             Console.WriteLine($"[LOADER] ProcParam: 0x{procParamAddress:X16}");
+        }
+
+        if (moduleParamAddress != 0)
+        {
+            Console.WriteLine($"[LOADER] ModuleParam: 0x{moduleParamAddress:X16}");
         }
 
         int count = ((IReadOnlyList<ProgramHeader>)programHeaders).Count;
@@ -327,9 +359,11 @@ public sealed class SelfLoader : ISelfLoader
             importedRelocations,
             preInitializerFunctions,
             initializerFunctions,
+            neededModuleNames,
             initFunctionEntryPoint,
             imageBase,
             procParamAddress,
+            moduleParamAddress,
             applicationInfo.Title,
             applicationInfo.TitleId,
             applicationInfo.Version,
@@ -454,6 +488,30 @@ public sealed class SelfLoader : ISelfLoader
         return headers;
     }
 
+    private static void ReportElfLayout(
+        ElfHeader elfHeader,
+        IReadOnlyList<ProgramHeader> programHeaders)
+    {
+        Console.Error.WriteLine(
+            $"[LOADER][ELF] type=0x{elfHeader.Type:X4} ({elfHeader.ImageType}) " +
+            $"machine=0x{elfHeader.Machine:X4} abi={elfHeader.Abi} abi_ver={elfHeader.AbiVersion} " +
+            $"phnum={programHeaders.Count}");
+
+        for (var index = 0; index < programHeaders.Count; index++)
+        {
+            var header = programHeaders[index];
+            var typeName = Enum.IsDefined(typeof(ProgramHeaderType), header.Type)
+                ? header.HeaderType.ToString()
+                : $"Unknown_0x{header.Type:X8}";
+
+            Console.Error.WriteLine(
+                $"[LOADER][ELF][PH] index={index} type=0x{header.Type:X8}({typeName}) " +
+                $"flags=0x{header.RawFlags:X8} off=0x{header.Offset:X} " +
+                $"vaddr=0x{header.VirtualAddress:X} filesz=0x{header.FileSize:X} " +
+                $"memsz=0x{header.MemorySize:X} align=0x{header.Alignment:X}");
+        }
+    }
+
     private static void MapLoadSegments(
         ReadOnlySpan<byte> imageData,
         LoadContext loadContext,
@@ -521,6 +579,24 @@ public sealed class SelfLoader : ISelfLoader
         {
             var header = programHeaders[index];
             if (header.HeaderType != ProgramHeaderType.SceProcParam)
+            {
+                continue;
+            }
+
+            return header.VirtualAddress + imageBase;
+        }
+
+        return 0;
+    }
+
+    private static ulong ResolveModuleParamAddress(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        ulong imageBase)
+    {
+        for (var index = 0; index < programHeaders.Count; index++)
+        {
+            var header = programHeaders[index];
+            if (header.HeaderType != ProgramHeaderType.SceModuleParam)
             {
                 continue;
             }
@@ -1334,24 +1410,31 @@ public sealed class SelfLoader : ISelfLoader
         var dynamicInfo = ParseDynamicInfo(dynamicTable);
         var preInitializers = new List<ulong>(4);
         var initializers = new List<ulong>(8);
-        initFunctionEntryPoint = ResolveMappedAddressOrFallback(virtualMemory, dynamicInfo.InitOffset, imageBase);
-        if (initFunctionEntryPoint < 0x10000)
-        {
-            initFunctionEntryPoint = 0;
-        }
+        initFunctionEntryPoint = ResolveExecutableInitializerAddress(
+            programHeaders,
+            virtualMemory,
+            dynamicInfo.InitOffset,
+            imageBase);
 
         AppendInitializerArrayEntries(
             preInitializers,
             imageData,
+            programHeaders,
             virtualMemory,
             imageBase,
             dynamicInfo.PreInitArrayOffset,
             dynamicInfo.PreInitArraySize);
 
-        AppendResolvedInitializer(initializers, dynamicInfo.InitOffset, virtualMemory, imageBase);
+        AppendResolvedInitializer(
+            initializers,
+            programHeaders,
+            dynamicInfo.InitOffset,
+            virtualMemory,
+            imageBase);
         AppendInitializerArrayEntries(
             initializers,
             imageData,
+            programHeaders,
             virtualMemory,
             imageBase,
             dynamicInfo.InitArrayOffset,
@@ -1377,6 +1460,7 @@ public sealed class SelfLoader : ISelfLoader
     private static void AppendInitializerArrayEntries(
         ICollection<ulong> destination,
         ReadOnlySpan<byte> imageData,
+        IReadOnlyList<ProgramHeader> programHeaders,
         IVirtualMemory virtualMemory,
         ulong imageBase,
         ulong arrayOffset,
@@ -1397,18 +1481,23 @@ public sealed class SelfLoader : ISelfLoader
         {
             var entryOffset = i * sizeof(ulong);
             var entryAddress = BinaryPrimitives.ReadUInt64LittleEndian(arrayBytes.AsSpan(entryOffset, sizeof(ulong)));
-            AppendResolvedInitializer(destination, entryAddress, virtualMemory, imageBase);
+            AppendResolvedInitializer(destination, programHeaders, entryAddress, virtualMemory, imageBase);
         }
     }
 
     private static void AppendResolvedInitializer(
         ICollection<ulong> destination,
+        IReadOnlyList<ProgramHeader> programHeaders,
         ulong functionAddress,
         IVirtualMemory virtualMemory,
         ulong imageBase)
     {
-        var resolvedAddress = ResolveMappedAddressOrFallback(virtualMemory, functionAddress, imageBase);
-        if (resolvedAddress < 0x10000)
+        var resolvedAddress = ResolveExecutableInitializerAddress(
+            programHeaders,
+            virtualMemory,
+            functionAddress,
+            imageBase);
+        if (resolvedAddress == 0)
         {
             return;
         }
@@ -1422,6 +1511,158 @@ public sealed class SelfLoader : ISelfLoader
         }
 
         destination.Add(resolvedAddress);
+    }
+
+    private static ulong ResolveExecutableInitializerAddress(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        IVirtualMemory virtualMemory,
+        ulong functionAddress,
+        ulong imageBase)
+    {
+        // Init arrays may contain null / all-ones sentinels. Never let the
+        // generic address fallback turn them into arbitrary guest control flow.
+        if (functionAddress == 0 || functionAddress == ulong.MaxValue)
+        {
+            return 0;
+        }
+
+        var resolvedAddress = 0UL;
+        if (!TryResolveMappedAddress(virtualMemory, functionAddress, imageBase, 1, out resolvedAddress) ||
+            resolvedAddress < 0x10000 ||
+            !IsAddressInExecutableLoadSegment(programHeaders, imageBase, resolvedAddress))
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][WARN] initializer target rejected: raw=0x{functionAddress:X16} resolved=0x{resolvedAddress:X16}");
+            return 0;
+        }
+
+        return resolvedAddress;
+    }
+
+    private static bool IsAddressInExecutableLoadSegment(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        ulong imageBase,
+        ulong address)
+    {
+        for (var i = 0; i < programHeaders.Count; i++)
+        {
+            var header = programHeaders[i];
+            if (header.HeaderType != ProgramHeaderType.Load ||
+                (header.Flags & ProgramHeaderFlags.Execute) == 0 ||
+                header.MemorySize == 0 ||
+                header.VirtualAddress > ulong.MaxValue - imageBase)
+            {
+                continue;
+            }
+
+            var start = imageBase + header.VirtualAddress;
+            if (header.MemorySize > ulong.MaxValue - start)
+            {
+                continue;
+            }
+
+            var end = start + header.MemorySize;
+            if (address >= start && address < end)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> CollectNeededModuleNames(
+        ReadOnlySpan<byte> imageData,
+        LoadContext loadContext,
+        IReadOnlyList<ProgramHeader> programHeaders,
+        IVirtualMemory virtualMemory,
+        ulong imageBase)
+    {
+        if (!TryGetProgramHeader(programHeaders, ProgramHeaderType.Dynamic, out var dynamicHeader, out var dynamicHeaderIndex) ||
+            dynamicHeader.FileSize == 0 ||
+            !TryLoadDynamicTableBytes(
+                imageData,
+                loadContext,
+                virtualMemory,
+                imageBase,
+                dynamicHeader,
+                dynamicHeaderIndex,
+                out var dynamicTable))
+        {
+            return Array.Empty<string>();
+        }
+
+        var dynamicInfo = ParseDynamicInfo(dynamicTable);
+        if (dynamicInfo.StrTabOffset == 0 ||
+            dynamicInfo.StrTabSize == 0 ||
+            !TryLoadTableBytes(
+                imageData,
+                virtualMemory,
+                imageBase,
+                dynamicInfo.StrTabOffset,
+                dynamicInfo.StrTabSize,
+                out var stringTableBytes))
+        {
+            return Array.Empty<string>();
+        }
+
+        var stringTable = stringTableBytes.AsSpan();
+        var names = new List<string>(8);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var offset = 0;
+             offset + DynamicEntrySize <= dynamicTable.Length;
+             offset += DynamicEntrySize)
+        {
+            var tag = BinaryPrimitives.ReadInt64LittleEndian(
+                dynamicTable.Slice(offset, sizeof(long)));
+            var value = BinaryPrimitives.ReadUInt64LittleEndian(
+                dynamicTable.Slice(offset + sizeof(long), sizeof(ulong)));
+
+            if (tag == DtNull)
+            {
+                break;
+            }
+
+            string name;
+            if (tag == DtNeeded)
+            {
+                if (value > uint.MaxValue ||
+                    !TryReadNullTerminatedAscii(stringTable, unchecked((uint)value), out name))
+                {
+                    continue;
+                }
+            }
+            else if (tag == DtSceNeededModule || tag == DtSceNeededModuleGen5)
+            {
+                if (!TryDecodeSceMetadataName(
+                        stringTable,
+                        value,
+                        out _,
+                        out name,
+                        out _))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(name) && seen.Add(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        if (names.Count != 0)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER] Needed modules discovered: {string.Join(", ", names)}");
+        }
+
+        return names.Count == 0 ? Array.Empty<string>() : names;
     }
 
     private static IReadOnlyList<ImportedSymbolRelocation> BuildImportedRelocations(
@@ -1860,6 +2101,34 @@ public sealed class SelfLoader : ISelfLoader
         return false;
     }
 
+    private static bool TryDecodeSceMetadataName(
+        ReadOnlySpan<byte> stringTable,
+        ulong value,
+        out uint nameOffset,
+        out string name,
+        out bool usedLegacy12BitOffset)
+    {
+        nameOffset = unchecked((uint)(value & uint.MaxValue));
+        if (TryReadNullTerminatedAscii(stringTable, nameOffset, out name))
+        {
+            usedLegacy12BitOffset = false;
+            return true;
+        }
+
+        var legacyOffset = unchecked((uint)(value & 0x0FFF));
+        if (legacyOffset != nameOffset &&
+            TryReadNullTerminatedAscii(stringTable, legacyOffset, out name))
+        {
+            nameOffset = legacyOffset;
+            usedLegacy12BitOffset = true;
+            return true;
+        }
+
+        name = string.Empty;
+        usedLegacy12BitOffset = false;
+        return false;
+    }
+
     private static SceImportMetadata ParseSceImportMetadata(
         ReadOnlySpan<byte> dynamicTable,
         ReadOnlySpan<byte> stringTable)
@@ -1874,6 +2143,12 @@ public sealed class SelfLoader : ISelfLoader
             return new SceImportMetadata(libraries, modules);
         }
 
+        var observedLibraryEntries = 0;
+        var observedModuleEntries = 0;
+        var rejectedLibraryEntries = 0;
+        var rejectedModuleEntries = 0;
+        var legacyOffsetEntries = 0;
+
         for (var offset = 0;
              offset + DynamicEntrySize <= dynamicTable.Length;
              offset += DynamicEntrySize)
@@ -1881,9 +2156,7 @@ public sealed class SelfLoader : ISelfLoader
             var tag = BinaryPrimitives.ReadInt64LittleEndian(
                 dynamicTable.Slice(offset, sizeof(long)));
             var value = BinaryPrimitives.ReadUInt64LittleEndian(
-                dynamicTable.Slice(
-                    offset + sizeof(long),
-                    sizeof(ulong)));
+                dynamicTable.Slice(offset + sizeof(long), sizeof(ulong)));
 
             if (tag == DtNull)
             {
@@ -1893,51 +2166,77 @@ public sealed class SelfLoader : ISelfLoader
             switch (tag)
             {
                 case DtSceImportLib:
+                case DtSceImportLibGen5:
                 case DtSceExportLib:
                 {
-                    // SCE packs the string-table index in the low 12 bits.
-                    // Bits 32..35 contain the library version and bits 48..63
-                    // contain the encoded library identifier.
-                    var nameOffset = unchecked((uint)(value & 0x0FFF));
-                    var version = unchecked((ushort)((value >> 32) & 0x0F));
-                    var id = unchecked((ushort)(value >> 48));
-                    if (TryReadNullTerminatedAscii(
+                    observedLibraryEntries++;
+                    if (!TryDecodeSceMetadataName(
                             stringTable,
-                            nameOffset,
-                            out var name))
+                            value,
+                            out var nameOffset,
+                            out var name,
+                            out var usedLegacy))
                     {
-                        libraries[EncodeSceId(id)] =
-                            new SceLibraryMetadata(name, version);
+                        rejectedLibraryEntries++;
+                        break;
                     }
 
+                    if (usedLegacy)
+                    {
+                        legacyOffsetEntries++;
+                    }
+
+                    var version = usedLegacy
+                        ? unchecked((ushort)((value >> 32) & 0x0F))
+                        : unchecked((ushort)((value >> 32) & ushort.MaxValue));
+                    var id = unchecked((ushort)(value >> 48));
+                    libraries[EncodeSceId(id)] =
+                        new SceLibraryMetadata(name, version);
                     break;
                 }
 
                 case DtSceNeededModule:
+                case DtSceNeededModuleGen5:
                 case DtSceModuleInfo:
                 {
-                    // SCE packs the string-table index in the low 12 bits.
-                    // Module major is bits 32..35, minor is bits 40..43,
-                    // and bits 48..63 contain the encoded module identifier.
-                    var nameOffset = unchecked((uint)(value & 0x0FFF));
-                    var versionMajor = unchecked((byte)((value >> 32) & 0x0F));
-                    var versionMinor = unchecked((byte)((value >> 40) & 0x0F));
-                    var id = unchecked((ushort)(value >> 48));
-                    if (TryReadNullTerminatedAscii(
+                    observedModuleEntries++;
+                    if (!TryDecodeSceMetadataName(
                             stringTable,
-                            nameOffset,
-                            out var name))
+                            value,
+                            out var nameOffset,
+                            out var name,
+                            out var usedLegacy))
                     {
-                        modules[EncodeSceId(id)] =
-                            new SceModuleMetadata(
-                                name,
-                                versionMajor,
-                                versionMinor);
+                        rejectedModuleEntries++;
+                        break;
                     }
 
+                    if (usedLegacy)
+                    {
+                        legacyOffsetEntries++;
+                    }
+
+                    var versionMinor = usedLegacy
+                        ? unchecked((byte)((value >> 40) & 0x0F))
+                        : unchecked((byte)((value >> 32) & byte.MaxValue));
+                    var versionMajor = usedLegacy
+                        ? unchecked((byte)((value >> 32) & 0x0F))
+                        : unchecked((byte)((value >> 40) & byte.MaxValue));
+                    var id = unchecked((ushort)(value >> 48));
+                    modules[EncodeSceId(id)] =
+                        new SceModuleMetadata(name, versionMajor, versionMinor);
                     break;
                 }
             }
+        }
+
+        if (observedLibraryEntries != 0 || observedModuleEntries != 0)
+        {
+            Console.WriteLine(
+                $"[LOADER][SCE-META] libraries={libraries.Count}/{observedLibraryEntries} " +
+                $"modules={modules.Count}/{observedModuleEntries} " +
+                $"rejected_lib={rejectedLibraryEntries} rejected_mod={rejectedModuleEntries} " +
+                $"legacy_offset_entries={legacyOffsetEntries}");
         }
 
         return new SceImportMetadata(libraries, modules);
@@ -2192,17 +2491,20 @@ public sealed class SelfLoader : ISelfLoader
     private static ulong DetermineRequestedImageBase(
         IVirtualMemory virtualMemory,
         ulong totalImageSize,
+        ulong requiredLoadAlignment,
         bool isNextGen,
         bool clearVirtualMemory)
     {
+        var placementAlignment = NormalizePlacementAlignment(requiredLoadAlignment);
         if (clearVirtualMemory)
         {
-            return isNextGen ? Ps5MainImageBase : Ps4MainImageBase;
+            var requestedBase = isNextGen ? Ps5MainImageBase : Ps4MainImageBase;
+            return AlignUp(requestedBase, placementAlignment);
         }
 
         var (searchStart, searchEnd) = GetModuleSearchRange(isNextGen);
         var alignedSize = AlignUp(Math.Max(totalImageSize, (ulong)PageSize), (ulong)PageSize);
-        var candidate = searchStart;
+        var candidate = AlignUp(searchStart, placementAlignment);
         foreach (var region in virtualMemory.SnapshotRegions())
         {
             if (region.VirtualAddress >= searchEnd)
@@ -2210,13 +2512,14 @@ public sealed class SelfLoader : ISelfLoader
                 continue;
             }
 
-            var regionEnd = region.VirtualAddress + region.MemorySize;
+            var regionEnd = SaturatingAdd(region.VirtualAddress, region.MemorySize);
             if (regionEnd <= searchStart)
             {
                 continue;
             }
 
-            var regionAlignedEnd = AlignUp(regionEnd + ModulePlacementStep, (ulong)PageSize);
+            var spacedEnd = SaturatingAdd(regionEnd, ModulePlacementStep);
+            var regionAlignedEnd = AlignUp(spacedEnd, placementAlignment);
             if (regionAlignedEnd > candidate)
             {
                 candidate = regionAlignedEnd;
@@ -2225,35 +2528,44 @@ public sealed class SelfLoader : ISelfLoader
 
         if (candidate < searchStart)
         {
-            candidate = searchStart;
+            candidate = AlignUp(searchStart, placementAlignment);
         }
 
-        if (candidate + alignedSize > searchEnd)
+        if (!FitsRange(candidate, alignedSize, searchEnd))
         {
-            candidate = searchStart;
+            candidate = AlignUp(searchStart, placementAlignment);
         }
 
-        return AlignUp(candidate, (ulong)PageSize);
+        return candidate;
     }
 
     private static bool TryAllocateAdditionalImageAtExact(
         PhysicalVirtualMemory physicalVm,
         ulong preferredBase,
         ulong totalImageSize,
+        ulong requiredLoadAlignment,
         bool isNextGen,
         out ulong allocatedBase)
     {
         var (searchStart, searchEnd) = GetModuleSearchRange(isNextGen);
+        var placementAlignment = NormalizePlacementAlignment(requiredLoadAlignment);
         var alignedSize = AlignUp(Math.Max(totalImageSize, (ulong)PageSize), (ulong)PageSize);
-        if (preferredBase < searchStart || preferredBase + alignedSize > searchEnd)
+        if (preferredBase < searchStart || !FitsRange(preferredBase, alignedSize, searchEnd))
         {
-            preferredBase = searchStart;
+            preferredBase = AlignUp(searchStart, placementAlignment);
+        }
+        else
+        {
+            preferredBase = AlignUp(preferredBase, placementAlignment);
         }
 
+        var placementStep = Math.Max(ModulePlacementStep, placementAlignment);
         for (var attempt = 0; attempt < 256; attempt++)
         {
-            var candidate = AlignUp(preferredBase + ((ulong)attempt * ModulePlacementStep), (ulong)PageSize);
-            if (candidate + alignedSize > searchEnd)
+            var delta = SaturatingMultiply((ulong)attempt, placementStep);
+            var rawCandidate = SaturatingAdd(preferredBase, delta);
+            var candidate = AlignUp(rawCandidate, placementAlignment);
+            if (!FitsRange(candidate, alignedSize, searchEnd))
             {
                 break;
             }
@@ -2277,26 +2589,103 @@ public sealed class SelfLoader : ISelfLoader
 
     private static ulong CalculateTotalImageSize(IReadOnlyList<ProgramHeader> programHeaders)
     {
-        ulong minAddr = ulong.MaxValue;
         ulong maxAddr = 0;
+        var hasLoadSegment = false;
 
         foreach (var header in programHeaders)
         {
-            if (header.HeaderType == ProgramHeaderType.Load && header.MemorySize > 0)
+            if (header.HeaderType != ProgramHeaderType.Load || header.MemorySize == 0)
             {
-                if (header.VirtualAddress < minAddr)
-                    minAddr = header.VirtualAddress;
+                continue;
+            }
 
-                var endAddr = header.VirtualAddress + header.MemorySize;
-                if (endAddr > maxAddr)
-                    maxAddr = endAddr;
+            hasLoadSegment = true;
+            if (header.VirtualAddress > ulong.MaxValue - header.MemorySize)
+            {
+                throw new InvalidDataException(
+                    $"PT_LOAD address range overflows: vaddr=0x{header.VirtualAddress:X}, memsz=0x{header.MemorySize:X}.");
+            }
+
+            var endAddr = header.VirtualAddress + header.MemorySize;
+            if (endAddr > maxAddr)
+            {
+                maxAddr = endAddr;
             }
         }
 
-        if (minAddr == ulong.MaxValue)
-            return 0;
+        if (!hasLoadSegment)
+        {
+            throw new InvalidDataException("ELF image does not contain a loadable PT_LOAD segment.");
+        }
 
-        return maxAddr - minAddr;
+        // imageBase is a load bias that is added directly to every p_vaddr.
+        // Reserve through max(p_vaddr + p_memsz), not max-min.  The old span
+        // calculation under-reserved images whose first PT_LOAD started above
+        // virtual address zero and could make a valid later segment fall outside
+        // the reserved guest range.
+        return AlignUp(maxAddr, (ulong)PageSize);
+    }
+
+    private static ulong CalculateRequiredLoadAlignment(IReadOnlyList<ProgramHeader> programHeaders)
+    {
+        ulong alignment = PageSize;
+        foreach (var header in programHeaders)
+        {
+            if (header.HeaderType != ProgramHeaderType.Load || header.MemorySize == 0)
+            {
+                continue;
+            }
+
+            var segmentAlignment = header.Alignment;
+            if (segmentAlignment <= 1)
+            {
+                continue;
+            }
+
+            if (!IsPowerOfTwo(segmentAlignment))
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER] WARNING: ignoring non-power-of-two PT_LOAD alignment 0x{segmentAlignment:X}.");
+                continue;
+            }
+
+            if (segmentAlignment > alignment)
+            {
+                alignment = segmentAlignment;
+            }
+        }
+
+        return alignment;
+    }
+
+    private static ulong NormalizePlacementAlignment(ulong alignment)
+    {
+        if (alignment < PageSize || !IsPowerOfTwo(alignment))
+        {
+            return PageSize;
+        }
+
+        return alignment;
+    }
+
+    private static bool IsPowerOfTwo(ulong value)
+    {
+        return value != 0 && (value & (value - 1)) == 0;
+    }
+
+    private static bool FitsRange(ulong start, ulong size, ulong exclusiveEnd)
+    {
+        return start <= exclusiveEnd && size <= exclusiveEnd - start;
+    }
+
+    private static ulong SaturatingAdd(ulong left, ulong right)
+    {
+        return left > ulong.MaxValue - right ? ulong.MaxValue : left + right;
+    }
+
+    private static ulong SaturatingMultiply(ulong left, ulong right)
+    {
+        return left != 0 && right > ulong.MaxValue / left ? ulong.MaxValue : left * right;
     }
 
     private static ulong ComputeImageBase(IReadOnlyList<ProgramHeader> programHeaders)
@@ -2857,9 +3246,14 @@ public sealed class SelfLoader : ISelfLoader
             throw new InvalidDataException("Only little-endian ELF images are currently supported.");
         }
 
-        if (header.ProgramHeaderEntrySize != ProgramHeaderSize)
+        // ELF permits a program-header entry to be larger than the native
+        // structure size.  ParseProgramHeaders already advances by e_phentsize
+        // and reads the standardized prefix, so rejecting padded entries here
+        // unnecessarily excluded otherwise valid PS4/PS5 ELF variants.
+        if (header.ProgramHeaderEntrySize < ProgramHeaderSize)
         {
-            throw new InvalidDataException($"Unsupported ELF program header entry size: {header.ProgramHeaderEntrySize}.");
+            throw new InvalidDataException(
+                $"ELF program header entry size {header.ProgramHeaderEntrySize} is smaller than the required {ProgramHeaderSize} bytes.");
         }
 
         // The CPU backend executes guest instructions natively, so a non

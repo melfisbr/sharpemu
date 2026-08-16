@@ -1,0 +1,28 @@
+    internal static bool ShouldThrottleGuestGpu
+    {
+        get
+        {
+            if (Environment.GetEnvironmentVariable(
+                    "SHARPEMU_BINK_THROTTLE_GUEST_GPU") != "1")
+            {
+                return false;
+            }
+
+            // V72.4.3.2.31.7.6: an explicitly active host decoder always owns
+            // the screen, even if the boot-complete latch was set during the
+            // gap between queued movies. V31.7.5 left attract_movie unthrottled
+            // once that latch was set, which allowed 4K guest texture work to
+            // compete with RAD and break A/V realtime.
+            if (Volatile.Read(ref _activeHostMovieDecoders) > 0)
+            {
+                return true;
+            }
+
+            if (IsBootMovieComplete())
+            {
+                return false;
+            }
+
+            return Interlocked.Read(ref _frameCount) > 0;
+        }
+    }

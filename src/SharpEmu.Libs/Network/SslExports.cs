@@ -15,6 +15,7 @@ public static class SslExports
     private static int _nextContextId;
 
     private sealed record SslContext(ulong PoolSize);
+    private static readonly byte[] OfflineCertificateSerial = [0x53,0x48,0x41,0x52,0x50,0x45,0x4D,0x55,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01];
 
     [SysAbiExport(
         Nid = "hdpVEUDFW3s",
@@ -64,6 +65,14 @@ public static class SslExports
         var id = unchecked((int)ctx[CpuRegister.Rdi]);
         TraceSsl("close", id, 0);
         return ctx.SetReturn(0);
+    }
+
+    [SysAbiExport(Nid = "DOwXL+FQMEY", ExportName = "sceSslGetSerialNumber", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceSsl")]
+    public static int SslGetSerialNumber(CpuContext ctx)
+    {
+        var output = ctx[CpuRegister.Rsi]; var capacity = ctx[CpuRegister.Rdx];
+        if (output == 0 || capacity < (ulong)OfflineCertificateSerial.Length) return ctx.SetReturn(SslErrorOutOfSize);
+        return ctx.Memory.TryWrite(output, OfflineCertificateSerial) ? ctx.SetReturn(0) : ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
     }
 
     private static void TraceSsl(string operation, int id, ulong arg0)

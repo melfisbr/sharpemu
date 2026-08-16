@@ -1,0 +1,51 @@
+V73.20.4.1 runtime findings
+================================
+
+version=73.20.4.1
+exit_code=
+classification=dedicated-native-worker-create-failed
+eboot_sha256=22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E
+dedicated_worker_create_hits=21
+dedicated_worker_run_hits=96
+nca_dedicated_hits=1
+snd_parse_dedicated_hits=1
+snd_read_dedicated_hits=1
+bpe_dedicated_hits=104
+binkasy_dedicated_hits=8
+dedicated_create_fail_hits=1
+main_loop_hits=1
+event_fastpath_hits=1
+clr_failfast_hits=2
+natural_guest_movie_hits=0
+first_frame_primed=0
+compute_yuv_binding_hits=0
+graphics_yuv_binding_hits=0
+yuv_binding_miss_hits=0
+device_lost_true=0
+
+V73.20.4.1 patch repair:
+- V73.20.4 build failed CS1513 because whole compacted if/else blocks were reconstructed;
+- SAFE rollback restored both backend files;
+- V73.20.4.1 changes only the two nativeReturn = CallNativeEntry(ptr) statements;
+- no main-backend brace is added, removed, or reconstructed.
+
+Load/import evidence:
+- stdout: [LOADER] Processing 173377 relocations...
+- stdout: [LOADER][SCE-META] libraries=53/53 modules=49/49 rejected_lib=0 rejected_mod=0 legacy_offset_entries=0
+- stdout: [LOADER] Found 1173 unique NIDs, 173377 descriptors
+- stderr: [RUNTIME] Imported data rebind: rebound=1454, unresolved=0
+- stderr: [LOADER][INFO] Setup 1385/1385 import stubs (direct bridge, lle_redirects=176)
+
+P0 execution defects:
+- [V73.20.4.1][DEDICATED][ERROR] missing_guest_thread_handle
+- next import result: ORBIS_GEN2_ERROR_TRY_AGAIN for NID 14bOACANTBo (scePthreadOnce)
+- Vulkan first guest frame reached: 3840x2160
+- EVENT_FASTPATH n=1 reached
+- CLR FailFast: Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code
+- mitigated child exit 0x80131506
+- no natural Bink open before the FailFast.
+
+Conclusion:
+The current P0 blocker is guest-code execution topology, not unresolved eboot imports.
+The final normal direct CallNativeEntry(ptr) in DirectExecutionBackend is the top-level
+ExecuteEntry path. Handle-less HLE callbacks also need a raw native callback lane.

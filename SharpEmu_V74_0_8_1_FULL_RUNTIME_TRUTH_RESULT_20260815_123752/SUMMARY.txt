@@ -1,0 +1,73 @@
+﻿version=74.0.8.2
+classification=full-runtime-truth-captured
+exit_code=completed-before-finalizer-repair
+memory_pressure_stop=False
+
+[functional]
+main_loop_hits=1
+first_frame_hits=0
+max_event_fastpath_n=2048
+compute_dispatch_fail_hits=0
+compute_null_invariant_hits=0
+clr_failfast_hits=0
+device_lost_hits=0
+shader_error_hits=0
+natural_guest_movie_hits=0
+compute_yuv_binding_hits=0
+ui_resource_log_hits=0
+movie_lifecycle_log_hits=2
+
+[memory-internal]
+mem_telemetry_lines=55
+max_gc_mb=6799
+max_gc_heap_mb=6852
+max_gc_fragmented_mb=3346
+max_alloc_per_2s_mb=3449
+max_texture_cache_mb=431
+max_texture_deferred_mb=0
+texture_cache_add_logs=22
+texture_cache_trim_logs=0
+max_sampled_guest_image_mb=7
+guest_image_cache_logs=6
+max_guest_buffer_mb=137
+max_pending_guest_image_data_mb=0
+max_pending_submissions=6
+max_abandoned_submissions=0
+max_batch_resources=1
+max_process_virtual_mb_internal=81527
+
+[guest-memory]
+direct_memory_allocation_calls=3
+direct_memory_requested_mb=16384
+vmem_mapping_log_hits=0
+lazy_commit_log_hits=1
+
+[scheduler-gpu]
+guest_thread_snapshot_lines=2789
+gpu_wait_profile_lines=0
+video_fps_log_hits=8
+
+[texture-provenance]
+dcc_suppression_hits=57
+large_cpu_snapshot_hits=9
+
+[os-peak]
+peak_process_tree_working_mb=11443,2
+peak_process_tree_private_mb=16800,3
+peak_gpu_dedicated_mb=1756,0
+peak_gpu_shared_mb=795,2
+peak_system_commit_mb=36605,1
+
+CSV_FILES:
+PROCESS_OS_TRUTH.csv
+GPU_OS_TRUTH.csv
+SYSTEM_MEMORY_TRUTH.csv
+NVIDIA_GPU_TRUTH.csv
+
+Interpretation rule:
+- GC high -> managed allocation producer.
+- tex_cache/deferred high -> Vulkan image lifetime/fence.
+- GPU dedicated/shared high with low internal caches -> other Vulkan/native allocation.
+- process private high with GC/GPU caches low -> guest direct-memory/native commit.
+- pending/batch/timeline divergence -> GPU submission/back-pressure.
+- all memory stable but black -> functional render/provenance/UI blocker.

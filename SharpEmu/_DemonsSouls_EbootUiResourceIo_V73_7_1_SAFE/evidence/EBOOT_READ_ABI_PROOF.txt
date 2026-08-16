@@ -1,0 +1,53 @@
+Demon's Souls EBOOT read/stream ABI proof (x86-64, static)
+
+EBOOT SHA-256:
+22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6E0D0316130E
+
+sceAmprAprCommandBufferReadFile wrapper @ 0x1DC1600, call @ 0x1DC161F
+Relevant pre-call moves (AT&T syntax -> destination is second operand):
+  mov %rdx,%rax
+  mov %rcx,%r9
+  mov %esi,%ecx
+  mov %r8,(%rsp)
+  lea 0x18(%rdi),%rsi
+  lea 0x20(%rdi),%rdx
+  mov %rax,%r8
+  call 0x1F03C50
+Callee therefore sees:
+  RDI = commandBuffer
+  RCX = uint32 fileId (from caller ESI)
+  R8  = destination (original caller RDX)
+  R9  = size (original caller RCX)
+  [RSP+8] = fileOffset (original caller R8; CALL pushed return address)
+This matches current SharpEmu AmprExports.AprCommandBufferReadFile.
+
+sceKernelAprResolveFilepathsToIdsAndFileSizes wrapper @ 0x1DC1700:
+  test %rcx,%rcx
+  je error
+  call 0x1F03CE0
+Current SharpEmu uses RCX as sizesAddress.
+
+Real caller @ 0x815ABC..0x815AD5:
+  lea -0x38(%rbp),%rdi       ; address of local pointer slot
+  lea -0x44(%rbp),%rdx       ; ids
+  lea -0x40(%rbp),%rcx       ; sizes
+  lea -0x48(%rbp),%r8        ; error index
+  mov $1,%esi                ; count
+  mov %r12,-0x38(%rbp)       ; path pointer in local slot
+  call 0x1DC1700
+This proves current pointer-array pathList contract for the title, at least for
+the observed single-path call site.
+
+WithPrefix wrapper @ 0x1DC1760:
+  test %rdi,%rdi
+  je error
+  test %r8,%r8
+  je error
+  call 0x1F03D00
+This matches current HLE's prefix=RDI and sizesAddress=R8.
+
+Conclusion:
+APR/AMPR core argument decoding is not the missing UI implementation. The
+source-level correctness defect found in the read chain is the unlocked
+FileStream use in KernelReadUnderscore while KernelCloseCore disposes the same
+stream under a monitor. V73.7 fixes this without changing APR/AMPR ABI.

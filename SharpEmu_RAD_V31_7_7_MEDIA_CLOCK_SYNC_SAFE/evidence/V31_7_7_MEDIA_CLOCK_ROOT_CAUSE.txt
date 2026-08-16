@@ -1,0 +1,21 @@
+V72.4.3.2.31.7.7 MEDIA CLOCK ROOT CAUSE
+==========================================
+
+V31.7.6 result:
+- all three RAD videos completed correctly;
+- V31.7.6 hard gate kept Core.Res.TaskManager out of the attract interval;
+- ATTRACT_AUDIO_TEMPO=1.0000;
+- ATTRACT_AUDIO_ANCHOR_DELAY_MS=80;
+- attract renderer was revealed at playback_anchor_ms=785.2;
+- the sidecar audio start occurred only after TryAttach returned, therefore after ShowWindow/reveal.
+
+The remaining small audio lag is therefore consistent with host ordering, not decoder speed.
+
+Correction:
+- retain hard gate;
+- set artificial anchor delay to 0;
+- invoke attract sidecar start at the RAD playback anchor before ShowWindow;
+- reveal video immediately after the audio trigger.
+
+Architecture note:
+The injected boot movie sequence is not the title's native media control path. Final synchronization should come from guest movie/audio calls and their runtime clock, not from a static host delay.

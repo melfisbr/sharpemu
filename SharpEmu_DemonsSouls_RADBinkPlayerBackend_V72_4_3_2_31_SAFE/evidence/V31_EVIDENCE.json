@@ -1,0 +1,13 @@
+{
+  "revision": "V72.4.3.2.31",
+  "backend": "user-installed official RAD Video Tools player",
+  "command": [
+    "radvideo64.exe",
+    "binkplay",
+    "<movie.bk2>"
+  ],
+  "redistributes_rad_binary": false,
+  "redistributes_bink_sdk": false,
+  "nihav_fallback": true,
+  "attract_audio_tempo": 1.0
+}

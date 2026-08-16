@@ -1,0 +1,3 @@
+﻿5.7s entry_abi_proved
+22.4s main_loop guest_seconds=17.0443
+22.4s first_guest_frame size=3840x2160

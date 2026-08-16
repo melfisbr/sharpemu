@@ -1,0 +1,5 @@
+﻿SharpEmu V38.0 rollback manifest
+Created: 2026-08-09T13:30:15.3248865-03:00
+Source files replaced: 0
+This package intentionally installs no speculative handlers.
+Audit directory: C:\Users\Edpo\Documents\GitHub\sharpemu\SharpEmu_API_Batch_V38_0_Audit_20260809_133015

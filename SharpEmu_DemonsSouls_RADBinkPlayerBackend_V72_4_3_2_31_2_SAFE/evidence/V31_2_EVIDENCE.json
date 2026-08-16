@@ -1,0 +1,13 @@
+{
+  "version": "V72.4.3.2.31.2",
+  "trigger": "V31.1 apply failed with 'Anchor ambiguous: same active RAD state' after optional RAD precheck passed",
+  "root_cause": "The active playback expression occurs multiple times in the accumulated HostMovieBridge; V31.1 incorrectly required global uniqueness. More importantly, RAD was absent, so patching HostMovieBridge for an unusable optional backend was unnecessary.",
+  "repair": [
+    "skip all RAD source mutations when radvideo64.exe is absent",
+    "compile and test the existing native -> NIHAV -> FFmpeg baseline",
+    "preserve V30 audio/tempo behavior on fallback systems",
+    "when RAD is present, update every identical active-state return expression instead of using Replace-ExactOnce"
+  ],
+  "rollback_observed": true,
+  "rad_binary_redistributed": false
+}

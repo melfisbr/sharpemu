@@ -1,0 +1,13 @@
+﻿[DBFZ-AMPR-MAP] Dragon Ball FighterZ AMPR Map Materialization V1.1.3 result
+Timestamp=20260813_134739
+RuntimeExitCode=-1073741819
+CorrectVAMarker=True
+MapCall40000000=True
+MapMaterialized=False
+MapMaterializeFailure=False
+OldMapAVTarget40000000=True
+OldLibcAVTarget807842841=False
+ReachedEbootEntry=False
+NativeException=True
+AccessViolation=True
+Log=C:\Users\Edpo\Documents\GitHub\sharpemu\.sharpemu-hotfix-logs\DragonBall_AMPR_MapMaterialization_V1_1_3_RUN_20260813_134739\dragonball_stdout_stderr.log

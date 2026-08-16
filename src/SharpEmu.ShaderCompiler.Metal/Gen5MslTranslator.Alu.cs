@@ -102,6 +102,64 @@ public static partial class Gen5MslTranslator
                         Temp("uint", ShuffleLane(value, lane)));
                     return true;
                 }
+                case "VMovrelsB32":
+                {
+                    if (instruction.Sources.Count == 0 ||
+                        instruction.Sources[0].Kind != Gen5OperandKind.VectorRegister)
+                    {
+                        error = "VMovrelsB32 expects a VGPR source";
+                        return false;
+                    }
+
+                    var sourceBase = instruction.Sources[0].Value;
+                    var relativeSource = Temp(
+                        "uint",
+                        $"({sourceBase}u + s[{M0Register}]) & {VectorRegisterFileCount - 1}u");
+                    StoreVector(
+                        DestinationVector(instruction),
+                        $"v[{relativeSource}]");
+                    return true;
+                }
+                case "VMovreldB32":
+                {
+                    if (instruction.Sources.Count == 0 ||
+                        instruction.Sources[0].Kind != Gen5OperandKind.VectorRegister)
+                    {
+                        error = "VMovreldB32 expects a VGPR source";
+                        return false;
+                    }
+
+                    var destination = DestinationVector(instruction);
+                    var relativeDestination = Temp(
+                        "uint",
+                        $"({destination}u + s[{M0Register}]) & {VectorRegisterFileCount - 1}u");
+                    StoreVectorDynamic(
+                        relativeDestination,
+                        $"v[{instruction.Sources[0].Value}]");
+                    return true;
+                }
+                case "VMovrelsdB32":
+                {
+                    if (instruction.Sources.Count == 0 ||
+                        instruction.Sources[0].Kind != Gen5OperandKind.VectorRegister)
+                    {
+                        error = "VMovrelsdB32 expects a VGPR source";
+                        return false;
+                    }
+
+                    var destination = DestinationVector(instruction);
+                    var m0 = Temp("uint", $"s[{M0Register}]");
+                    var relativeSource = Temp(
+                        "uint",
+                        $"({instruction.Sources[0].Value}u + {m0}) & {VectorRegisterFileCount - 1}u");
+                    var relativeDestination = Temp(
+                        "uint",
+                        $"({destination}u + {m0}) & {VectorRegisterFileCount - 1}u");
+                    StoreVectorDynamic(
+                        relativeDestination,
+                        $"v[{relativeSource}]");
+                    return true;
+                }
                 case "VWritelaneB32":
                 {
                     // vdst[lane(src1)] = src0; a writelane lands regardless of EXEC.
@@ -716,10 +774,15 @@ public static partial class Gen5MslTranslator
             }
             else
             {
-                var target = instruction.Control is Gen5SdwaControl
-                    { ScalarDestination: { } scalarDestination }
-                    ? scalarDestination
-                    : VccLoRegister;
+                // A VOP3-encoded compare can name an SGPR pair; plain VOPC still defaults to VCC.
+                var target =
+                    instruction.Destinations.Count > 0 &&
+                    instruction.Destinations[0].Kind == Gen5OperandKind.ScalarRegister
+                        ? instruction.Destinations[0].Value
+                        : instruction.Control is Gen5SdwaControl
+                            { ScalarDestination: { } scalarDestination }
+                            ? scalarDestination
+                            : VccLoRegister;
                 StoreMaskBit(target, active);
             }
 
@@ -1140,6 +1203,14 @@ public static partial class Gen5MslTranslator
                     resultExpression = $"mulhi({left}, {right})";
                     sccStatement = string.Empty;
                     break;
+                case "SMulHiI32":
+                    resultExpression = $"as_type<uint>(mulhi(as_type<int>({left}), as_type<int>({right})))";
+                    sccStatement = string.Empty;
+                    break;
+                case "SAbsdiffI32":
+                    resultExpression = $"(uint)abs((long)as_type<int>({left}) - (long)as_type<int>({right}))";
+                    sccStatement = "NONZERO";
+                    break;
                 case "SAndB32":
                     resultExpression = $"({left} & {right})";
                     sccStatement = "NONZERO";
@@ -1402,12 +1473,15 @@ public static partial class Gen5MslTranslator
                     value = $"({quadAny} * 0xFul)";
                     break;
                 }
-                case "SLshlB64" or "SLshrB64":
+                case "SLshlB64" or "SLshrB64" or "SAshrI64":
                 {
                     var shift = Temp("uint", $"({RawSource(instruction, 1)}) & 63u");
-                    value = instruction.Opcode == "SLshlB64"
-                        ? $"({left} << {shift})"
-                        : $"({left} >> {shift})";
+                    value = instruction.Opcode switch
+                    {
+                        "SLshlB64" => $"({left} << {shift})",
+                        "SAshrI64" => $"as_type<ulong>(as_type<long>({left}) >> {shift})",
+                        _ => $"({left} >> {shift})",
+                    };
                     break;
                 }
                 case "SBfmB64":

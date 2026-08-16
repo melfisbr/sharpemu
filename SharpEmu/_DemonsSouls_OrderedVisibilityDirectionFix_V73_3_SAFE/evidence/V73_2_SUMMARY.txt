@@ -1,0 +1,13 @@
+version=73.2
+purpose=collect exact current AGC/wait/presenter source after successful Gen5 metadata integration
+source_mutation=False
+game_started=False
+known_runtime_metadata=53 libraries / 49 modules
+known_runtime_unresolved_imports=0
+known_runtime_wait_suspended=7
+known_runtime_dispatch_reject=43
+known_runtime_backpressure=8
+known_runtime_device_lost=0
+agc_sha256=AED440CE2307DE6103C28889303F41919D605F64B105A0D853B9E9AF4A948679
+gpu_wait_registry_sha256=3D13C08D3627DD2D8B922F641C2AB9D9B1637B190C9F7C95CC8A50EFDEA17636
+presenter_sha256=534EB79448DF504500D1B018DA98714778FB13D06EC2FF887AC9544C2A1A6364

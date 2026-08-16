@@ -1,0 +1,18 @@
+SharpEmu Demon''s Souls V61.22.3 - AGC Producer Lineage Diagnostic Repair SAFE
+
+Purpose
+- Replaces V61.22.2 diagnostic script only.
+- Does not modify SharpEmu emulator source.
+- Preserves the already validated PM4 producer tracking in AgcExports.cs/GpuWaitRegistry.cs.
+
+V61.22.3 fixes
+1. Repairs the PowerShell parser failure in run_demons_diagnostic.ps1 caused by nested quoted method calls inside interpolated strings.
+2. Keeps the V61.22.2 method-declaration anchored detector for ApplySubmittedWriteData.
+3. Keeps the Start-Process/-PassThru/-Wait ExitCode handling; no dependency on an undefined LASTEXITCODE.
+4. RUN_VALIDATE_PACKAGE now invokes System.Management.Automation.Language.Parser on every package .ps1 before reporting success.
+5. Collects AGC, shader and Vulkan resource traces plus focused context around labels 0x456CFF580 and 0x456CFF4C0.
+6. Produces SharpEmu_V61_22_3_DEMONS_PRODUCER_LINEAGE_<timestamp>.zip automatically.
+
+Safety
+- No source patch is applied by this package.
+- APPLY_BUILD validates the existing producer-coverage baseline and builds the repository as-is.

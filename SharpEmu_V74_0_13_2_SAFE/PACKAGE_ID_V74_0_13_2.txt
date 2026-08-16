@@ -1,0 +1,11 @@
+SharpEmu V74.0.13.2 PowerShell static-audit repair
+
+Purpose:
+- Preserves the V74.0.13 performance/handoff behavior.
+- Fixes the V74.0.13.1 use of PowerShell automatic variable $Host.
+- Removes assignment to automatic $Args in the runner.
+- Adds AST parsing and reserved-variable assignment checks to RUN_1 validation.
+- Verifies .cmd -> .ps1/.cmd targets before PRECHECK.
+
+Expected repository extraction location:
+C:\Users\Edpo\Documents\GitHub\sharpemu\SharpEmu_V74_0_13_2_SAFE

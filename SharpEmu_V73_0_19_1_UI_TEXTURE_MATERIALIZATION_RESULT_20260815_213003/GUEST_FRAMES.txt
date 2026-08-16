@@ -1,0 +1,1 @@
+[LOADER][INFO] Vulkan VideoOut presented guest frame: image=0x0000000457C00000 3840x2160

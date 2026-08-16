@@ -1,0 +1,2 @@
+        Interlocked.Increment(ref _hostMovieDecoderGeneration);
+        var count = Interlocked.Increment(ref _activeHostMovieDecoders);

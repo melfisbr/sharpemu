@@ -1,0 +1,63 @@
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VideoOutExports.cs:28:    private const int OrbisVideoOutErrorUnsupportedOutputMode = unchecked((int)0x80290016);
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VideoOutExports.cs:333:            return OrbisVideoOutErrorUnsupportedOutputMode;
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VideoOutExports.cs:1574:            return DumpRawFrame(ctx, port.Handle, slot.AddressLeft, attribute, bufferIndex, flipMode, flipArg, "unsupported-format");
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanDetileSelfTest.cs:102:                $"[DETILE-SELFTEST] FAIL: mode {swizzleMode} bpp {bytesPerElement} not supported by the GPU pass.");
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler/Gen5ShaderScalarEvaluator.cs:1346:            error = $"unsupported-scalar-destination pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler/Gen5ShaderScalarEvaluator.cs:1794:                error = $"unsupported-scalar-op pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler/Gen5ShaderScalarEvaluator.cs:1837:                error = $"unsupported-saveexec32 pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler/Gen5ShaderScalarEvaluator.cs:2063:            error = $"unsupported-scalar-compare pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler/Gen5ShaderScalarEvaluator.cs:2116:            error = $"unsupported-scalar-comparek pc=0x{instruction.Pc:X} op={instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.Libs/Gpu/Metal/MetalDetilePass.cs:55:    /// Returns false (empty transients) when unsupported or the pipeline could not
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanDetilePass.cs:147:    /// Returns false (with empty transients) when unsupported.
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:12:    /// <summary>Unsupported mode/format; caller must use the CPU path or raw upload.</summary>
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:435:    /// unsupported swizzle modes so the caller can fall back to the raw bytes.
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:452:            ReportUnsupported(swizzleMode);
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:461:            ReportUnsupported(swizzleMode);
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:471:            ReportUnsupported(swizzleMode);
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:651:    /// into <paramref name="linear"/>; returns false when unsupported or the output
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:955:    private static void ReportUnsupported(uint swizzleMode)
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/GnmTiling.cs:966:            $"[LOADER][WARN] GNM detile: unsupported swizzle mode {swizzleMode}; texture uploaded linear.");
+/mnt/data/audit_overlay/SharpEmu.Libs/Gpu/Metal/MetalVideoPresenter.Draws.cs:463:                    $"[LOADER][WARN] Metal skipped draw with unsupported color target " +
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler/Recompiler/Translator/InstructionTranslator.cs:68:                    $"Opcode {instruction.Opcode} not implemented by the generic IR recompiler.");
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:314:    private static readonly ConcurrentDictionary<ulong, byte> _arrayUploadUnsupported = new();
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:6566:                    $"agc.dcb.predication_unsupported packet=0x{packetAddress:X16} " +
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:10263:                    $"unsupported color target format={target.Format} number_type={target.NumberType}";
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:13342:            !_arrayUploadUnsupported.ContainsKey(descriptor.Address);
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:13656:            // deswizzles every layer on the GPU; only unsupported cases fall to the
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:13782:            _arrayUploadUnsupported.TryAdd(descriptor.Address, 0);
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:15704:            return "probe=unsupported";
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:15714:            return "probe=unsupported";
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:15763:            : "unsupported";
+/mnt/data/audit_overlay/SharpEmu.Libs/Agc/AgcExports.cs:15878:        // unsupported translation reason needed to fix the game.
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:35:                error = $"unsupported DPP16 control 0x{dppControl.Control:X3}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:1131:                    error = $"unsupported vector opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:1192:                        $"unsupported vop3p operand {source} for {instruction.Opcode} (first slice: registers only)";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:1767:                    error = $"unsupported float compare {opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:1802:                    error = $"unsupported integer compare {opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:1905:                    error = $"unsupported scalar immediate {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:1965:                    error = $"unsupported scalar 32-bit saveexec opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:2355:                            error = $"unsupported scalar opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:2413:                error = $"unsupported scalar compare {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:2452:                error = $"unsupported scalar immediate compare {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:2540:                        $"unsupported scalar 64-bit opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:2793:                    error = $"unsupported scalar 64-bit opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs:2858:                _ => throw new InvalidOperationException($"unsupported source {operand}"),
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:2177:                error = "GDS data share is not implemented";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:2413:                    error = $"unsupported LDS opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:2491:                error = $"unsupported LDS opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:2875:                    error = $"unsupported buffer opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:2963:                error = $"unsupported buffer opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:3888:                    error = $"unsupported storage image opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:3937:                error = $"unsupported storage image opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.cs:4299:                error = $"unsupported image opcode {instruction.Opcode}";
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:320:            error = $"unsupported-spirv-storage-format({shaderContract.Format})";
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:10874:                    $"Storage image format {vkFormat} is unsupported for guest " +
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:10968:                    $"Storage scratch format {vkFormat} is unsupported for guest " +
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:11838:                        $"Feedback storage format {viewFormat} is unsupported.");
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:14970:                        $"[LOADER][WARN] Vulkan skipped MRT draw with unsupported color target " +
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:15004:                            "[LOADER][WARN] Vulkan skipped MRT draw requiring unsupported independentBlend.");
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:15680:                        $"[LOADER][WARN] Vulkan skipped color clear for unsupported target " +
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:16163:                    $"Storage image format {format} is unsupported for guest " +
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:18478:                    $"Unsupported translated guest draw: {presentation.DrawKind}.");
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:18666:                    $"format={image.Format} readback=unsupported");
+/mnt/data/audit_overlay/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs:18904:        // float targets (unsupported on Apple-family GPUs). Enabling blend on

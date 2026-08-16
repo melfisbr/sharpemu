@@ -1,0 +1,17 @@
+--- VulkanVideoPresenter.cs.exact_0CEE
++++ VulkanVideoPresenter.cs.V73.0.21
+@@ -2516,9 +2516,12 @@
+         out UntrackedTextureCacheProbe probe)
+     {
+         probe = default;
++        // SHARPEMU_DEMONSSOULS_LARGE_SPARSE_PROBE_V73_0_21
++        // This function samples at most 8 x 64 bytes. Logical resource size is
++        // therefore not a reason to disable the probe: rejecting a 320 MiB
++        // array leaves it without a baseline and forces cache churn/reuploads.
+         if (texture.Address == 0 ||
+-            byteCount == 0 ||
+-            byteCount > MaxTrackedGuestImageBytes)
++            byteCount == 0)
+         {
+             return false;
+         }

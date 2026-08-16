@@ -1,0 +1,62 @@
+{
+  "version": "V74.0.8.1",
+  "baseline_presenter_sha256": "1D8EE63DCB2F4E2A1EEC595535F40224FBE06E1DD16531233597F24740A02A28",
+  "installed_presenter_sha256": "0D4DB050177B237149CD55C1F18F0A99EB28A2B0999BA40E5E7F4234AC7BCE66",
+  "target": "src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs",
+  "install_strategy": "exact full-source payload, SHA gated",
+  "standalone_texture_cache_budget_mb": 768,
+  "trim_target_fraction": "75%",
+  "changes": [
+    "track exact VkImage allocation size on standalone TextureResource",
+    "LRU-like byte-budget eviction of _textureCache",
+    "submission-timeline deferred destruction preserved",
+    "2-second GC/Vulkan/native residency telemetry"
+  ],
+  "preserves": [
+    "V74.0.7.1 sampled GuestImage budget",
+    "V74.0.7 swapchain staging retirement",
+    "V74.0.6.3 compute texture resolver restore",
+    "V74.0.5 compute stack diagnostics",
+    "V74.0.4 DCC snapshot suppression",
+    "V74.0.3.4 FailFast hardening"
+  ],
+  "diagnostic_memory_stop": {
+    "working_gib": 20,
+    "private_gib": 26,
+    "samples": 5,
+    "interval_seconds": 2
+  },
+  "publish": false,
+  "supersedes": "V74.0.8",
+  "diagnostic": {
+    "duration_seconds": 120,
+    "sample_interval_seconds": 1,
+    "internal_interval_seconds": 2,
+    "simultaneous_categories": [
+      "GC heap/allocation/fragmentation/generations",
+      "process tree memory/CPU/IO/handles/threads",
+      "system commit/available/kernel pools",
+      "per-process GPU dedicated/shared/committed memory/utilization",
+      "NVIDIA board utilization/VRAM/temp/power when available",
+      "standalone texture cache/deferred retirement",
+      "GuestImage residency/variants/versions",
+      "guest buffer cache",
+      "pending GuestImage CPU data/uploads",
+      "pipeline caches",
+      "frame staging retirement",
+      "submission queue/timeline/abandoned work",
+      "direct memory",
+      "VM mappings/lazy commit",
+      "GPU wait profile",
+      "guest thread snapshots",
+      "VideoOut FPS",
+      "compute/DCC/Bink/UI progression"
+    ],
+    "high_volume_traces_disabled": true,
+    "safety_stop": {
+      "working_gib": 18,
+      "private_gib": 24,
+      "consecutive_seconds": 8
+    }
+  }
+}

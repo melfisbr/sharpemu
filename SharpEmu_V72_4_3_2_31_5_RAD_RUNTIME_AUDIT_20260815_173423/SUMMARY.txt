@@ -1,0 +1,13 @@
+﻿SharpEmu V72.4.3.2.31.5 RAD RUNTIME AUDIT
+===========================================
+RAD_PLAYER=C:\Program Files (x86)\RADVideo\radvideo64.exe
+RAD_ROOT=C:\Program Files (x86)\RADVideo
+TOTAL_FILES=5
+PE_FILES=5
+DLL_FILES=0
+INTERESTING_BINK_RAD_FILES=3
+
+INTERESTING FILES:
+C:\Program Files (x86)\RADVideo\binkplay.exe
+C:\Program Files (x86)\RADVideo\radvideo32.exe
+C:\Program Files (x86)\RADVideo\radvideo64.exe

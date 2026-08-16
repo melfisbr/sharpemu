@@ -1,0 +1,19 @@
+{
+  "version": "74.0.24",
+  "source_target": [
+    "src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs"
+  ],
+  "preserves": [
+    "V74.0.21 EBOOT Entry ABI",
+    "V74.0.15 large-array single-flight",
+    "V74.0.23.1 512MiB sparse array baseline"
+  ],
+  "does_not_modify": [
+    "AgcExports.cs",
+    "HostMovieBridge.cs",
+    "boot order",
+    "Bink auto boot"
+  ],
+  "fresh_source_bound_mib": 64,
+  "runner_auto_kill": false
+}

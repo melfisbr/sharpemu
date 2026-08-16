@@ -1,0 +1,126 @@
+V74.0.8 evidence from SharpEmu_V74_0_7_1_RESIDENCY_RESULT_20260815_115850.zip
+
+SUMMARY
+﻿version=74.0.7.1
+
+classification=memory-pressure-after-residency-budget
+
+exit_code=diagnostic-stop
+
+memory_pressure_stop=True
+
+sampled_cache_add_logs=6
+
+sampled_cache_trim_logs=0
+
+sampled_cache_promote_logs=0
+
+compute_dispatch_fail_hits=0
+
+compute_null_invariant_hits=0
+
+event_fastpath_hits=22
+
+clr_failfast_hits=0
+
+natural_guest_movie_hits=0
+
+compute_yuv_binding_hits=0
+
+dcc_suppression_hits=31
+
+large_cpu_snapshot_hits=6
+
+source_snapshot_reuse_hits=0
+
+peak_process_tree_working_set_mb=11409,4
+
+peak_process_tree_private_mb=16749,8
+
+
+
+V74.0.6.3 baseline proof:
+
+- compute_dispatch_fail_hits=0
+
+- compute_null_invariant_hits=0
+
+- clr_failfast_hits=0
+
+- raw EVENT_FASTPATH reached n=1024
+
+- only 6 >=8MiB CPU snapshot breadcrumbs remained
+
+- memory still reached ~11.8GiB working / ~17.1GiB private
+
+- DCC suppression cumulative log reached ~998MiB avoided
+
+Raw evidence:
+- max EVENT_FASTPATH n=1024
+- GIMG add lines=6
+- GIMG trim lines=0
+- bounded large CPU snapshot bytes=94371840 (90.0 MiB)
+- parser max retained_mb=98
+- compute failures=0
+- compute null invariant=0
+- FailFast occurrences=0
+
+PROCESS TREE
+elapsed_s;process_count;working_set_mb;private_mb;cpu_seconds
+
+0,6;3;84,6;30,3;0,58
+
+3,1;3;163,2;76,2;3,14
+
+5,6;3;579,3;475,0;7,25
+
+8,1;3;586,8;497,7;9,36
+
+10,5;3;672,8;6075,5;25,34
+
+12,9;3;900,1;6300,4;60,20
+
+15,4;3;968,9;6337,6;94,05
+
+17,8;3;1026,9;6336,3;128,34
+
+20,3;3;1240,9;6406,5;157,97
+
+22,7;3;1334,2;6406,5;182,72
+
+25,2;3;1662,0;6435,2;207,75
+
+27,7;3;1924,0;6443,5;232,42
+
+30,1;3;2002,2;6470,4;257,83
+
+32,5;3;2081,6;6508,1;283,67
+
+35,1;3;3568,3;8043,9;315,08
+
+37,6;3;4024,4;8632,3;347,59
+
+40,1;3;10384,5;15612,5;379,42
+
+42,7;3;11139,2;16436,7;412,80
+
+45,3;3;11224,7;16537,1;445,52
+
+47,9;3;11369,2;16706,1;479,20
+
+50,5;3;11409,4;16749,8;511,41
+
+Captured V74.0.7.1 presenter SHA256:
+1D8EE63DCB2F4E2A1EEC595535F40224FBE06E1DD16531233597F24740A02A28
+
+V74.0.8 payload SHA256:
+0D4DB050177B237149CD55C1F18F0A99EB28A2B0999BA40E5E7F4234AC7BCE66
+
+Presenter audit:
+- `_textureCache` stores standalone TextureResource values.
+- standalone TextureResource owns VkImage + ImageMemory.
+- insertion occurs when `resource.OwnsStorage` is true.
+- the pre-V74.0.8 capacity condition was count-only (`> 2048`).
+- no byte total existed for this cache.
+- `imageRequirements.Size` is available at texture image allocation time.
+- deferred texture destruction already has submission-timeline retirement.

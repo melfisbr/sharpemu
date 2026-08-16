@@ -1,0 +1,14 @@
+[V73.4][LABEL] wait_resumed label=0x000000044EB7FB80 queue=acb.compute[64] submission=9 waited_ms=74,733
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF100 queue=dcb.graphics submission=13 waited_ms=757,617
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF440 queue=dcb.graphics submission=14 waited_ms=3465,804
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF440 queue=acb.compute[48] submission=17 waited_ms=4834,143
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF360 queue=acb.compute[56] submission=18 waited_ms=4958,841
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF2E0 queue=acb.compute[64] submission=19 waited_ms=4876,658
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF460 queue=dcb.graphics submission=24 waited_ms=2880,771
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF700 queue=acb.compute[32] submission=22 waited_ms=12957,265
+[V73.4][LABEL] wait_resumed label=0x0000000447E7FED0 queue=dcb.graphics submission=24 waited_ms=1504,079
+[V73.4][LABEL] wait_resumed label=0x000000044F67FEC0 queue=acb.compute[32] submission=22 waited_ms=1996,030
+[V73.4][LABEL] wait_resumed label=0x0000000447E7FEC0 queue=dcb.graphics submission=24 waited_ms=4004,178
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF580 queue=acb.compute[72] submission=20 waited_ms=33569,005
+[V73.4][LABEL] wait_resumed label=0x000000044F67FE40 queue=acb.compute[32] submission=22 waited_ms=13106,583
+[V73.4][LABEL] wait_resumed label=0x0000000456CFF4C0 queue=acb.compute[40] submission=23 waited_ms=33566,618

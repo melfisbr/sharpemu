@@ -1,0 +1,57 @@
+V72.4.3.2.31.7.4 ROOT CAUSE / REPAIR
+
+Observed V31.7.3 result:
+  ACTIVE_BINK_MODE=rad
+  RAD_STARTED=3
+  RAD_HOST_ATTACHED=3
+  RAD_BRIDGE_ATTACHED=3
+  RAD_EMBEDDED_HOST_FAILURES=0
+  NIHAV_FALLBACK_HITS=0
+  STRICT_RAD_EMBEDDED_PROOF=True
+
+The SetParent/PID-HWND repair therefore worked. The remaining defects are inside
+the hosted playback policy, not host-window discovery.
+
+1) First movie audio
+--------------------
+V31.7.3 header audit:
+  ps_studios_logo.bk2: tracks=1 ids='0'
+  logo_intro.bk2:      tracks=0
+  attract_movie.bk2:   tracks=0
+
+V31.7.3 launched only:
+  radvideo64.exe binkplay <movie> /I2
+
+The first movie was silent. V31.7.4 explicitly requests Windows Audio (`/Z0`)
+and track index 0 (`/T0`) whenever that one-track header is present.
+
+2) BINK VIDEO logo after a movie
+--------------------------------
+V31.7.3 observed lifetimes after the embedded playback anchor:
+  ps_studios_logo: 255 frames / 30 fps = 8.500 s nominal,
+                   hosted lifetime = 10.679 s
+  logo_intro:      360 frames / 30 fps = 12.000 s nominal,
+                   hosted lifetime = 14.178 s
+
+Both contain approximately 2.18 s beyond the movie's nominal frame duration.
+The user's screenshot shows BinkPlay's own BINK VIDEO logo in this interval.
+V31.7.4 reads frame/FPS metadata, hides the child at nominal duration + 100 ms,
+and kills the renderer before that post-roll branding can be presented.
+
+3) attract_movie stutter / slow sidecar audio
+---------------------------------------------
+V31.7.3 continuously called SetWindowPos with FRAMECHANGED/SHOWWINDOW every
+100 ms regardless of whether the SharpEmu client size changed. For a 4K Bink
+renderer this is unnecessary non-client/layout/display work throughout playback.
+V31.7.4 removes FRAMECHANGED entirely and resizes only when client dimensions
+change. It also requests AboveNormal priority for the RAD renderer so heavy guest CPU
+execution is less likely to starve movie cadence.
+
+The V31.7.3 runtime log also proves the sidecar actually opened:
+  ...demons-souls-intro-a08c48dc3d28b327-from12-v29-1p000.wav
+
+V31.7.4 rebuilds the full mix from the original AT9 stems on every apply, then
+rebuilds that exact cache filename at +12.000 s with atempo=1.0000, PCM s16le, 48 kHz stereo. It no longer
+trusts an older cached v29 WAV merely because its filename says 1p000.
+
+No proprietary RAD/Bink binary or game media is redistributed.

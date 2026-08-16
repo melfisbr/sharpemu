@@ -1,0 +1,25 @@
+version=73.3
+exit_code=
+presenter_sha256=F5FDDAAB23E192C90A14FA3B88C335903B60A2FFB6960716AEE746A0200B82AA
+ordered_action_fence_wait_sample_lines=12
+ordered_action_fence_wait_max_counter=128
+baseline_ordered_action_fence_wait_max_counter=512
+ordered_fence_counter_vs_baseline=improved
+guest_queue_backpressure_lines=1
+guest_queue_backpressure_max_counter=1
+baseline_guest_queue_backpressure_max_counter=8
+backpressure_counter_vs_baseline=improved
+guest_queue_starvation_lines=0
+wait_suspended_lines=5
+baseline_wait_suspended_lines=7
+queue_resumed_lines=0
+baseline_queue_resumed_lines=0
+dispatch_reject_lines=42
+dispatch_noop_lines=5
+event_fastpath_max_n=256
+guest_frame_lines=0
+runtime_unresolved_lines=0
+device_lost_true_lines=0
+metadata=[LOADER] SCE import metadata: libraries=53 modules=49
+metadata=[LOADER] SCE import metadata: libraries=3 modules=3
+metadata=[LOADER] SCE import metadata: libraries=6 modules=6

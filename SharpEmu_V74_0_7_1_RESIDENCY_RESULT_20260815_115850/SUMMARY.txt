@@ -1,0 +1,27 @@
+﻿version=74.0.7.1
+classification=memory-pressure-after-residency-budget
+exit_code=diagnostic-stop
+memory_pressure_stop=True
+sampled_cache_add_logs=6
+sampled_cache_trim_logs=0
+sampled_cache_promote_logs=0
+compute_dispatch_fail_hits=0
+compute_null_invariant_hits=0
+event_fastpath_hits=22
+clr_failfast_hits=0
+natural_guest_movie_hits=0
+compute_yuv_binding_hits=0
+dcc_suppression_hits=31
+large_cpu_snapshot_hits=6
+source_snapshot_reuse_hits=0
+peak_process_tree_working_set_mb=11409,4
+peak_process_tree_private_mb=16749,8
+
+V74.0.6.3 baseline proof:
+- compute_dispatch_fail_hits=0
+- compute_null_invariant_hits=0
+- clr_failfast_hits=0
+- raw EVENT_FASTPATH reached n=1024
+- only 6 >=8MiB CPU snapshot breadcrumbs remained
+- memory still reached ~11.8GiB working / ~17.1GiB private
+- DCC suppression cumulative log reached ~998MiB avoided

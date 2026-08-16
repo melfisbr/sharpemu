@@ -1,0 +1,1 @@
+[LOADER][TRACE] apr_resolve path='/app0/ui/scripts/_cmn/uistartmenu.cgpr' host='F:\JOGOSPS5\PPSA01341\ui\scripts\_cmn\uistartmenu.cgpr' index=460 count=1024 id=0xB54A744D size=1550288

@@ -1,0 +1,4 @@
+﻿Opening F:\JOGOSPS5\PPSA01341\movies\attract_movie.bk2
+ trying demuxer bink
+ total duration 0:01:57.3
+stream 0 - (Video#0 @ 1/30 - 3840x2160) bink2-video

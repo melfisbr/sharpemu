@@ -1,0 +1,14 @@
+version=V73.0.1
+powershell51_generic_list_fix=True
+current_hle_exports=
+29799
+eboot_import_symbols=
+1174
+implemented_hle=
+691
+no_hle_export=
+483
+duplicate_hle_nids=
+0
+selfloader_sha256=
+AAF46BE2F59940DB7CF806F437D503E03E08B018F6D0F2D2A52F34310E53684D

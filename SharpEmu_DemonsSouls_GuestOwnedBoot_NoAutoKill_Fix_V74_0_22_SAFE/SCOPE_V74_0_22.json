@@ -1,0 +1,20 @@
+{
+  "version": "74.0.22",
+  "purpose": "Preserve proven V74.0.21 EBOOT entry ABI, remove diagnostic forced termination, and observe guest-owned natural Bink startup without host direct boot.",
+  "source_changes": [],
+  "requires": [
+    "V74.0.21 EntryParams 0x118 correction",
+    "V74.0.21 gated LLE _init_env",
+    "HostMovieBridge natural completion shim capability"
+  ],
+  "runtime": {
+    "host_auto_boot": false,
+    "startup_completion_shim": true,
+    "runner_forced_stop": false,
+    "exit_policy": "user closes SharpEmu window or runtime exits naturally",
+    "render_scale": 1.0,
+    "native_worker_limit": 2,
+    "resource_lane_limit": 8,
+    "standalone_texture_cache_mb": 768
+  }
+}

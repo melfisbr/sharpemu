@@ -1,0 +1,14 @@
+version=73.7.1
+exit_code=
+classification=resource-io-clean-ui-render-path-reached
+eboot_sha256=22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E
+ampr_all_reads=9815
+ampr_ui_reads=966
+ampr_failures=0
+kernel_script_io=3698
+kernel_script_failures=0
+read_disposed_or_io_errors=0
+resource_milestones=5
+ui_runtime_markers=5
+runtime_unresolved=0
+device_lost=0

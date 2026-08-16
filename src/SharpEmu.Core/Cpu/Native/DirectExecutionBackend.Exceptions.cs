@@ -18,6 +18,9 @@ public sealed partial class DirectExecutionBackend
 	private const ulong LazyCommitWindowBytes = 0x0200_0000UL;
 	private static int _lazyCommitTraceCount;
 	private static int _guestAllocatorHoleRecoveries;
+	// SHARPEMU_V35_DEMON_INLINE_WIDE_NODE_COUNTER
+	private static int _demonInlineWideNodeRecoveries;
+	private static int _demonBadChildFlagRecoveries; // SHARPEMU_V35_1_DEMON_BAD_CHILD_FLAG_COUNTER
 	private static int _auxiliaryThreadExecuteFaultRecoveries;
 	private static int _auxiliaryThreadExecuteFaultSkips;
 	private nint _workerAbortStack;
@@ -145,6 +148,24 @@ public sealed partial class DirectExecutionBackend
 			}
 			if (exceptionCode == 3221225477u &&
 				TryRecoverGuestAllocatorHole(exceptionRecord, contextRecord, rip))
+			{
+				return -1;
+			}
+			// SHARPEMU_V35_DEMON_INLINE_WIDE_NODE_CALL
+			if (exceptionCode == 3221225477u &&
+				TryRecoverDemonInlineWideNodeFault(exceptionRecord, contextRecord, rip))
+			{
+				return -1;
+			}
+			// SHARPEMU_V46_1_DEMON_RESOURCE_NODE_PROBE
+			if (exceptionCode == 3221225477u)
+			{
+				ProbeDemonResourceNodeFaultV461(exceptionRecord, contextRecord, rip);
+				// SHARPEMU_V46_2_DEMON_VIRTUAL_CALL_PROBE
+				ProbeDemonVirtualCallFaultV462(exceptionRecord, contextRecord, rip);
+			}
+			if (exceptionCode == 3221225477u &&
+				TryRecoverDemonBadChildFlagFault(exceptionRecord, contextRecord, rip))
 			{
 				return -1;
 			}
@@ -667,6 +688,159 @@ public sealed partial class DirectExecutionBackend
 		}
 
 		return true;
+	}
+
+	// SHARPEMU_V35_DEMON_INLINE_WIDE_NODE_RECOVERY
+	private unsafe static bool TryRecoverDemonInlineWideNodeFault(
+		EXCEPTION_RECORD* exceptionRecord,
+		void* contextRecord,
+		ulong rip)
+	{
+		if (string.Equals(
+				Environment.GetEnvironmentVariable("SHARPEMU_DISABLE_DEMON_INLINE_WIDE_NODE_RECOVERY"),
+				"1",
+				StringComparison.Ordinal) ||
+			exceptionRecord->NumberParameters < 2 ||
+			exceptionRecord->ExceptionInformation[0] != 0 ||
+			exceptionRecord->ExceptionInformation[1] != ulong.MaxValue ||
+			rip < 0x10003)
+		{
+			return false;
+		}
+
+		// Exact evidence shape:
+		//   49 8B 06       mov rax,[r14]
+		//   48 8B 78 10    mov rdi,[rax+10h]   <- AV
+		//   48 85 FF       test rdi,rdi
+		//   0F 84 ...      je <guest null/empty fallback>
+		byte* code = (byte*)(rip - 3);
+		if (code[0] != 0x49 || code[1] != 0x8B || code[2] != 0x06 ||
+			code[3] != 0x48 || code[4] != 0x8B || code[5] != 0x78 ||
+			code[6] != 0x10 || code[7] != 0x48 || code[8] != 0x85 ||
+			code[9] != 0xFF || code[10] != 0x0F || code[11] != 0x84)
+		{
+			return false;
+		}
+
+		ulong rax = ReadCtxU64(contextRecord, CTX_RAX);
+		ulong r14 = ReadCtxU64(contextRecord, CTX_R14);
+		if (r14 < 0x10000 ||
+			!TryReadHostQword(r14, out ulong firstQword) ||
+			firstQword != rax ||
+			!LooksLikePackedAsciiUtf16(firstQword) ||
+			IsCanonicalUserPointer(firstQword))
+		{
+			return false;
+		}
+
+		if (!TryReadHostQword(r14 + 8, out ulong adjacent) ||
+			!IsCanonicalUserPointer(adjacent))
+		{
+			return false;
+		}
+
+		// Skip only the faulting mov. The guest itself then executes
+		// `test rdi,rdi` + its existing `je` null/empty path.
+		WriteCtxU64(contextRecord, CTX_RDI, 0);
+		WriteCtxU64(contextRecord, CTX_RIP, rip + 4);
+
+		int recovery = Interlocked.Increment(ref _demonInlineWideNodeRecoveries);
+		if (recovery <= 16 || (recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[LOADER][WARN] demon.inline_wide_node_recovery #{recovery}: " +
+				$"rip=0x{rip:X16} r14=0x{r14:X16} inline=0x{firstQword:X16} " +
+				$"adjacent=0x{adjacent:X16} -> rdi=0 next=0x{rip + 4:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
+
+	// SHARPEMU_V35_1_DEMON_BAD_CHILD_FLAG_RECOVERY
+	private unsafe static bool TryRecoverDemonBadChildFlagFault(
+		EXCEPTION_RECORD* er,
+		void* ctx,
+		ulong rip)
+	{
+		if (string.Equals(
+				Environment.GetEnvironmentVariable("SHARPEMU_DISABLE_DEMON_BAD_CHILD_FLAG_RECOVERY"),
+				"1",
+				StringComparison.Ordinal) ||
+			er->NumberParameters < 2 ||
+			er->ExceptionInformation[0] != 0 ||
+			er->ExceptionInformation[1] != ulong.MaxValue)
+		{
+			return false;
+		}
+
+		byte* p = (byte*)(rip - 8);
+		byte[] sig = { 0x48,0x8B,0x46,0x08,0x4C,0x8B,0x68,0x08,0x41,0x80,0x7D,0x19,0x00,0x74,0x22 };
+		for (int i = 0; i < sig.Length; i++)
+		{
+			if (p[i] != sig[i])
+			{
+				return false;
+			}
+		}
+
+		ulong rax = ReadCtxU64(ctx, CTX_RAX);
+		ulong rsi = ReadCtxU64(ctx, CTX_RSI);
+		ulong r13 = ReadCtxU64(ctx, CTX_R13);
+
+		const ulong observedBadChild = 0x004C00440000000AUL;
+		if (r13 != observedBadChild ||
+			!IsCanonicalUserPointer(rsi) ||
+			!IsCanonicalUserPointer(rax))
+		{
+			return false;
+		}
+
+		if (!TryReadHostQword(rsi + 8, out ulong objectPointer) ||
+			objectPointer != rax ||
+			!TryReadHostQword(rax + 8, out ulong childPointer) ||
+			childPointer != r13)
+		{
+			return false;
+		}
+
+		// Existing guest code is:
+		// cmp byte ptr [r13+19h],0
+		// je +22h
+		// With the exact invalid child shape above, use that guest zero branch.
+		ulong nextRip = rip + 0x29;
+		WriteCtxU64(ctx, CTX_RIP, nextRip);
+
+		int recovery = Interlocked.Increment(ref _demonBadChildFlagRecoveries);
+		if (recovery <= 16 || (recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[LOADER][WARN] demon.bad_child_flag_recovery #{recovery}: " +
+				$"rip=0x{rip:X16} rsi=0x{rsi:X16} rax=0x{rax:X16} " +
+				$"r13=0x{r13:X16} -> zero-branch=0x{nextRip:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
+
+	private static bool LooksLikePackedAsciiUtf16(ulong value)
+	{
+		for (int shift = 0; shift < 64; shift += 16)
+		{
+			ushort unit = (ushort)(value >> shift);
+			if (unit < 0x20 || unit > 0x7E)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static bool IsCanonicalUserPointer(ulong value)
+	{
+		return value >= 0x10000 &&
+			value <= 0x0000_7FFF_FFFF_FFFFUL;
 	}
 
 	private static bool IsBenignHostDebugException(uint exceptionCode)

@@ -1,0 +1,13 @@
+CUMULATIVE GUARDS
+=================
+V74.0.15 must preserve:
+- V74.0.4 unresolved-DCC no-CPU-snapshot guard
+- V74.0.5 15MB-class snapshot reuse and compute exception trace
+- V74.0.6.3 executable compute texture resolve loop
+- V74.0.7/0.7.1 sampled guest image residency budget
+- V74.0.8 standalone texture-cache byte budget
+- V74.0.10 renderer/resource native lane
+- V74.0.12 startup Bink completion visual release
+- V74.0.13 robust startup completion handoff
+- V74.0.14 environment-aware TBB override
+- DBFZ later NativeWorker scheduler/ownership changes (V74.0.15 does not overwrite NativeWorker)

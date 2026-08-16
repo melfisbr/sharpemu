@@ -61,6 +61,16 @@ public static class AudioOut2Exports
     private static long _pushTraceCount;
     private static long _submitTraceCount;
     private static long _attributePcmTraceCount;
+    // V61.20.0_AUDIO_QUEUE_FEEDBACK
+    private static long _queueLevelTraceCount;
+    private static long _portStateTraceCount;
+    private static long _speakerInfoTraceCount;
+    private static long _silentSubmitTraceCount;
+    // V61.21.0_AUDIO_SOURCE_LINEAGE
+    private static long _bedWriteTraceCount;
+    private static long _zeroPcmSourceTraceCount;
+    private static long _nonZeroPcmSourceTraceCount;
+    private static long _pcmReadFailureTraceCount;
 
     private static readonly ConcurrentDictionary<ulong, byte> SpeakerArrays = new();
     private static readonly ConcurrentDictionary<ulong, ContextState> Contexts = new();
@@ -307,7 +317,24 @@ public static class AudioOut2Exports
         ExportName = "sceAudioOut2ContextBedWrite",
         Target = Generation.Gen5,
         LibraryName = "libSceAudioOut2")]
-    public static int AudioOut2ContextBedWrite(CpuContext ctx) => SetReturn(ctx, 0);
+    public static int AudioOut2ContextBedWrite(CpuContext ctx)
+    {
+        // V61.21.0_AUDIO_SOURCE_LINEAGE
+        // The exact BedWrite sample-buffer ABI is not proven yet. Keep the
+        // existing compatibility return value, but make runtime use observable
+        // so a future implementation can be based on real guest arguments.
+        var n = Interlocked.Increment(ref _bedWriteTraceCount);
+        if (n <= 8 || n % 1000 == 0)
+        {
+            TraceAudioOut2(
+                $"context-bed-write#{n} rdi=0x{ctx[CpuRegister.Rdi]:X} " +
+                $"rsi=0x{ctx[CpuRegister.Rsi]:X} rdx=0x{ctx[CpuRegister.Rdx]:X} " +
+                $"rcx=0x{ctx[CpuRegister.Rcx]:X} r8=0x{ctx[CpuRegister.R8]:X} " +
+                $"r9=0x{ctx[CpuRegister.R9]:X}");
+        }
+
+        return SetReturn(ctx, 0);
+    }
 
     [SysAbiExport(
         Nid = "aII9h5nli9U",
@@ -369,6 +396,19 @@ public static class AudioOut2Exports
         // ABI out is a 32-bit queue depth (GTA compares dword [out] to 4). A
         // uint64 write into a stack slot at [rbp-0x14] next to the canary at
         // [rbp-0x10] zeroed the canary low half and killed Bink Snd @ eboot+0xAE36.
+        //
+        // V61.20.0_AUDIO_QUEUE_FEEDBACK:
+        // Older compatibility code always returned level=0 / available=full.
+        // Demon's Souls polls this thousands of times, so reporting a permanently
+        // empty queue tells the guest that it can keep producing audio even while
+        // SDL still has data queued. Translate the host queue depth back into the
+        // guest's grain/queue units when the backend can report it.
+        var handle = ctx[CpuRegister.Rdi];
+        Contexts.TryGetValue(handle, out var context);
+        var queueLevel = context is null ? 0u : GetContextQueueLevel(context);
+        var queueDepth = context?.QueueDepth ?? 4u;
+        var available = queueDepth - Math.Min(queueLevel, queueDepth);
+
         var outLevelAddress = ctx[CpuRegister.Rsi];
         var outAvailableAddress = ctx[CpuRegister.Rdx];
         if (outLevelAddress == 0)
@@ -380,7 +420,7 @@ public static class AudioOut2Exports
         Span<byte> level = stackalloc byte[sizeof(uint)];
         if (outLevelAddress != 0)
         {
-            BinaryPrimitives.WriteUInt32LittleEndian(level, 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(level, queueLevel);
             if (!ctx.Memory.TryWrite(outLevelAddress, level))
             {
                 return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
@@ -391,14 +431,19 @@ public static class AudioOut2Exports
             outAvailableAddress != outLevelAddress &&
             IsWritableOutBuffer(outAvailableAddress))
         {
-            var available = Contexts.TryGetValue(ctx[CpuRegister.Rdi], out var context)
-                ? context.QueueDepth
-                : 4u;
             BinaryPrimitives.WriteUInt32LittleEndian(level, available);
             if (!ctx.Memory.TryWrite(outAvailableAddress, level))
             {
                 return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
             }
+        }
+
+        var trace = Interlocked.Increment(ref _queueLevelTraceCount);
+        if (trace <= 8 || trace % 500 == 0)
+        {
+            TraceAudioOut2(
+                $"context-queue-level#{trace} handle=0x{handle:X} " +
+                $"level={queueLevel}/{queueDepth} available={available}");
         }
 
         return SetReturn(ctx, 0);
@@ -549,6 +594,8 @@ public static class AudioOut2Exports
     {
         var portHandle = ctx[CpuRegister.Rdi];
         var stateAddress = ResolveGuestOutBuffer(ctx[CpuRegister.Rsi], ctx[CpuRegister.Rdx]);
+        var trace = Interlocked.Increment(ref _portStateTraceCount);
+        var logThisCall = trace <= 8 || trace % 500 == 0;
         if (stateAddress == 0)
         {
             return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
@@ -561,8 +608,11 @@ public static class AudioOut2Exports
         if (IsGuestStackAddress(stateAddress) &&
             !(AllowStackOut("portstate") && Ports.ContainsKey(portHandle)))
         {
-            TraceAudioOut2(
-                $"port-get-state skip-stack handle=0x{portHandle:X} state=0x{stateAddress:X}");
+            if (logThisCall)
+            {
+                TraceAudioOut2(
+                    $"port-get-state#{trace} skip-stack handle=0x{portHandle:X} state=0x{stateAddress:X}");
+            }
             return SetReturn(ctx, 0);
         }
 
@@ -587,8 +637,12 @@ public static class AudioOut2Exports
             return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
         }
 
-        TraceAudioOut2(
-            $"port-get-state handle=0x{portHandle:X} state=0x{stateAddress:X} bytes=0x{PortStateSize:X}");
+        if (logThisCall)
+        {
+            TraceAudioOut2(
+                $"port-get-state#{trace} handle=0x{portHandle:X} " +
+                $"state=0x{stateAddress:X} bytes=0x{PortStateSize:X}");
+        }
         return SetReturn(ctx, 0);
     }
 
@@ -643,6 +697,8 @@ public static class AudioOut2Exports
     public static int AudioOut2GetSpeakerInfo(CpuContext ctx)
     {
         var infoAddress = ResolveGuestOutBuffer(ctx[CpuRegister.Rdi], ctx[CpuRegister.Rdx]);
+        var trace = Interlocked.Increment(ref _speakerInfoTraceCount);
+        var logThisCall = trace <= 8 || trace % 500 == 0;
         if (infoAddress == 0)
         {
             return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
@@ -650,7 +706,10 @@ public static class AudioOut2Exports
 
         if (IsGuestStackAddress(infoAddress) && !AllowStackOut("speaker"))
         {
-            TraceAudioOut2($"get-speaker-info skip-stack out=0x{infoAddress:X}");
+            if (logThisCall)
+            {
+                TraceAudioOut2($"get-speaker-info#{trace} skip-stack out=0x{infoAddress:X}");
+            }
             return SetReturn(ctx, 0);
         }
 
@@ -665,8 +724,12 @@ public static class AudioOut2Exports
             return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
         }
 
-        TraceAudioOut2(
-            $"get-speaker-info out=0x{infoAddress:X} type=0x{ctx[CpuRegister.Rsi]:X} bytes=0x{SpeakerInfoSize:X}");
+        if (logThisCall)
+        {
+            TraceAudioOut2(
+                $"get-speaker-info#{trace} out=0x{infoAddress:X} " +
+                $"type=0x{ctx[CpuRegister.Rsi]:X} bytes=0x{SpeakerInfoSize:X}");
+        }
         return SetReturn(ctx, 0);
     }
 
@@ -810,6 +873,53 @@ public static class AudioOut2Exports
             : SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
     }
 
+    // V61.20.0_AUDIO_QUEUE_FEEDBACK
+    private static uint GetContextQueueLevel(ContextState context)
+    {
+        IHostAudioStream? backend = null;
+        lock (HostBackendGate)
+        {
+            if (context.Handle == PrimaryContextHandle)
+            {
+                backend = PrimaryBackend;
+            }
+            else if (PrimaryContextHandle != 0)
+            {
+                backend = SecondaryBackend;
+            }
+        }
+
+        var queuedMilliseconds = backend?.QueuedMilliseconds ?? -1;
+        if (queuedMilliseconds <= 0 || context.Frequency == 0 || context.GrainSamples == 0)
+        {
+            return 0;
+        }
+
+        var grainMilliseconds =
+            context.GrainSamples * 1000.0 / context.Frequency;
+        if (grainMilliseconds <= 0)
+        {
+            return 0;
+        }
+
+        var grains = (int)Math.Ceiling(queuedMilliseconds / grainMilliseconds);
+        return (uint)Math.Clamp(grains, 0, checked((int)context.QueueDepth));
+    }
+
+    private static int GetContextHostQueueBytes(ContextState context)
+    {
+        // Two guest queue windows are enough to absorb host scheduling jitter
+        // without the ~683 ms latency of the old fixed 128 KiB stereo queue.
+        var guestQueueBytes =
+            checked((long)context.QueueDepth *
+                    context.GrainSamples *
+                    AudioPcmConversion.OutputFrameSize);
+        return checked((int)Math.Clamp(
+            guestQueueBytes * 2L,
+            16L * 1024L,
+            64L * 1024L));
+    }
+
     private static IHostAudioStream? ResolveContextBackend(ContextState context, out string backendName)
     {
         lock (HostBackendGate)
@@ -826,11 +936,11 @@ public static class AudioOut2Exports
                     try
                     {
                         var audio = HostPlatform.Current.Audio;
-                        // Deeper host queue than classic AudioOut: FMOD's bursty
-                        // AudioOut2 Push pattern underran a 32 KiB (~171 ms) bed.
+                        // V61.20.0_AUDIO_QUEUE_FEEDBACK: size the host queue
+                        // from the guest queue model instead of a fixed 128 KiB.
                         PrimaryBackend = audio.OpenStereoPcm16Stream(
                             context.Frequency,
-                            maxQueuedPcmBytes: 128 * 1024);
+                            maxQueuedPcmBytes: GetContextHostQueueBytes(context));
                         PrimaryBackendName = audio.BackendName + "-primary";
                     }
                     catch (Exception exception)
@@ -852,7 +962,7 @@ public static class AudioOut2Exports
                     var audio = HostPlatform.Current.Audio;
                     SecondaryBackend = audio.OpenStereoPcm16Stream(
                         context.Frequency,
-                        maxQueuedPcmBytes: 128 * 1024);
+                        maxQueuedPcmBytes: GetContextHostQueueBytes(context));
                     SecondaryBackendName = audio.BackendName + "-secondary";
                 }
                 catch (Exception exception)
@@ -904,7 +1014,42 @@ public static class AudioOut2Exports
                     var sourceSpan = source.AsSpan(0, byteLength);
                     if (!ctx.Memory.TryRead(port.PcmAddress, sourceSpan))
                     {
+                        var failed = Interlocked.Increment(ref _pcmReadFailureTraceCount);
+                        if (failed <= 8 || failed % 2000 == 0)
+                        {
+                            TraceAudioOut2(
+                                $"port-pcm-read-fail#{failed} port=0x{port.Handle:X} " +
+                                $"pcm=0x{port.PcmAddress:X} bytes={byteLength} format=0x{port.DataFormat:X}");
+                        }
                         continue;
+                    }
+
+                    // V61.20.0_AUDIO_ZERO_PCM_FASTPATH
+                    // Object-audio setup can attach dozens of ports containing
+                    // literal zero PCM during boot. Preserve exact silence while
+                    // avoiding per-sample float conversion/mixing for those ports.
+                    if (IsAllZeroPcm(sourceSpan))
+                    {
+                        var zero = Interlocked.Increment(ref _zeroPcmSourceTraceCount);
+                        if (zero <= 8 || zero % 2000 == 0)
+                        {
+                            TraceAudioOut2(
+                                $"port-zero-pcm#{zero} port=0x{port.Handle:X} " +
+                                $"pcm=0x{port.PcmAddress:X} bytes={byteLength} " +
+                                $"format=0x{port.DataFormat:X} channels={ch} bps={bps}");
+                        }
+                        continue;
+                    }
+
+                    var nonZero = Interlocked.Increment(ref _nonZeroPcmSourceTraceCount);
+                    if (nonZero <= 8 || nonZero % 2000 == 0)
+                    {
+                        var sampleBytes = Math.Min(sourceSpan.Length, 16);
+                        TraceAudioOut2(
+                            $"port-nonzero-pcm#{nonZero} port=0x{port.Handle:X} " +
+                            $"pcm=0x{port.PcmAddress:X} bytes={byteLength} " +
+                            $"format=0x{port.DataFormat:X} channels={ch} bps={bps} " +
+                            $"head={Convert.ToHexString(sourceSpan[..sampleBytes])}");
                     }
 
                     MixPortIntoStereo(
@@ -938,6 +1083,22 @@ public static class AudioOut2Exports
                         FloatToPcm16(right));
                 }
 
+                // V61.20.0_AUDIO_SILENCE_FASTPATH
+                // The current Demon's Souls boot path repeatedly submits fully
+                // silent buffers. Do not fill SDL's queue with zeros; returning
+                // false makes ContextPush/Advance use the existing grain pacing.
+                if (peak <= (1f / short.MaxValue))
+                {
+                    var silent = Interlocked.Increment(ref _silentSubmitTraceCount);
+                    if (silent <= 8 || silent % 500 == 0)
+                    {
+                        TraceAudioOut2(
+                            $"context-silence#{silent} handle=0x{context.Handle:X} " +
+                            $"frames={frames} ports={mixedPorts}");
+                    }
+                    return false;
+                }
+
                 var backend = ResolveContextBackend(context, out var backendName);
                 if (backend is null)
                 {
@@ -961,6 +1122,19 @@ public static class AudioOut2Exports
                 ArrayPool<byte>.Shared.Return(output);
             }
         }
+    }
+
+    private static bool IsAllZeroPcm(ReadOnlySpan<byte> source)
+    {
+        foreach (var value in source)
+        {
+            if (value != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool IsMainOrBgmPort(ushort portType)

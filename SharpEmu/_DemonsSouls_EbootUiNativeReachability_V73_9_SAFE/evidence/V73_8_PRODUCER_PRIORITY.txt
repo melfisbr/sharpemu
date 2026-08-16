@@ -1,0 +1,15 @@
+[V73.0.14][PRODUCER_PRIORITY] count=1 queue=acb.compute[32] submission=1 sequence=4 name='write_data dst=0x0000000456CFFA60 count=2' pending=5 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=2 queue=acb.compute[40] submission=3 sequence=25 name='release_mem dst=0x000000040049CFD0 data=0x0000000000000000' pending=22 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=3 queue=dcb.graphics submission=2 sequence=12 name='write_data dst=0x0000000456CFE840 count=2' pending=20 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=4 queue=dcb.graphics submission=2 sequence=13 name='release_mem dst=0x000000040049CC10 data=0x0000000000000000' pending=22 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=5 queue=acb.compute[40] submission=3 sequence=27 name='write_data dst=0x0000000456CFF080 count=2' pending=22 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=6 queue=acb.compute[40] submission=3 sequence=28 name='release_mem dst=0x000000040049CFF0 data=0x0000000000000000' pending=21 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=7 queue=dcb.graphics submission=2 sequence=16 name='release_mem dst=0x0000000456CFE818 data=0x0000000000000001' pending=18 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=8 queue=dcb.graphics submission=2 sequence=20 name='write_data dst=0x0000000456CFE7F0 count=2' pending=14 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=16 queue=dcb.graphics submission=4 sequence=47 name='write_data dst=0x00000004571FFC98 count=2' pending=2 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=32 queue=dcb.graphics submission=4 sequence=107 name='release_mem dst=0x0000000456D01498 data=0x0000000000000001' pending=5 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=64 queue=dcb.graphics submission=4 sequence=209 name='write_data dst=0x00000004571FB8C8 count=2' pending=9 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=128 queue=acb.compute[64] submission=9 sequence=394 name='write_data dst=0x000000060A090AC0 count=2' pending=2 waiters=0
+[V73.0.14][PRODUCER_PRIORITY] count=256 queue=dcb.graphics submission=24 sequence=781 name='release_mem dst=0x0000000442501648 data=0x0000000000000001' pending=5 waiters=7
+[V73.0.14][PRODUCER_PRIORITY] count=512 queue=acb.compute[56] submission=42 sequence=1560 name='write_data dst=0x000000060A473AB8 count=2' pending=82 waiters=6
+[V73.0.14][PRODUCER_PRIORITY] count=1024 queue=dcb.graphics submission=62 sequence=2838 name='write_data dst=0x00000004422FE780 count=2' pending=55 waiters=7

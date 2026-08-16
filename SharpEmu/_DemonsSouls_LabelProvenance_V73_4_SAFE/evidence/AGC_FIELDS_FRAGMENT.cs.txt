@@ -1,0 +1,11 @@
+    // V73.4: bounded, opt-in provenance tracing for real producerless WAIT_REG_MEM.
+    // This is diagnostic-only: it never changes a label, queue state or comparison.
+    private static readonly bool _traceLabelProvenanceV734 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_LABEL_PROVENANCE"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly object _labelProvenanceGateV734 = new();
+    private static readonly Dictionary<object, HashSet<ulong>> _labelProvenanceTargetsV734 =
+        new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+    private static long _labelProvenanceEventCountV734;
+    private static long _labelProvenanceComputeScanCountV734;

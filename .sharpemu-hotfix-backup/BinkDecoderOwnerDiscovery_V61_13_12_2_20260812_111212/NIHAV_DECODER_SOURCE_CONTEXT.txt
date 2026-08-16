@@ -1,0 +1,2952 @@
+﻿============================================================
+FILE=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Media\NihavBink2Decoder.cs
+SCORE=195
+     9: 
+    10: /// <summary>
+    11: /// Bink2/KB2 host decoder backed by the external NihAV decoder tool.
+    12: ///
+    13: /// NihAV is intentionally not linked into SharpEmu and is not redistributed by
+
+    11: /// Bink2/KB2 host decoder backed by the external NihAV decoder tool.
+    12: ///
+    13: /// NihAV is intentionally not linked into SharpEmu and is not redistributed by
+    14: /// this source file. The optional executable is discovered under
+    15: /// <c>plugins\bink2\nihav-tool.exe</c> or via SHARPEMU_NIHAV_TOOL. Keeping the
+
+    13: /// NihAV is intentionally not linked into SharpEmu and is not redistributed by
+    14: /// this source file. The optional executable is discovered under
+    15: /// <c>plugins\bink2\nihav-tool.exe</c> or via SHARPEMU_NIHAV_TOOL. Keeping the
+    16: /// codec in a child process gives us natural backpressure and isolates malformed
+    17: /// movie data from the emulator process.
+
+    17: /// movie data from the emulator process.
+    18: ///
+    19: /// The tool writes PPM for RGB or PGMYUV for YUV frames. This adapter decodes
+    20: /// short time slices, consumes those images, converts them to BGRA and deletes
+    21: /// each slice before moving to the next one. Slice decoding bounds temporary
+
+    18: ///
+    19: /// The tool writes PPM for RGB or PGMYUV for YUV frames. This adapter decodes
+    20: /// short time slices, consumes those images, converts them to BGRA and deletes
+    21: /// each slice before moving to the next one. Slice decoding bounds temporary
+    22: /// disk usage instead of allowing a whole 4K movie to be dumped at once.
+
+    22: /// disk usage instead of allowing a whole 4K movie to be dumped at once.
+    23: /// </summary>
+    24: internal sealed class NihavBink2Decoder : IMediaFrameDecoder
+    25: {
+    26:     private const int HeaderProbeLength = 48;
+
+    25: {
+    26:     private const int HeaderProbeLength = 48;
+    27:     private const int DecoderTimeoutMilliseconds = 120_000;
+    28:     private const double DefaultChunkSeconds = 1.0;
+    29:     private const double MinimumChunkSeconds = 0.25;
+
+    26:     private const int HeaderProbeLength = 48;
+    27:     private const int DecoderTimeoutMilliseconds = 120_000;
+    28:     private const double DefaultChunkSeconds = 1.0;
+    29:     private const double MinimumChunkSeconds = 0.25;
+    30:     private const double MaximumChunkSeconds = 4.0;
+
+    27:     private const int DecoderTimeoutMilliseconds = 120_000;
+    28:     private const double DefaultChunkSeconds = 1.0;
+    29:     private const double MinimumChunkSeconds = 0.25;
+    30:     private const double MaximumChunkSeconds = 4.0;
+    31:     private const int MaxTraceLength = 4096;
+
+    28:     private const double DefaultChunkSeconds = 1.0;
+    29:     private const double MinimumChunkSeconds = 0.25;
+    30:     private const double MaximumChunkSeconds = 4.0;
+    31:     private const int MaxTraceLength = 4096;
+    32: 
+
+    36:     private readonly uint _sourceWidth;
+    37:     private readonly uint _sourceHeight;
+    38:     private readonly uint _frameCount;
+    39:     private readonly bool _trace;
+    40:     private readonly bool _swapUv;
+
+    40:     private readonly bool _swapUv;
+    41:     private readonly bool _fullRange;
+    42:     private readonly double _chunkSeconds;
+    43:     private List<string> _chunkFrames = [];
+    44:     private int _chunkFrameIndex;
+
+    41:     private readonly bool _fullRange;
+    42:     private readonly double _chunkSeconds;
+    43:     private List<string> _chunkFrames = [];
+    44:     private int _chunkFrameIndex;
+    45:     private uint _deliveredFrames;
+
+    42:     private readonly double _chunkSeconds;
+    43:     private List<string> _chunkFrames = [];
+    44:     private int _chunkFrameIndex;
+    45:     private uint _deliveredFrames;
+    46:     private double _nextChunkStartSeconds;
+
+    43:     private List<string> _chunkFrames = [];
+    44:     private int _chunkFrameIndex;
+    45:     private uint _deliveredFrames;
+    46:     private double _nextChunkStartSeconds;
+    47:     private int _chunkIndex;
+
+    44:     private int _chunkFrameIndex;
+    45:     private uint _deliveredFrames;
+    46:     private double _nextChunkStartSeconds;
+    47:     private int _chunkIndex;
+    48:     private int _disposed;
+
+    45:     private uint _deliveredFrames;
+    46:     private double _nextChunkStartSeconds;
+    47:     private int _chunkIndex;
+    48:     private int _disposed;
+    49: 
+
+    48:     private int _disposed;
+    49: 
+    50:     private NihavBink2Decoder(
+    51:         string moviePath,
+    52:         string toolPath,
+
+    54:         uint sourceWidth,
+    55:         uint sourceHeight,
+    56:         uint frameCount,
+    57:         uint outputWidth,
+    58:         uint outputHeight,
+
+    57:         uint outputWidth,
+    58:         uint outputHeight,
+    59:         uint framesPerSecondNumerator,
+    60:         uint framesPerSecondDenominator)
+    61:     {
+
+    58:         uint outputHeight,
+    59:         uint framesPerSecondNumerator,
+    60:         uint framesPerSecondDenominator)
+    61:     {
+    62:         _moviePath = moviePath;
+
+    65:         _sourceWidth = sourceWidth;
+    66:         _sourceHeight = sourceHeight;
+    67:         _frameCount = frameCount;
+    68:         Width = outputWidth;
+    69:         Height = outputHeight;
+
+    68:         Width = outputWidth;
+    69:         Height = outputHeight;
+    70:         FramesPerSecondNumerator = framesPerSecondNumerator;
+    71:         FramesPerSecondDenominator = framesPerSecondDenominator;
+    72:         _trace = string.Equals(
+
+    69:         Height = outputHeight;
+    70:         FramesPerSecondNumerator = framesPerSecondNumerator;
+    71:         FramesPerSecondDenominator = framesPerSecondDenominator;
+    72:         _trace = string.Equals(
+    73:             Environment.GetEnvironmentVariable("SHARPEMU_LOG_BINK2"),
+
+    75:             StringComparison.Ordinal);
+    76:         _swapUv = string.Equals(
+    77:             Environment.GetEnvironmentVariable("SHARPEMU_NIHAV_UV_SWAP"),
+    78:             "1",
+    79:             StringComparison.Ordinal);
+
+    82:             "1",
+    83:             StringComparison.Ordinal);
+    84:         _chunkSeconds = ResolveChunkSeconds();
+    85:     }
+    86: 
+
+    89:     public uint Height { get; }
+    90: 
+    91:     public uint FramesPerSecondNumerator { get; }
+    92: 
+    93:     public uint FramesPerSecondDenominator { get; }
+
+    91:     public uint FramesPerSecondNumerator { get; }
+    92: 
+    93:     public uint FramesPerSecondDenominator { get; }
+    94: 
+    95:     private static double ResolveChunkSeconds()
+
+    93:     public uint FramesPerSecondDenominator { get; }
+    94: 
+    95:     private static double ResolveChunkSeconds()
+    96:     {
+    97:         var configured = Environment.GetEnvironmentVariable("SHARPEMU_NIHAV_CHUNK_SECONDS");
+
+    95:     private static double ResolveChunkSeconds()
+    96:     {
+    97:         var configured = Environment.GetEnvironmentVariable("SHARPEMU_NIHAV_CHUNK_SECONDS");
+    98:         if (double.TryParse(
+    99:                 configured,
+
+   100:                 NumberStyles.Float,
+   101:                 CultureInfo.InvariantCulture,
+   102:                 out var seconds))
+   103:         {
+   104:             return Math.Clamp(seconds, MinimumChunkSeconds, MaximumChunkSeconds);
+
+   102:                 out var seconds))
+   103:         {
+   104:             return Math.Clamp(seconds, MinimumChunkSeconds, MaximumChunkSeconds);
+   105:         }
+   106: 
+
+   105:         }
+   106: 
+   107:         return DefaultChunkSeconds;
+   108:     }
+   109: 
+
+   112:         uint maximumWidth,
+   113:         uint maximumHeight,
+   114:         out NihavBink2Decoder? decoder)
+   115:     {
+   116:         decoder = null;
+
+   119:                 out var sourceWidth,
+   120:                 out var sourceHeight,
+   121:                 out var frameCount,
+   122:                 out var frameRateNumerator,
+   123:                 out var frameRateDenominator))
+
+   120:                 out var sourceHeight,
+   121:                 out var frameCount,
+   122:                 out var frameRateNumerator,
+   123:                 out var frameRateDenominator))
+   124:         {
+
+   121:                 out var frameCount,
+   122:                 out var frameRateNumerator,
+   123:                 out var frameRateDenominator))
+   124:         {
+   125:             return false;
+
+   145:         Directory.CreateDirectory(sessionRoot);
+   146: 
+   147:         var candidate = new NihavBink2Decoder(
+   148:             path,
+   149:             toolPath,
+
+   151:             sourceWidth,
+   152:             sourceHeight,
+   153:             frameCount,
+   154:             outputWidth,
+   155:             outputHeight,
+
+   154:             outputWidth,
+   155:             outputHeight,
+   156:             frameRateNumerator,
+   157:             frameRateDenominator);
+   158:         try
+
+   155:             outputHeight,
+   156:             frameRateNumerator,
+   157:             frameRateDenominator);
+   158:         try
+   159:         {
+
+   161:             // proof that this particular KB2 stream can actually be decoded,
+   162:             // not merely that the helper executable exists.
+   163:             if (!candidate.DecodeNextChunk())
+   164:             {
+   165:                 candidate.Dispose();
+
+   169:             decoder = candidate;
+   170:             Console.Error.WriteLine(
+   171:                 $"[LOADER][INFO] bink2.nihav_ready file='{Path.GetFileName(path)}' " +
+   172:                 $"source={sourceWidth}x{sourceHeight} output={outputWidth}x{outputHeight} " +
+   173:                 $"frames={frameCount} fps={frameRateNumerator}/{frameRateDenominator} " +
+
+   171:                 $"[LOADER][INFO] bink2.nihav_ready file='{Path.GetFileName(path)}' " +
+   172:                 $"source={sourceWidth}x{sourceHeight} output={outputWidth}x{outputHeight} " +
+   173:                 $"frames={frameCount} fps={frameRateNumerator}/{frameRateDenominator} " +
+   174:                 $"chunk={candidate._chunkSeconds:F2}s tool='{toolPath}'");
+   175:             return true;
+
+   172:                 $"source={sourceWidth}x{sourceHeight} output={outputWidth}x{outputHeight} " +
+   173:                 $"frames={frameCount} fps={frameRateNumerator}/{frameRateDenominator} " +
+   174:                 $"chunk={candidate._chunkSeconds:F2}s tool='{toolPath}'");
+   175:             return true;
+   176:         }
+
+   180:         {
+   181:             Console.Error.WriteLine(
+   182:                 "[LOADER][WARN] Bink2 NIHAV decoder initialization failed: " +
+   183:                 exception.Message);
+   184:             candidate.Dispose();
+
+   187:     }
+   188: 
+   189:     public bool TryDecodeNextFrame(Span<byte> destination)
+   190:     {
+   191:         ObjectDisposedException.ThrowIf(
+
+   200:         }
+   201: 
+   202:         while (_frameCount == 0 || _deliveredFrames < _frameCount)
+   203:         {
+   204:             if (_chunkFrameIndex >= _chunkFrames.Count)
+
+   202:         while (_frameCount == 0 || _deliveredFrames < _frameCount)
+   203:         {
+   204:             if (_chunkFrameIndex >= _chunkFrames.Count)
+   205:             {
+   206:                 if (!DecodeNextChunk())
+
+   204:             if (_chunkFrameIndex >= _chunkFrames.Count)
+   205:             {
+   206:                 if (!DecodeNextChunk())
+   207:                 {
+   208:                     return false;
+
+   210:             }
+   211: 
+   212:             while (_chunkFrameIndex < _chunkFrames.Count)
+   213:             {
+   214:                 var framePath = _chunkFrames[_chunkFrameIndex++];
+
+   212:             while (_chunkFrameIndex < _chunkFrames.Count)
+   213:             {
+   214:                 var framePath = _chunkFrames[_chunkFrameIndex++];
+   215:                 if (!TryReadFrame(framePath, destination[..requiredBytes]))
+   216:                 {
+
+   213:             {
+   214:                 var framePath = _chunkFrames[_chunkFrameIndex++];
+   215:                 if (!TryReadFrame(framePath, destination[..requiredBytes]))
+   216:                 {
+   217:                     continue;
+
+   218:                 }
+   219: 
+   220:                 _deliveredFrames++;
+   221:                 TryDelete(framePath);
+   222:                 if (_trace &&
+
+   219: 
+   220:                 _deliveredFrames++;
+   221:                 TryDelete(framePath);
+   222:                 if (_trace &&
+   223:                     (_deliveredFrames <= 3 || _deliveredFrames % 120 == 0))
+
+   221:                 TryDelete(framePath);
+   222:                 if (_trace &&
+   223:                     (_deliveredFrames <= 3 || _deliveredFrames % 120 == 0))
+   224:                 {
+   225:                     Console.Error.WriteLine(
+
+   224:                 {
+   225:                     Console.Error.WriteLine(
+   226:                         $"[LOADER][TRACE] bink2.nihav_frame n={_deliveredFrames} " +
+   227:                         $"file='{Path.GetFileName(_moviePath)}' size={Width}x{Height}");
+   228:                 }
+
+   234:     }
+   235: 
+   236:     private bool DecodeNextChunk()
+   237:     {
+   238:         CleanupConsumedChunk();
+
+   236:     private bool DecodeNextChunk()
+   237:     {
+   238:         CleanupConsumedChunk();
+   239: 
+   240:         if (_frameCount != 0 && _deliveredFrames >= _frameCount)
+
+   238:         CleanupConsumedChunk();
+   239: 
+   240:         if (_frameCount != 0 && _deliveredFrames >= _frameCount)
+   241:         {
+   242:             return false;
+
+   243:         }
+   244: 
+   245:         var totalDurationSeconds = _frameCount == 0
+   246:             ? double.PositiveInfinity
+   247:             : (double)_frameCount * FramesPerSecondDenominator /
+
+   245:         var totalDurationSeconds = _frameCount == 0
+   246:             ? double.PositiveInfinity
+   247:             : (double)_frameCount * FramesPerSecondDenominator /
+   248:               FramesPerSecondNumerator;
+   249:         if (_nextChunkStartSeconds >= totalDurationSeconds)
+
+   246:             ? double.PositiveInfinity
+   247:             : (double)_frameCount * FramesPerSecondDenominator /
+   248:               FramesPerSecondNumerator;
+   249:         if (_nextChunkStartSeconds >= totalDurationSeconds)
+   250:         {
+
+   247:             : (double)_frameCount * FramesPerSecondDenominator /
+   248:               FramesPerSecondNumerator;
+   249:         if (_nextChunkStartSeconds >= totalDurationSeconds)
+   250:         {
+   251:             return false;
+
+   252:         }
+   253: 
+   254:         // The last slice ends at the actual movie duration. A small epsilon
+   255:         // avoids asking the demuxer for a timestamp infinitesimally past EOF.
+   256:         var chunkEndSeconds = Math.Min(
+
+   253: 
+   254:         // The last slice ends at the actual movie duration. A small epsilon
+   255:         // avoids asking the demuxer for a timestamp infinitesimally past EOF.
+   256:         var chunkEndSeconds = Math.Min(
+   257:             _nextChunkStartSeconds + _chunkSeconds,
+
+   254:         // The last slice ends at the actual movie duration. A small epsilon
+   255:         // avoids asking the demuxer for a timestamp infinitesimally past EOF.
+   256:         var chunkEndSeconds = Math.Min(
+   257:             _nextChunkStartSeconds + _chunkSeconds,
+   258:             totalDurationSeconds);
+
+   255:         // avoids asking the demuxer for a timestamp infinitesimally past EOF.
+   256:         var chunkEndSeconds = Math.Min(
+   257:             _nextChunkStartSeconds + _chunkSeconds,
+   258:             totalDurationSeconds);
+   259:         var chunkDirectory = Path.Combine(
+
+   256:         var chunkEndSeconds = Math.Min(
+   257:             _nextChunkStartSeconds + _chunkSeconds,
+   258:             totalDurationSeconds);
+   259:         var chunkDirectory = Path.Combine(
+   260:             _sessionRoot,
+
+   257:             _nextChunkStartSeconds + _chunkSeconds,
+   258:             totalDurationSeconds);
+   259:         var chunkDirectory = Path.Combine(
+   260:             _sessionRoot,
+   261:             "chunk_" + _chunkIndex.ToString("D6", CultureInfo.InvariantCulture));
+
+   259:         var chunkDirectory = Path.Combine(
+   260:             _sessionRoot,
+   261:             "chunk_" + _chunkIndex.ToString("D6", CultureInfo.InvariantCulture));
+   262:         _chunkIndex++;
+   263:         Directory.CreateDirectory(chunkDirectory);
+
+   260:             _sessionRoot,
+   261:             "chunk_" + _chunkIndex.ToString("D6", CultureInfo.InvariantCulture));
+   262:         _chunkIndex++;
+   263:         Directory.CreateDirectory(chunkDirectory);
+   264:         var prefix = Path.Combine(chunkDirectory, "frame_");
+
+   261:             "chunk_" + _chunkIndex.ToString("D6", CultureInfo.InvariantCulture));
+   262:         _chunkIndex++;
+   263:         Directory.CreateDirectory(chunkDirectory);
+   264:         var prefix = Path.Combine(chunkDirectory, "frame_");
+   265: 
+
+   262:         _chunkIndex++;
+   263:         Directory.CreateDirectory(chunkDirectory);
+   264:         var prefix = Path.Combine(chunkDirectory, "frame_");
+   265: 
+   266:         using var process = new Process();
+
+   268:         {
+   269:             FileName = _toolPath,
+   270:             WorkingDirectory = chunkDirectory,
+   271:             UseShellExecute = false,
+   272:             CreateNoWindow = true,
+
+   280:         process.StartInfo.ArgumentList.Add(prefix);
+   281:         process.StartInfo.ArgumentList.Add("-ignerr");
+   282:         if (_nextChunkStartSeconds > 0.000_001)
+   283:         {
+   284:             process.StartInfo.ArgumentList.Add("-seek");
+
+   282:         if (_nextChunkStartSeconds > 0.000_001)
+   283:         {
+   284:             process.StartInfo.ArgumentList.Add("-seek");
+   285:             process.StartInfo.ArgumentList.Add(FormatTime(_nextChunkStartSeconds));
+   286:         }
+
+   283:         {
+   284:             process.StartInfo.ArgumentList.Add("-seek");
+   285:             process.StartInfo.ArgumentList.Add(FormatTime(_nextChunkStartSeconds));
+   286:         }
+   287:         process.StartInfo.ArgumentList.Add(_moviePath);
+
+   286:         }
+   287:         process.StartInfo.ArgumentList.Add(_moviePath);
+   288:         if (!double.IsPositiveInfinity(chunkEndSeconds))
+   289:         {
+   290:             process.StartInfo.ArgumentList.Add(FormatTime(chunkEndSeconds));
+
+   288:         if (!double.IsPositiveInfinity(chunkEndSeconds))
+   289:         {
+   290:             process.StartInfo.ArgumentList.Add(FormatTime(chunkEndSeconds));
+   291:         }
+   292: 
+
+   294:         {
+   295:             Console.Error.WriteLine(
+   296:                 $"[LOADER][TRACE] bink2.nihav_chunk start={_nextChunkStartSeconds:F3} " +
+   297:                 $"end={chunkEndSeconds:F3} file='{Path.GetFileName(_moviePath)}'");
+   298:         }
+
+   295:             Console.Error.WriteLine(
+   296:                 $"[LOADER][TRACE] bink2.nihav_chunk start={_nextChunkStartSeconds:F3} " +
+   297:                 $"end={chunkEndSeconds:F3} file='{Path.GetFileName(_moviePath)}'");
+   298:         }
+   299: 
+
+   301:         {
+   302:             throw new InvalidOperationException(
+   303:                 "Could not start the NihAV Bink2 decoder.");
+   304:         }
+   305: 
+
+   306:         var stdoutTask = process.StandardOutput.ReadToEndAsync();
+   307:         var stderrTask = process.StandardError.ReadToEndAsync();
+   308:         if (!process.WaitForExit(DecoderTimeoutMilliseconds))
+   309:         {
+   310:             try
+
+   317: 
+   318:             throw new InvalidOperationException(
+   319:                 $"NihAV timed out while decoding {Path.GetFileName(_moviePath)}.");
+   320:         }
+   321: 
+
+   324:         var stderr = stderrTask.GetAwaiter().GetResult();
+   325: 
+   326:         _chunkFrames = EnumerateFrameFiles(chunkDirectory);
+   327:         _chunkFrameIndex = 0;
+   328:         _nextChunkStartSeconds = chunkEndSeconds;
+
+   325: 
+   326:         _chunkFrames = EnumerateFrameFiles(chunkDirectory);
+   327:         _chunkFrameIndex = 0;
+   328:         _nextChunkStartSeconds = chunkEndSeconds;
+   329: 
+
+   326:         _chunkFrames = EnumerateFrameFiles(chunkDirectory);
+   327:         _chunkFrameIndex = 0;
+   328:         _nextChunkStartSeconds = chunkEndSeconds;
+   329: 
+   330:         if (_chunkFrames.Count == 0)
+
+   328:         _nextChunkStartSeconds = chunkEndSeconds;
+   329: 
+   330:         if (_chunkFrames.Count == 0)
+   331:         {
+   332:             var details = FirstNonEmpty(stderr, stdout);
+
+   334:             {
+   335:                 Console.Error.WriteLine(
+   336:                     $"[LOADER][WARN] bink2.nihav_no_frames exit={process.ExitCode} " +
+   337:                     $"at={_nextChunkStartSeconds:F3}s file='{Path.GetFileName(_moviePath)}' " +
+   338:                     $"detail='{Truncate(details, MaxTraceLength)}'");
+
+   335:                 Console.Error.WriteLine(
+   336:                     $"[LOADER][WARN] bink2.nihav_no_frames exit={process.ExitCode} " +
+   337:                     $"at={_nextChunkStartSeconds:F3}s file='{Path.GetFileName(_moviePath)}' " +
+   338:                     $"detail='{Truncate(details, MaxTraceLength)}'");
+   339:             }
+
+   345:         {
+   346:             Console.Error.WriteLine(
+   347:                 $"[LOADER][TRACE] bink2.nihav_partial exit={process.ExitCode} " +
+   348:                 $"frames={_chunkFrames.Count} detail='" +
+   349:                 Truncate(FirstNonEmpty(stderr, stdout), MaxTraceLength) + "'");
+
+   346:             Console.Error.WriteLine(
+   347:                 $"[LOADER][TRACE] bink2.nihav_partial exit={process.ExitCode} " +
+   348:                 $"frames={_chunkFrames.Count} detail='" +
+   349:                 Truncate(FirstNonEmpty(stderr, stdout), MaxTraceLength) + "'");
+   350:         }
+
+   353:     }
+   354: 
+   355:     private List<string> EnumerateFrameFiles(string directory)
+   356:     {
+   357:         var files = new List<(string Path, long Ordinal)>();
+
+   376:     }
+   377: 
+   378:     private bool TryReadFrame(string path, Span<byte> destination)
+   379:     {
+   380:         byte[] fileBytes;
+
+   451:         var yPlane = payload[..yBytes];
+   452:         var firstChroma = payload.Slice(yBytes, chromaBytes);
+   453:         var secondChroma = payload.Slice(yBytes + chromaBytes, chromaBytes);
+   454:         var uPlane = _swapUv ? secondChroma : firstChroma;
+   455:         var vPlane = _swapUv ? firstChroma : secondChroma;
+
+   452:         var firstChroma = payload.Slice(yBytes, chromaBytes);
+   453:         var secondChroma = payload.Slice(yBytes + chromaBytes, chromaBytes);
+   454:         var uPlane = _swapUv ? secondChroma : firstChroma;
+   455:         var vPlane = _swapUv ? firstChroma : secondChroma;
+   456:         ConvertYuv420ToBgra(
+
+   453:         var secondChroma = payload.Slice(yBytes + chromaBytes, chromaBytes);
+   454:         var uPlane = _swapUv ? secondChroma : firstChroma;
+   455:         var vPlane = _swapUv ? firstChroma : secondChroma;
+   456:         ConvertYuv420ToBgra(
+   457:             yPlane,
+
+   548:         out uint width,
+   549:         out uint height,
+   550:         out uint frameCount,
+   551:         out uint frameRateNumerator,
+   552:         out uint frameRateDenominator)
+
+   549:         out uint height,
+   550:         out uint frameCount,
+   551:         out uint frameRateNumerator,
+   552:         out uint frameRateDenominator)
+   553:     {
+
+   550:         out uint frameCount,
+   551:         out uint frameRateNumerator,
+   552:         out uint frameRateDenominator)
+   553:     {
+   554:         width = 0;
+
+   554:         width = 0;
+   555:         height = 0;
+   556:         frameCount = 0;
+   557:         frameRateNumerator = 0;
+   558:         frameRateDenominator = 0;
+
+   555:         height = 0;
+   556:         frameCount = 0;
+   557:         frameRateNumerator = 0;
+   558:         frameRateDenominator = 0;
+   559:         Span<byte> header = stackalloc byte[HeaderProbeLength];
+
+   556:         frameCount = 0;
+   557:         frameRateNumerator = 0;
+   558:         frameRateDenominator = 0;
+   559:         Span<byte> header = stackalloc byte[HeaderProbeLength];
+   560:         try
+
+   574:         }
+   575: 
+   576:         frameCount = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+   577:             header.Slice(8, 4));
+   578:         width = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+
+   580:         height = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+   581:             header.Slice(0x18, 4));
+   582:         frameRateNumerator =
+   583:             System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+   584:                 header.Slice(0x1C, 4));
+
+   583:             System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+   584:                 header.Slice(0x1C, 4));
+   585:         frameRateDenominator =
+   586:             System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+   587:                 header.Slice(0x20, 4));
+
+   588:         return width > 0 &&
+   589:                height > 0 &&
+   590:                frameCount > 0 &&
+   591:                frameRateNumerator > 0 &&
+   592:                frameRateDenominator > 0;
+
+   589:                height > 0 &&
+   590:                frameCount > 0 &&
+   591:                frameRateNumerator > 0 &&
+   592:                frameRateDenominator > 0;
+   593:     }
+
+   590:                frameCount > 0 &&
+   591:                frameRateNumerator > 0 &&
+   592:                frameRateDenominator > 0;
+   593:     }
+   594: 
+
+   622:     private static string? FindToolPath()
+   623:     {
+   624:         var configured = Environment.GetEnvironmentVariable("SHARPEMU_NIHAV_TOOL");
+   625:         if (!string.IsNullOrWhiteSpace(configured))
+   626:         {
+
+   635:         foreach (var relative in new[]
+   636:                  {
+   637:                      Path.Combine("plugins", "bink2", "nihav-tool.exe"),
+   638:                      Path.Combine("plugins", "bink2", "nihav_tool.exe"),
+   639:                      Path.Combine("plugins", "bink2", "nihav-tool"),
+
+   636:                  {
+   637:                      Path.Combine("plugins", "bink2", "nihav-tool.exe"),
+   638:                      Path.Combine("plugins", "bink2", "nihav_tool.exe"),
+   639:                      Path.Combine("plugins", "bink2", "nihav-tool"),
+   640:                      "nihav-tool.exe",
+
+   637:                      Path.Combine("plugins", "bink2", "nihav-tool.exe"),
+   638:                      Path.Combine("plugins", "bink2", "nihav_tool.exe"),
+   639:                      Path.Combine("plugins", "bink2", "nihav-tool"),
+   640:                      "nihav-tool.exe",
+   641:                      "nihav-tool",
+
+   638:                      Path.Combine("plugins", "bink2", "nihav_tool.exe"),
+   639:                      Path.Combine("plugins", "bink2", "nihav-tool"),
+   640:                      "nihav-tool.exe",
+   641:                      "nihav-tool",
+   642:                  })
+
+   639:                      Path.Combine("plugins", "bink2", "nihav-tool"),
+   640:                      "nihav-tool.exe",
+   641:                      "nihav-tool",
+   642:                  })
+   643:         {
+
+   662: 
+   663:         Console.Error.WriteLine(
+   664:             "[LOADER][INFO] Bink2 NIHAV runtime is not installed. Expected " +
+   665:             "'plugins\\bink2\\nihav-tool.exe' or SHARPEMU_NIHAV_TOOL.");
+   666:     }
+
+   663:         Console.Error.WriteLine(
+   664:             "[LOADER][INFO] Bink2 NIHAV runtime is not installed. Expected " +
+   665:             "'plugins\\bink2\\nihav-tool.exe' or SHARPEMU_NIHAV_TOOL.");
+   666:     }
+   667: 
+
+   681: 
+   682:             var first = stream.ReadByte();
+   683:             var second = stream.ReadByte();
+   684:             return first == 'P' && (second == '5' || second == '6');
+   685:         }
+
+   682:             var first = stream.ReadByte();
+   683:             var second = stream.ReadByte();
+   684:             return first == 'P' && (second == '5' || second == '6');
+   685:         }
+   686:         catch (IOException)
+
+   717:         }
+   718: 
+   719:         // NihAV's writer terminates the PNM header with whitespace. Advance
+   720:         // through that delimiter, but do not continue skipping arbitrary bytes
+   721:         // because binary pixel data may itself begin with an ASCII whitespace.
+
+   802:     }
+   803: 
+   804:     private static string FormatTime(double seconds)
+   805:     {
+   806:         var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+
+   804:     private static string FormatTime(double seconds)
+   805:     {
+   806:         var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+   807:         return FormattableString.Invariant(
+   808:             $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}.{time.Milliseconds:000}");
+
+   806:         var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+   807:         return FormattableString.Invariant(
+   808:             $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}.{time.Milliseconds:000}");
+   809:     }
+   810: 
+
+   809:     }
+   810: 
+   811:     private static string FirstNonEmpty(string first, string second) =>
+   812:         !string.IsNullOrWhiteSpace(first)
+   813:             ? first.Trim()
+
+   812:         !string.IsNullOrWhiteSpace(first)
+   813:             ? first.Trim()
+   814:             : second.Trim();
+   815: 
+   816:     private static string Truncate(string value, int maximumLength) =>
+
+   819:             : value[..maximumLength];
+   820: 
+   821:     private void CleanupConsumedChunk()
+   822:     {
+   823:         if (_chunkFrames.Count == 0)
+
+   821:     private void CleanupConsumedChunk()
+   822:     {
+   823:         if (_chunkFrames.Count == 0)
+   824:         {
+   825:             return;
+
+   827: 
+   828:         string? directory = null;
+   829:         foreach (var path in _chunkFrames)
+   830:         {
+   831:             directory ??= Path.GetDirectoryName(path);
+
+   832:             TryDelete(path);
+   833:         }
+   834:         _chunkFrames = [];
+   835:         _chunkFrameIndex = 0;
+   836:         if (!string.IsNullOrWhiteSpace(directory))
+
+   833:         }
+   834:         _chunkFrames = [];
+   835:         _chunkFrameIndex = 0;
+   836:         if (!string.IsNullOrWhiteSpace(directory))
+   837:         {
+
+   878:         }
+   879: 
+   880:         CleanupConsumedChunk();
+   881:         TryDeleteDirectory(_sessionRoot);
+   882:     }
+
+============================================================
+FILE=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Media\HostMovieBridge.cs
+SCORE=25
+     2: // SPDX-License-Identifier: GPL-2.0-or-later
+     3: 
+     4: using System.Runtime.InteropServices;
+     5: using System.Buffers.Binary;
+     6: using SharpEmu.Libs.VideoOut;
+
+    13: ///
+    14: /// Such a game never imports libSceVideodec or sceAvPlayer, so no HLE export
+    15: /// can see its movie frames. Kernel file opens identify the active movie and
+    16: /// the presenter requests BGRA frames from <see cref="FfmpegVideoDecoder"/> —
+    17: /// the same decoder sceAvPlayer uses, so every format is handled in one place.
+
+    14: /// Such a game never imports libSceVideodec or sceAvPlayer, so no HLE export
+    15: /// can see its movie frames. Kernel file opens identify the active movie and
+    16: /// the presenter requests BGRA frames from <see cref="FfmpegVideoDecoder"/> —
+    17: /// the same decoder sceAvPlayer uses, so every format is handled in one place.
+    18: /// </summary>
+
+    97:     private static string? _activePath;
+    98:     private static Bink2MovieInfo _activeInfo;
+    99:     private static byte[]? _frameBuffer;
+   100:     private static bool _frameBufferPresented;
+   101:     private static MediaFramePlayback? _playback;
+
+    98:     private static Bink2MovieInfo _activeInfo;
+    99:     private static byte[]? _frameBuffer;
+   100:     private static bool _frameBufferPresented;
+   101:     private static MediaFramePlayback? _playback;
+   102:     private static long _frameSerial;
+
+    99:     private static byte[]? _frameBuffer;
+   100:     private static bool _frameBufferPresented;
+   101:     private static MediaFramePlayback? _playback;
+   102:     private static long _frameSerial;
+   103:     private static uint _presentationWidth = MaxHostVideoWidth;
+
+   100:     private static bool _frameBufferPresented;
+   101:     private static MediaFramePlayback? _playback;
+   102:     private static long _frameSerial;
+   103:     private static uint _presentationWidth = MaxHostVideoWidth;
+   104:     private static uint _presentationHeight = MaxHostVideoHeight;
+
+   110:             lock (Gate)
+   111:             {
+   112:                 return _playback is not null || _frameBuffer is not null;
+   113:             }
+   114:         }
+
+   141: 
+   142:     /// <summary>
+   143:     /// Starts or queues host decoding. Decoded frames are only exposed as a
+   144:     /// sampled guest texture; presentation and UI composition remain guest-owned.
+   145:     /// </summary>
+
+   172:             if (string.Equals(_activePath, hostPath, StringComparison.OrdinalIgnoreCase))
+   173:             {
+   174:                 return _playback is not null || _frameBuffer is not null;
+   175:             }
+   176: 
+
+   181:             }
+   182: 
+   183:             if (_playback is not null || _frameBuffer is not null)
+   184:             {
+   185:                 if (PendingMoviePathSet.Add(hostPath))
+
+   195:             AttachMovieLocked(hostPath, mode);
+   196:             return string.Equals(_activePath, hostPath, StringComparison.OrdinalIgnoreCase) &&
+   197:                    (_playback is not null || _frameBuffer is not null);
+   198:         }
+   199:     }
+
+   199:     }
+   200: 
+   201:     internal static bool TryDecodeNextFrame(
+   202:         bool advanceClock,
+   203:         out byte[] pixels,
+
+   205:         out uint height,
+   206:         out bool advanced,
+   207:         out long frameSerial,
+   208:         out string hostPath)
+   209:     {
+
+   214:             height = 0;
+   215:             advanced = false;
+   216:             frameSerial = _frameSerial;
+   217:             hostPath = _activePath ?? string.Empty;
+   218: 
+
+   219:             if (_playback is not null)
+   220:             {
+   221:                 if (!_playback.TryGetFrame(advanceClock, out pixels, out advanced))
+   222:                 {
+   223:                     if (_playback.IsFinished)
+
+   229:                             "[LOADER][INFO] Bink2 bridge completed: " +
+   230:                             $"{Path.GetFileName(completedPath)} after " +
+   231:                             $"{progress.Seconds:F2}s at frame {progress.FrameIndex}");
+   232:                         AttachNextQueuedMovieLocked();
+   233:                     }
+
+   239:                 if (advanced)
+   240:                 {
+   241:                     frameSerial = ++_frameSerial;
+   242:                 }
+   243:                 return true;
+
+   244:             }
+   245: 
+   246:             if (_frameBuffer is null)
+   247:             {
+   248:                 return false;
+
+   249:             }
+   250: 
+   251:             pixels = _frameBuffer;
+   252:             width = _activeInfo.Width;
+   253:             height = _activeInfo.Height;
+
+   252:             width = _activeInfo.Width;
+   253:             height = _activeInfo.Height;
+   254:             advanced = !_frameBufferPresented;
+   255:             _frameBufferPresented = true;
+   256:             if (advanced)
+
+   253:             height = _activeInfo.Height;
+   254:             advanced = !_frameBufferPresented;
+   255:             _frameBufferPresented = true;
+   256:             if (advanced)
+   257:             {
+
+   256:             if (advanced)
+   257:             {
+   258:                 frameSerial = ++_frameSerial;
+   259:             }
+   260:             return true;
+
+   267:         (ulong)info.Width * info.Height * 4 <= int.MaxValue;
+   268: 
+   269:     private static int GetFrameBufferLength(Bink2MovieInfo info) =>
+   270:         checked((int)((ulong)info.Width * info.Height * 4));
+   271: 
+
+   277:                 AttachDummyMovieLocked(hostPath);
+   278:                 return;
+   279:             case MovieMode.Nihav:
+   280:                 AttachNihavMovieLocked(hostPath);
+   281:                 return;
+
+   278:                 return;
+   279:             case MovieMode.Nihav:
+   280:                 AttachNihavMovieLocked(hostPath);
+   281:                 return;
+   282:             case MovieMode.Ffmpeg:
+
+   285:             case MovieMode.Native:
+   286:                 // Stock FFmpeg recognises the KB2 container but does not decode
+   287:                 // Bink2 video. Prefer the optional NihAV backend for KB2 and
+   288:                 // retain FFmpeg as the generic fallback for other host movies.
+   289:                 if (AttachNihavMovieLocked(hostPath))
+
+   287:                 // Bink2 video. Prefer the optional NihAV backend for KB2 and
+   288:                 // retain FFmpeg as the generic fallback for other host movies.
+   289:                 if (AttachNihavMovieLocked(hostPath))
+   290:                 {
+   291:                     return;
+
+   296:     }
+   297: 
+   298:     private static bool AttachNihavMovieLocked(string hostPath)
+   299:     {
+   300:         if (!NihavBink2Decoder.TryOpen(
+
+   298:     private static bool AttachNihavMovieLocked(string hostPath)
+   299:     {
+   300:         if (!NihavBink2Decoder.TryOpen(
+   301:                 hostPath, _presentationWidth, _presentationHeight, out var source) ||
+   302:             source is null)
+
+   308:             source.Width,
+   309:             source.Height,
+   310:             source.FramesPerSecondNumerator,
+   311:             source.FramesPerSecondDenominator);
+   312:         if (!IsValid(info))
+
+   309:             source.Height,
+   310:             source.FramesPerSecondNumerator,
+   311:             source.FramesPerSecondDenominator);
+   312:         if (!IsValid(info))
+   313:         {
+
+   314:             source.Dispose();
+   315:             Console.Error.WriteLine(
+   316:                 "[LOADER][WARN] Bink2 NIHAV bridge rejected invalid movie dimensions for '" +
+   317:                 Path.GetFileName(hostPath) + "'.");
+   318:             return false;
+
+   321:         AttachPlaybackLocked(hostPath, info, source);
+   322:         Console.Error.WriteLine(
+   323:             "[LOADER][INFO] Bink2 NIHAV bridge attached: " + Path.GetFileName(hostPath) + " " +
+   324:             info.Width + "x" + info.Height + " @ " +
+   325:             info.FramesPerSecondNumerator + "/" + info.FramesPerSecondDenominator + " fps.");
+
+   323:             "[LOADER][INFO] Bink2 NIHAV bridge attached: " + Path.GetFileName(hostPath) + " " +
+   324:             info.Width + "x" + info.Height + " @ " +
+   325:             info.FramesPerSecondNumerator + "/" + info.FramesPerSecondDenominator + " fps.");
+   326:         return true;
+   327:     }
+
+   342:             source.Width,
+   343:             source.Height,
+   344:             source.FramesPerSecondNumerator,
+   345:             source.FramesPerSecondDenominator);
+   346:         if (!IsValid(info))
+
+   343:             source.Height,
+   344:             source.FramesPerSecondNumerator,
+   345:             source.FramesPerSecondDenominator);
+   346:         if (!IsValid(info))
+   347:         {
+
+   357:             "[LOADER][INFO] Bink2 FFmpeg bridge attached: " + Path.GetFileName(hostPath) + " " +
+   358:             info.Width + "x" + info.Height + " @ " +
+   359:             info.FramesPerSecondNumerator + "/" + info.FramesPerSecondDenominator + " fps.");
+   360:         return true;
+   361:     }
+
+   375:         }
+   376: 
+   377:         if (string.Equals(configured, "nihav", StringComparison.OrdinalIgnoreCase) ||
+   378:             string.Equals(configured, "bink2", StringComparison.OrdinalIgnoreCase))
+   379:         {
+
+   378:             string.Equals(configured, "bink2", StringComparison.OrdinalIgnoreCase))
+   379:         {
+   380:             return MovieMode.Nihav;
+   381:         }
+   382: 
+
+   396:         }
+   397: 
+   398:         // Native is the default. KB2 first tries the optional NihAV backend and
+   399:         // then the existing FFmpeg path. If neither host decoder is available,
+   400:         // the guest's statically linked movie code remains untouched.
+
+   415:         _activePath = hostPath;
+   416:         _activeInfo = info;
+   417:         _frameBuffer = GC.AllocateUninitializedArray<byte>(GetFrameBufferLength(info));
+   418:         _frameBufferPresented = false;
+   419:         FillDummyFrame(_frameBuffer, info.Width, info.Height);
+
+   416:         _activeInfo = info;
+   417:         _frameBuffer = GC.AllocateUninitializedArray<byte>(GetFrameBufferLength(info));
+   418:         _frameBufferPresented = false;
+   419:         FillDummyFrame(_frameBuffer, info.Width, info.Height);
+   420:         Console.Error.WriteLine(
+
+   417:         _frameBuffer = GC.AllocateUninitializedArray<byte>(GetFrameBufferLength(info));
+   418:         _frameBufferPresented = false;
+   419:         FillDummyFrame(_frameBuffer, info.Width, info.Height);
+   420:         Console.Error.WriteLine(
+   421:             "[LOADER][INFO] Bink dummy attached: " + Path.GetFileName(hostPath) + " " +
+
+   426:         string hostPath,
+   427:         Bink2MovieInfo info,
+   428:         IMediaFrameDecoder decoder)
+   429:     {
+   430:         CloseActiveLocked();
+
+   431:         _activePath = hostPath;
+   432:         _activeInfo = info;
+   433:         _playback = new MediaFramePlayback(decoder);
+   434:     }
+   435: 
+
+   452:                 BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0x1C, 4)),
+   453:                 BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0x20, 4)));
+   454:             return info.FramesPerSecondNumerator != 0 &&
+   455:                    info.FramesPerSecondDenominator != 0;
+   456:         }
+
+   453:                 BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0x20, 4)));
+   454:             return info.FramesPerSecondNumerator != 0 &&
+   455:                    info.FramesPerSecondDenominator != 0;
+   456:         }
+   457:         catch (Exception exception) when (exception is IOException or EndOfStreamException)
+
+   461:     }
+   462: 
+   463:     private static void FillDummyFrame(byte[] pixels, uint width, uint height)
+   464:     {
+   465:         for (var y = 0u; y < height; y++)
+
+   478: 
+   479: 
+   480:     // V61.13_BINK2_NIHAV_DIRECT_BOOT
+   481:     // A title may initialise its statically linked Bink runtime long before it
+   482:     // opens the first movie. SHARPEMU_BINK_BOOT_SEQUENCE provides an opt-in
+
+   479: 
+   480:     // V61.13_BINK2_NIHAV_DIRECT_BOOT
+   481:     // A title may initialise its statically linked Bink runtime long before it
+   482:     // opens the first movie. SHARPEMU_BINK_BOOT_SEQUENCE provides an opt-in
+   483:     // compatibility path that plays known boot movies directly through the
+
+   486:     private static int _autoBootFallbackScheduled;
+   487:     private static bool _directPresentationActive;
+   488:     private static byte[]? _directPresentationFrame;
+   489:     private static uint _directPresentationFrameWidth;
+   490:     private static uint _directPresentationFrameHeight;
+
+   487:     private static bool _directPresentationActive;
+   488:     private static byte[]? _directPresentationFrame;
+   489:     private static uint _directPresentationFrameWidth;
+   490:     private static uint _directPresentationFrameHeight;
+   491:     private static long _directPresentationFrameSerial;
+
+   488:     private static byte[]? _directPresentationFrame;
+   489:     private static uint _directPresentationFrameWidth;
+   490:     private static uint _directPresentationFrameHeight;
+   491:     private static long _directPresentationFrameSerial;
+   492:     private static Thread? _directPresentationThread;
+
+   489:     private static uint _directPresentationFrameWidth;
+   490:     private static uint _directPresentationFrameHeight;
+   491:     private static long _directPresentationFrameSerial;
+   492:     private static Thread? _directPresentationThread;
+   493: 
+
+   507:         out uint width,
+   508:         out uint height,
+   509:         out long frameSerial)
+   510:     {
+   511:         lock (Gate)
+
+   514:             width = 0;
+   515:             height = 0;
+   516:             frameSerial = _directPresentationFrameSerial;
+   517:             if (!_directPresentationActive || _directPresentationFrame is null)
+   518:             {
+
+   515:             height = 0;
+   516:             frameSerial = _directPresentationFrameSerial;
+   517:             if (!_directPresentationActive || _directPresentationFrame is null)
+   518:             {
+   519:                 return false;
+
+   520:             }
+   521: 
+   522:             pixels = _directPresentationFrame;
+   523:             width = _directPresentationFrameWidth;
+   524:             height = _directPresentationFrameHeight;
+
+   521: 
+   522:             pixels = _directPresentationFrame;
+   523:             width = _directPresentationFrameWidth;
+   524:             height = _directPresentationFrameHeight;
+   525:             return true;
+
+   522:             pixels = _directPresentationFrame;
+   523:             width = _directPresentationFrameWidth;
+   524:             height = _directPresentationFrameHeight;
+   525:             return true;
+   526:         }
+
+   538:                 .Distinct(StringComparer.OrdinalIgnoreCase)
+   539:                 .ToArray();
+   540:             TryStartBootSequenceThread(explicitPaths, "explicit", delayMilliseconds: 0);
+   541:             return;
+   542:         }
+
+   550:         }
+   551: 
+   552:         // The host runtime already exports the /app0 root through this variable.
+   553:         // Auto fallback is intentionally conservative: it only activates when
+   554:         // BOTH standard PlayStation Studios / title intro assets are present.
+
+   576:         }
+   577: 
+   578:         var graceMilliseconds = 1500;
+   579:         if (int.TryParse(
+   580:                 Environment.GetEnvironmentVariable("SHARPEMU_BINK_AUTO_BOOT_GRACE_MS"),
+
+   581:                 out var configuredGrace))
+   582:         {
+   583:             graceMilliseconds = Math.Clamp(configuredGrace, 0, 10_000);
+   584:         }
+   585: 
+
+   586:         Console.Error.WriteLine(
+   587:             $"[LOADER][INFO] bink2.auto_boot_discovered app0='{app0}' " +
+   588:             $"movies={autoPaths.Length} grace_ms={graceMilliseconds}");
+   589:         TryStartBootSequenceThread(autoPaths, "auto-app0", graceMilliseconds);
+   590:     }
+
+   587:             $"[LOADER][INFO] bink2.auto_boot_discovered app0='{app0}' " +
+   588:             $"movies={autoPaths.Length} grace_ms={graceMilliseconds}");
+   589:         TryStartBootSequenceThread(autoPaths, "auto-app0", graceMilliseconds);
+   590:     }
+   591: 
+
+   593:         string[] paths,
+   594:         string source,
+   595:         int delayMilliseconds)
+   596:     {
+   597:         if (paths.Length == 0 ||
+
+   603:         _directPresentationThread = new Thread(() =>
+   604:         {
+   605:             if (delayMilliseconds > 0)
+   606:             {
+   607:                 Thread.Sleep(delayMilliseconds);
+
+   605:             if (delayMilliseconds > 0)
+   606:             {
+   607:                 Thread.Sleep(delayMilliseconds);
+   608:             }
+   609: 
+
+   639:         {
+   640:             _directPresentationActive = true;
+   641:             _directPresentationFrame = null;
+   642:             _directPresentationFrameWidth = 0;
+   643:             _directPresentationFrameHeight = 0;
+
+   640:             _directPresentationActive = true;
+   641:             _directPresentationFrame = null;
+   642:             _directPresentationFrameWidth = 0;
+   643:             _directPresentationFrameHeight = 0;
+   644:             _directPresentationFrameSerial = 0;
+
+   641:             _directPresentationFrame = null;
+   642:             _directPresentationFrameWidth = 0;
+   643:             _directPresentationFrameHeight = 0;
+   644:             _directPresentationFrameSerial = 0;
+   645:         }
+
+   642:             _directPresentationFrameWidth = 0;
+   643:             _directPresentationFrameHeight = 0;
+   644:             _directPresentationFrameSerial = 0;
+   645:         }
+   646: 
+
+   676:             {
+   677:                 _directPresentationActive = false;
+   678:                 _directPresentationFrame = null;
+   679:             }
+   680:             Console.Error.WriteLine(
+
+   683:         }
+   684: 
+   685:         long presentedFrames = 0;
+   686:         try
+   687:         {
+
+   688:             while (true)
+   689:             {
+   690:                 if (TryDecodeNextFrame(
+   691:                         advanceClock: true,
+   692:                         out var pixels,
+
+   694:                         out var height,
+   695:                         out var advanced,
+   696:                         out var frameSerial,
+   697:                         out var hostPath))
+   698:                 {
+
+   699:                     if (advanced)
+   700:                     {
+   701:                         var stableFrame = GC.AllocateUninitializedArray<byte>(pixels.Length);
+   702:                         Buffer.BlockCopy(pixels, 0, stableFrame, 0, pixels.Length);
+   703:                         lock (Gate)
+
+   700:                     {
+   701:                         var stableFrame = GC.AllocateUninitializedArray<byte>(pixels.Length);
+   702:                         Buffer.BlockCopy(pixels, 0, stableFrame, 0, pixels.Length);
+   703:                         lock (Gate)
+   704:                         {
+
+   703:                         lock (Gate)
+   704:                         {
+   705:                             _directPresentationFrame = stableFrame;
+   706:                             _directPresentationFrameWidth = width;
+   707:                             _directPresentationFrameHeight = height;
+
+   704:                         {
+   705:                             _directPresentationFrame = stableFrame;
+   706:                             _directPresentationFrameWidth = width;
+   707:                             _directPresentationFrameHeight = height;
+   708:                             _directPresentationFrameSerial = frameSerial;
+
+   705:                             _directPresentationFrame = stableFrame;
+   706:                             _directPresentationFrameWidth = width;
+   707:                             _directPresentationFrameHeight = height;
+   708:                             _directPresentationFrameSerial = frameSerial;
+   709:                         }
+
+   706:                             _directPresentationFrameWidth = width;
+   707:                             _directPresentationFrameHeight = height;
+   708:                             _directPresentationFrameSerial = frameSerial;
+   709:                         }
+   710: 
+
+   709:                         }
+   710: 
+   711:                         // V61.13.1: use the stable public host-frame submission seam
+   712:                         // instead of patching VulkanVideoPresenter internals. This keeps
+   713:                         // the Bink2 implementation compatible with newer presenter
+
+   713:                         // the Bink2 implementation compatible with newer presenter
+   714:                         // revisions while preserving all intervening GPU changes.
+   715:                         VulkanVideoPresenter.Submit(stableFrame, width, height);
+   716: 
+   717:                         presentedFrames++;
+
+   715:                         VulkanVideoPresenter.Submit(stableFrame, width, height);
+   716: 
+   717:                         presentedFrames++;
+   718:                         if (presentedFrames <= 3 || presentedFrames % 120 == 0)
+   719:                         {
+
+   716: 
+   717:                         presentedFrames++;
+   718:                         if (presentedFrames <= 3 || presentedFrames % 120 == 0)
+   719:                         {
+   720:                             Console.Error.WriteLine(
+
+   719:                         {
+   720:                             Console.Error.WriteLine(
+   721:                                 $"[LOADER][INFO] bink2.direct_frame n={presentedFrames} " +
+   722:                                 $"serial={frameSerial} file='{Path.GetFileName(hostPath)}' " +
+   723:                                 $"size={width}x{height}");
+
+   720:                             Console.Error.WriteLine(
+   721:                                 $"[LOADER][INFO] bink2.direct_frame n={presentedFrames} " +
+   722:                                 $"serial={frameSerial} file='{Path.GetFileName(hostPath)}' " +
+   723:                                 $"size={width}x{height}");
+   724:                         }
+
+   732:                 {
+   733:                     if (_playback is null &&
+   734:                         _frameBuffer is null &&
+   735:                         PendingMoviePaths.Count == 0)
+   736:                     {
+
+   753:             {
+   754:                 _directPresentationActive = false;
+   755:                 _directPresentationFrame = null;
+   756:                 _directPresentationFrameWidth = 0;
+   757:                 _directPresentationFrameHeight = 0;
+
+   754:                 _directPresentationActive = false;
+   755:                 _directPresentationFrame = null;
+   756:                 _directPresentationFrameWidth = 0;
+   757:                 _directPresentationFrameHeight = 0;
+   758:                 Monitor.PulseAll(Gate);
+
+   755:                 _directPresentationFrame = null;
+   756:                 _directPresentationFrameWidth = 0;
+   757:                 _directPresentationFrameHeight = 0;
+   758:                 Monitor.PulseAll(Gate);
+   759:             }
+
+   760: 
+   761:             Console.Error.WriteLine(
+   762:                 $"[LOADER][INFO] bink2.direct_boot_completed frames={presentedFrames}; " +
+   763:                 "guest presentation restored.");
+   764:         }
+
+   772:         _activePath = null;
+   773:         _activeInfo = default;
+   774:         _frameBuffer = null;
+   775:         _frameBufferPresented = false;
+   776: 
+
+   773:         _activeInfo = default;
+   774:         _frameBuffer = null;
+   775:         _frameBufferPresented = false;
+   776: 
+   777:         // Wake any guest _read() blocked in WaitForHostPlaybackToFinish: its
+
+   785:         public readonly uint Width;
+   786:         public readonly uint Height;
+   787:         public readonly uint FramesPerSecondNumerator;
+   788:         public readonly uint FramesPerSecondDenominator;
+   789: 
+
+   786:         public readonly uint Height;
+   787:         public readonly uint FramesPerSecondNumerator;
+   788:         public readonly uint FramesPerSecondDenominator;
+   789: 
+   790:         internal Bink2MovieInfo(
+
+   791:             uint width,
+   792:             uint height,
+   793:             uint framesPerSecondNumerator,
+   794:             uint framesPerSecondDenominator)
+   795:         {
+
+   792:             uint height,
+   793:             uint framesPerSecondNumerator,
+   794:             uint framesPerSecondDenominator)
+   795:         {
+   796:             Width = width;
+
+   796:             Width = width;
+   797:             Height = height;
+   798:             FramesPerSecondNumerator = framesPerSecondNumerator;
+   799:             FramesPerSecondDenominator = framesPerSecondDenominator;
+   800:         }
+
+   797:             Height = height;
+   798:             FramesPerSecondNumerator = framesPerSecondNumerator;
+   799:             FramesPerSecondDenominator = framesPerSecondDenominator;
+   800:         }
+   801:     }
+
+   807:         Dummy,
+   808:         Native,
+   809:         Nihav,
+   810:         Ffmpeg,
+   811:     }
+
+   826: 
+   827:             AttachMovieLocked(path, ResolveMode());
+   828:             if (_playback is not null || _frameBuffer is not null)
+   829:             {
+   830:                 return;
+
+   836:     // this. Bounds the damage if a movie fails to attach/decode after being
+   837:     // queued, so the guest thread doesn't hang forever.
+   838:     private const long MaxCompletionWaitMilliseconds = 5 * 60 * 1000;
+   839:     /// <summary>
+   840:     /// Blocks the calling (guest I/O) thread until the host has actually
+
+   840:     /// Blocks the calling (guest I/O) thread until the host has actually
+   841:     /// finished presenting <paramref name="hostPath"/> — either because it
+   842:     /// played through, or because something else took over the timeline.
+   843:     ///
+   844:     /// The completion shim tells the guest's own Bink header parse "this
+
+   843:     ///
+   844:     /// The completion shim tells the guest's own Bink header parse "this
+   845:     /// movie is one frame and already done" so its native decoder never
+   846:     /// blocks the guest on real per-frame work. Without this wait, that lie
+   847:     /// lands the instant the guest reads the header, so guest-side game
+
+   844:     /// The completion shim tells the guest's own Bink header parse "this
+   845:     /// movie is one frame and already done" so its native decoder never
+   846:     /// blocks the guest on real per-frame work. Without this wait, that lie
+   847:     /// lands the instant the guest reads the header, so guest-side game
+   848:     /// logic races far ahead of whatever the host is still showing on
+
+   848:     /// logic races far ahead of whatever the host is still showing on
+   849:     /// screen: pressing a button lands on the (already-advanced) guest
+   850:     /// state, but the video visibly keeps playing, and any real-time-gated
+   851:     /// trigger later in the guest's own flow can fire against a clock that
+   852:     /// no longer matches wall time. Gating the "done" read on real host
+
+   850:     /// state, but the video visibly keeps playing, and any real-time-gated
+   851:     /// trigger later in the guest's own flow can fire against a clock that
+   852:     /// no longer matches wall time. Gating the "done" read on real host
+   853:     /// completion keeps guest pacing and on-screen playback in lockstep.
+   854:     /// </summary>
+
+   855:     internal static void WaitForHostPlaybackToFinish(string hostPath)
+   856:     {
+   857:         var deadline = Environment.TickCount64 + MaxCompletionWaitMilliseconds;
+   858:         lock (Gate)
+   859:         {
+
+   864:                 {
+   865:                     Console.Error.WriteLine(
+   866:                         "[LOADER][WARN] Bink2 bridge completion wait timed out for '" +
+   867:                         Path.GetFileName(hostPath) + "'.");
+   868:                     return;
+
+   888:         // Keep the real header visible so the guest creates its movie surface
+   889:         // and draw. Host-decoded pixels replace that sampled image later; a
+   890:         // one-frame completion shim would finish before the descriptor exists.
+   891:         return false;
+   892:     }
+
+   940:             }
+   941: 
+   942:             var frameCount = BinaryPrimitives.ReadUInt32LittleEndian(header[8..12]);
+   943:             var audioTrackCount = BinaryPrimitives.ReadUInt32LittleEndian(header[40..44]);
+   944:             if (frameCount < 2 || audioTrackCount > 256)
+
+   942:             var frameCount = BinaryPrimitives.ReadUInt32LittleEndian(header[8..12]);
+   943:             var audioTrackCount = BinaryPrimitives.ReadUInt32LittleEndian(header[40..44]);
+   944:             if (frameCount < 2 || audioTrackCount > 256)
+   945:             {
+   946:                 return false;
+
+   948: 
+   949:             var revision = header[3];
+   950:             var frameIndexOffset = 44L + checked(12L * audioTrackCount);
+   951:             if (revision == (byte)'m')
+   952:             {
+
+   951:             if (revision == (byte)'m')
+   952:             {
+   953:                 frameIndexOffset += 16;
+   954:             }
+   955:             else if (revision is (byte)'i' or (byte)'j' or (byte)'k' or (byte)'n')
+
+   955:             else if (revision is (byte)'i' or (byte)'j' or (byte)'k' or (byte)'n')
+   956:             {
+   957:                 frameIndexOffset += 4;
+   958:             }
+   959: 
+
+   958:             }
+   959: 
+   960:             Span<byte> frameOffsets = stackalloc byte[8];
+   961:             stream.Position = frameIndexOffset;
+   962:             stream.ReadExactly(frameOffsets);
+
+   959: 
+   960:             Span<byte> frameOffsets = stackalloc byte[8];
+   961:             stream.Position = frameIndexOffset;
+   962:             stream.ReadExactly(frameOffsets);
+   963:             var firstFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[..4]) & ~1u;
+
+   960:             Span<byte> frameOffsets = stackalloc byte[8];
+   961:             stream.Position = frameIndexOffset;
+   962:             stream.ReadExactly(frameOffsets);
+   963:             var firstFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[..4]) & ~1u;
+   964:             var secondFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[4..]) & ~1u;
+
+   961:             stream.Position = frameIndexOffset;
+   962:             stream.ReadExactly(frameOffsets);
+   963:             var firstFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[..4]) & ~1u;
+   964:             var secondFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[4..]) & ~1u;
+   965:             if (firstFrameOffset < frameIndexOffset + 8 ||
+
+   962:             stream.ReadExactly(frameOffsets);
+   963:             var firstFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[..4]) & ~1u;
+   964:             var secondFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[4..]) & ~1u;
+   965:             if (firstFrameOffset < frameIndexOffset + 8 ||
+   966:                 secondFrameOffset <= firstFrameOffset ||
+
+   963:             var firstFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[..4]) & ~1u;
+   964:             var secondFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[4..]) & ~1u;
+   965:             if (firstFrameOffset < frameIndexOffset + 8 ||
+   966:                 secondFrameOffset <= firstFrameOffset ||
+   967:                 secondFrameOffset > stream.Length)
+
+   964:             var secondFrameOffset = BinaryPrimitives.ReadUInt32LittleEndian(frameOffsets[4..]) & ~1u;
+   965:             if (firstFrameOffset < frameIndexOffset + 8 ||
+   966:                 secondFrameOffset <= firstFrameOffset ||
+   967:                 secondFrameOffset > stream.Length)
+   968:             {
+
+   965:             if (firstFrameOffset < frameIndexOffset + 8 ||
+   966:                 secondFrameOffset <= firstFrameOffset ||
+   967:                 secondFrameOffset > stream.Length)
+   968:             {
+   969:                 return false;
+
+   971: 
+   972:             completionShim = new BinkGuestCompletionShim(
+   973:                 secondFrameOffset - 8,
+   974:                 secondFrameOffset - firstFrameOffset);
+   975:             return true;
+
+   972:             completionShim = new BinkGuestCompletionShim(
+   973:                 secondFrameOffset - 8,
+   974:                 secondFrameOffset - firstFrameOffset);
+   975:             return true;
+   976:         }
+
+   985:     {
+   986:         private readonly uint _fileSizeMinusHeader;
+   987:         private readonly uint _largestFrameSize;
+   988: 
+   989:         internal BinkGuestCompletionShim(uint fileSizeMinusHeader, uint largestFrameSize)
+
+   987:         private readonly uint _largestFrameSize;
+   988: 
+   989:         internal BinkGuestCompletionShim(uint fileSizeMinusHeader, uint largestFrameSize)
+   990:         {
+   991:             _fileSizeMinusHeader = fileSizeMinusHeader;
+
+   990:         {
+   991:             _fileSizeMinusHeader = fileSizeMinusHeader;
+   992:             _largestFrameSize = largestFrameSize;
+   993:         }
+   994: 
+
+   994: 
+   995:         /// <summary>
+   996:         /// Rewrites the frame-count/size fields the guest's own Bink header
+   997:         /// parse reads, if this read covers them. Returns true when the
+   998:         /// NumFrames field (the field that tells the guest "this movie is
+
+   996:         /// Rewrites the frame-count/size fields the guest's own Bink header
+   997:         /// parse reads, if this read covers them. Returns true when the
+   998:         /// NumFrames field (the field that tells the guest "this movie is
+   999:         /// done") was in range, so the caller can gate that specific read on
+  1000:         /// the host's real playback actually finishing first.
+
+  1004:             PatchUInt32(fileOffset, bytes, 4, _fileSizeMinusHeader);
+  1005:             var touchedCompletionField = PatchUInt32(fileOffset, bytes, 8, 1);
+  1006:             PatchUInt32(fileOffset, bytes, 12, _largestFrameSize);
+  1007:             return touchedCompletionField;
+  1008:         }
+
+============================================================
+FILE=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Media\BinkHostPlaybackAssist.cs
+SCORE=25
+     3: 
+     4: using System.Globalization;
+     5: using System.Runtime.InteropServices;
+     6: using System.Text;
+     7: 
+
+    12: ///
+    13: /// V61.13.11 proved that the source decoder repeats the beginning of the stream
+    14: /// after the one-second NIHAV chunk boundary. Hashing and suppressing those
+    15: /// duplicate frames was diagnostic only and added CPU work to every decoded
+    16: /// frame. V61.13.12.2 fixes the chunk source instead and removes that hot-path
+
+    13: /// V61.13.11 proved that the source decoder repeats the beginning of the stream
+    14: /// after the one-second NIHAV chunk boundary. Hashing and suppressing those
+    15: /// duplicate frames was diagnostic only and added CPU work to every decoded
+    16: /// frame. V61.13.12.2 fixes the chunk source instead and removes that hot-path
+    17: /// work.
+
+    14: /// after the one-second NIHAV chunk boundary. Hashing and suppressing those
+    15: /// duplicate frames was diagnostic only and added CPU work to every decoded
+    16: /// frame. V61.13.12.2 fixes the chunk source instead and removes that hot-path
+    17: /// work.
+    18: ///
+
+    17: /// work.
+    18: ///
+    19: /// No full-frame hashing.
+    20: /// No per-pixel R/B CPU rewrite.
+    21: /// No growing collection of frame hashes.
+
+    19: /// No full-frame hashing.
+    20: /// No per-pixel R/B CPU rewrite.
+    21: /// No growing collection of frame hashes.
+    22: /// </summary>
+    23: internal static partial class BinkHostPlaybackAssist
+
+    26:     private static readonly object LogGate = new();
+    27: 
+    28:     private static long _directFrameCount;
+    29:     private static bool _audioStarted;
+    30: 
+
+    34:     private const uint SndPurge = 0x0040;
+    35: 
+    36:     internal static bool TryNormalizeDirectPresentationFrame(
+    37:         byte[] pixels,
+    38:         uint width,
+
+    46:         lock (Gate)
+    47:         {
+    48:             var frame = ++_directFrameCount;
+    49: 
+    50:             if (frame == 1)
+
+    48:             var frame = ++_directFrameCount;
+    49: 
+    50:             if (frame == 1)
+    51:             {
+    52:                 Log(
+
+    53:                     "DIRECT_STREAM_BEGIN",
+    54:                     "size=" + width + "x" + height +
+    55:                     " mode=continuous-nihav");
+    56:                 TryStartAudioLocked();
+    57:             }
+
+    57:             }
+    58: 
+    59:             if (frame <= 3 || frame % 30 == 0)
+    60:             {
+    61:                 Log(
+
+    60:             {
+    61:                 Log(
+    62:                     "DIRECT_FRAME",
+    63:                     "n=" + frame.ToString(CultureInfo.InvariantCulture) +
+    64:                     " size=" + width + "x" + height);
+
+    61:                 Log(
+    62:                     "DIRECT_FRAME",
+    63:                     "n=" + frame.ToString(CultureInfo.InvariantCulture) +
+    64:                     " size=" + width + "x" + height);
+    65:             }
+
+    65:             }
+    66: 
+    67:             // The bridge now owns continuity. Every decoded source frame is
+    68:             // accepted exactly once; no HashSet scan or pixel rewrite here.
+    69:             return true;
+
+    71:     }
+    72: 
+    73:     internal static void NotifyMovieBoundary(string? hostPath, long sourceFrames)
+    74:     {
+    75:         if (string.IsNullOrWhiteSpace(hostPath))
+
+    84:                 "MOVIE_BOUNDARY",
+    85:                 "file='" + file +
+    86:                 "' source_frames=" + sourceFrames.ToString(CultureInfo.InvariantCulture));
+    87: 
+    88:             if (file.Equals("ps_studios_logo.bk2", StringComparison.OrdinalIgnoreCase))
+
+   145:     }
+   146: 
+   147:     internal static void OnDirectPresentationFrame(uint width, uint height)
+   148:     {
+   149:         // Retained for cumulative V61.13.10 call sites.
+
+   150:     }
+   151: 
+   152:     internal static int GetExpectedDurationMs(string? hostPath)
+   153:     {
+   154:         if (string.IsNullOrWhiteSpace(hostPath))
+
+   171:     }
+   172: 
+   173:     internal static void OnMovieFrame(string hostPath) { }
+   174:     internal static void EndMovieSession(string? hostPath) { }
+   175:     internal static void CompleteMovieSession(string? hostPath, string reason) { }
+
+   193: 
+   194:             var line =
+   195:                 DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture) +
+   196:                 " pid=" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) +
+   197:                 " tid=" + Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture) +
+
+============================================================
+FILE=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Media\FfmpegVideoDecoder.cs
+SCORE=5
+    14: /// bridge of our own to build. See docs/bink2-bridge.md.
+    15: /// </summary>
+    16: internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
+    17: {
+    18:     private const int OutputAudioChannels = 2;
+
+    25:     private SwsContext* _swsContext;
+    26:     private SwrContext* _swrContext;
+    27:     private AVFrame* _frame;
+    28:     private AVFrame* _audioFrame;
+    29:     private AVPacket* _packet;
+
+    26:     private SwrContext* _swrContext;
+    27:     private AVFrame* _frame;
+    28:     private AVFrame* _audioFrame;
+    29:     private AVPacket* _packet;
+    30:     private IHostAudioStream? _audioStream;
+
+    45:     public uint Height { get; }
+    46: 
+    47:     public uint FramesPerSecondNumerator { get; }
+    48: 
+    49:     public uint FramesPerSecondDenominator { get; }
+
+    47:     public uint FramesPerSecondNumerator { get; }
+    48: 
+    49:     public uint FramesPerSecondDenominator { get; }
+    50: 
+    51:     private FfmpegVideoDecoder(
+
+    59:         uint width,
+    60:         uint height,
+    61:         uint framesPerSecondNumerator,
+    62:         uint framesPerSecondDenominator)
+    63:     {
+
+    60:         uint height,
+    61:         uint framesPerSecondNumerator,
+    62:         uint framesPerSecondDenominator)
+    63:     {
+    64:         _formatContext = formatContext;
+
+    71:         Width = width;
+    72:         Height = height;
+    73:         FramesPerSecondNumerator = framesPerSecondNumerator;
+    74:         FramesPerSecondDenominator = framesPerSecondDenominator;
+    75:         _frame = ffmpeg.av_frame_alloc();
+
+    72:         Height = height;
+    73:         FramesPerSecondNumerator = framesPerSecondNumerator;
+    74:         FramesPerSecondDenominator = framesPerSecondDenominator;
+    75:         _frame = ffmpeg.av_frame_alloc();
+    76:         _audioFrame = audioCodecContext is null ? null : ffmpeg.av_frame_alloc();
+
+    73:         FramesPerSecondNumerator = framesPerSecondNumerator;
+    74:         FramesPerSecondDenominator = framesPerSecondDenominator;
+    75:         _frame = ffmpeg.av_frame_alloc();
+    76:         _audioFrame = audioCodecContext is null ? null : ffmpeg.av_frame_alloc();
+    77:         _packet = ffmpeg.av_packet_alloc();
+
+    74:         FramesPerSecondDenominator = framesPerSecondDenominator;
+    75:         _frame = ffmpeg.av_frame_alloc();
+    76:         _audioFrame = audioCodecContext is null ? null : ffmpeg.av_frame_alloc();
+    77:         _packet = ffmpeg.av_packet_alloc();
+    78:     }
+
+    79: 
+    80:     private static void EnsureRootPathInitialized() =>
+    81:         SharpEmu.Libs.Media.FfmpegRuntime.EnsureInitialized();
+    82: 
+    83:     internal static bool TryOpen(
+
+   127: 
+   128:             codecContext->thread_count = 0;
+   129:             codecContext->thread_type = ffmpeg.FF_THREAD_FRAME | ffmpeg.FF_THREAD_SLICE;
+   130:             if (ffmpeg.avcodec_open2(codecContext, decoder, null) < 0)
+   131:             {
+
+   138:             }
+   139: 
+   140:             var frameRate = ffmpeg.av_guess_frame_rate(formatContext, stream, null);
+   141:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   142:             {
+
+   139: 
+   140:             var frameRate = ffmpeg.av_guess_frame_rate(formatContext, stream, null);
+   141:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   142:             {
+   143:                 frameRate = stream->avg_frame_rate;
+
+   141:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   142:             {
+   143:                 frameRate = stream->avg_frame_rate;
+   144:             }
+   145:             if (frameRate.num <= 0 || frameRate.den <= 0)
+
+   143:                 frameRate = stream->avg_frame_rate;
+   144:             }
+   145:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   146:             {
+   147:                 frameRate = stream->r_frame_rate;
+
+   145:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   146:             {
+   147:                 frameRate = stream->r_frame_rate;
+   148:             }
+   149:             if (frameRate.num <= 0 || frameRate.den <= 0)
+
+   147:                 frameRate = stream->r_frame_rate;
+   148:             }
+   149:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   150:             {
+   151:                 frameRate = new AVRational { num = 30, den = 1 };
+
+   149:             if (frameRate.num <= 0 || frameRate.den <= 0)
+   150:             {
+   151:                 frameRate = new AVRational { num = 30, den = 1 };
+   152:             }
+   153: 
+
+   204:                 outputWidth,
+   205:                 outputHeight,
+   206:                 (uint)frameRate.num,
+   207:                 (uint)frameRate.den);
+   208:             formatContext = null;
+
+   205:                 outputHeight,
+   206:                 (uint)frameRate.num,
+   207:                 (uint)frameRate.den);
+   208:             formatContext = null;
+   209:             codecContext = null;
+
+   267: 
+   268:         candidate->thread_count = 0;
+   269:         candidate->thread_type = ffmpeg.FF_THREAD_FRAME | ffmpeg.FF_THREAD_SLICE;
+   270:         if (ffmpeg.avcodec_open2(candidate, decoder, null) < 0)
+   271:         {
+
+   279:     }
+   280: 
+   281:     public bool TryDecodeNextFrame(Span<byte> destination)
+   282:     {
+   283:         lock (_decodeGate)
+
+   295:             }
+   296: 
+   297:             if (!TryReceiveFrame())
+   298:             {
+   299:                 return false;
+
+   302:             _swsContext = ffmpeg.sws_getCachedContext(
+   303:                 _swsContext,
+   304:                 _frame->width,
+   305:                 _frame->height,
+   306:                 (AVPixelFormat)_frame->format,
+
+   303:                 _swsContext,
+   304:                 _frame->width,
+   305:                 _frame->height,
+   306:                 (AVPixelFormat)_frame->format,
+   307:                 (int)Width,
+
+   304:                 _frame->width,
+   305:                 _frame->height,
+   306:                 (AVPixelFormat)_frame->format,
+   307:                 (int)Width,
+   308:                 (int)Height,
+
+   314:             if (_swsContext is null)
+   315:             {
+   316:                 ffmpeg.av_frame_unref(_frame);
+   317:                 return false;
+   318:             }
+
+   324:                 var convertedRows = ffmpeg.sws_scale(
+   325:                     _swsContext,
+   326:                     _frame->data,
+   327:                     _frame->linesize,
+   328:                     0,
+
+   325:                     _swsContext,
+   326:                     _frame->data,
+   327:                     _frame->linesize,
+   328:                     0,
+   329:                     _frame->height,
+
+   327:                     _frame->linesize,
+   328:                     0,
+   329:                     _frame->height,
+   330:                     destinationPlanes,
+   331:                     destinationStrides);
+
+   330:                     destinationPlanes,
+   331:                     destinationStrides);
+   332:                 ffmpeg.av_frame_unref(_frame);
+   333:                 return convertedRows == (int)Height;
+   334:             }
+
+   336:     }
+   337: 
+   338:     private bool TryReceiveFrame()
+   339:     {
+   340:         while (true)
+
+   340:         while (true)
+   341:         {
+   342:             var receiveResult = ffmpeg.avcodec_receive_frame(_codecContext, _frame);
+   343:             if (receiveResult >= 0)
+   344:             {
+
+   372:         while (true)
+   373:         {
+   374:             var readResult = ffmpeg.av_read_frame(_formatContext, _packet);
+   375:             if (readResult < 0)
+   376:             {
+
+   407:     private void DecodeAudioPacket(AVPacket* packet)
+   408:     {
+   409:         if (_audioCodecContext is null || _audioFrame is null || _audioFailed)
+   410:         {
+   411:             return;
+
+   415:         if (sendResult == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+   416:         {
+   417:             DrainAvailableAudioFrames();
+   418:             sendResult = ffmpeg.avcodec_send_packet(_audioCodecContext, packet);
+   419:         }
+
+   425:         }
+   426: 
+   427:         DrainAvailableAudioFrames();
+   428:     }
+   429: 
+
+   430:     private void DrainAudioDecoder()
+   431:     {
+   432:         if (_audioCodecContext is null || _audioFrame is null ||
+   433:             _audioDraining || _audioFailed)
+   434:         {
+
+   440:         if (sendResult >= 0 || sendResult == ffmpeg.AVERROR(ffmpeg.EAGAIN))
+   441:         {
+   442:             DrainAvailableAudioFrames();
+   443:         }
+   444:     }
+
+   444:     }
+   445: 
+   446:     private void DrainAvailableAudioFrames()
+   447:     {
+   448:         while (_audioCodecContext is not null && _audioFrame is not null)
+
+   446:     private void DrainAvailableAudioFrames()
+   447:     {
+   448:         while (_audioCodecContext is not null && _audioFrame is not null)
+   449:         {
+   450:             var receiveResult = ffmpeg.avcodec_receive_frame(_audioCodecContext, _audioFrame);
+
+   448:         while (_audioCodecContext is not null && _audioFrame is not null)
+   449:         {
+   450:             var receiveResult = ffmpeg.avcodec_receive_frame(_audioCodecContext, _audioFrame);
+   451:             if (receiveResult == ffmpeg.AVERROR(ffmpeg.EAGAIN) ||
+   452:                 receiveResult == ffmpeg.AVERROR_EOF)
+
+   457:             if (receiveResult < 0)
+   458:             {
+   459:                 DisableAudio("frame decode failed");
+   460:                 return;
+   461:             }
+
+   461:             }
+   462: 
+   463:             if (!SubmitAudioFrame())
+   464:             {
+   465:                 ffmpeg.av_frame_unref(_audioFrame);
+
+   463:             if (!SubmitAudioFrame())
+   464:             {
+   465:                 ffmpeg.av_frame_unref(_audioFrame);
+   466:                 DisableAudio("host submission failed");
+   467:                 return;
+
+   468:             }
+   469: 
+   470:             ffmpeg.av_frame_unref(_audioFrame);
+   471:         }
+   472:     }
+
+   472:     }
+   473: 
+   474:     private bool SubmitAudioFrame()
+   475:     {
+   476:         if (_audioStream is null || _audioFrame is null ||
+
+   474:     private bool SubmitAudioFrame()
+   475:     {
+   476:         if (_audioStream is null || _audioFrame is null ||
+   477:             _audioFrame->nb_samples <= 0 || _audioFrame->extended_data is null)
+   478:         {
+
+   475:     {
+   476:         if (_audioStream is null || _audioFrame is null ||
+   477:             _audioFrame->nb_samples <= 0 || _audioFrame->extended_data is null)
+   478:         {
+   479:             return true;
+
+   480:         }
+   481: 
+   482:         var sampleRate = _audioFrame->sample_rate > 0
+   483:             ? _audioFrame->sample_rate
+   484:             : _audioCodecContext->sample_rate;
+
+   481: 
+   482:         var sampleRate = _audioFrame->sample_rate > 0
+   483:             ? _audioFrame->sample_rate
+   484:             : _audioCodecContext->sample_rate;
+   485:         if (sampleRate <= 0)
+
+   488:         }
+   489: 
+   490:         var inputLayout = _audioFrame->ch_layout;
+   491:         var ownsInputLayout = false;
+   492:         if (ffmpeg.av_channel_layout_check(&inputLayout) == 0)
+
+   498:             ffmpeg.av_channel_layout_default(
+   499:                 &inputLayout,
+   500:                 Math.Max(1, _audioFrame->ch_layout.nb_channels));
+   501:             ownsInputLayout = true;
+   502:         }
+
+   506:             if (!EnsureAudioResampler(
+   507:                     &inputLayout,
+   508:                     (AVSampleFormat)_audioFrame->format,
+   509:                     sampleRate))
+   510:             {
+
+   513: 
+   514:             var maximumSamples = ffmpeg.swr_get_out_samples(
+   515:                 _swrContext, _audioFrame->nb_samples);
+   516:             if (maximumSamples <= 0)
+   517:             {
+
+   532:                         outputPlanes,
+   533:                         maximumSamples,
+   534:                         _audioFrame->extended_data,
+   535:                         _audioFrame->nb_samples);
+   536:                     if (convertedSamples < 0)
+
+   533:                         maximumSamples,
+   534:                         _audioFrame->extended_data,
+   535:                         _audioFrame->nb_samples);
+   536:                     if (convertedSamples < 0)
+   537:                     {
+
+   673:             }
+   674: 
+   675:             if (_frame is not null)
+   676:             {
+   677:                 var frame = _frame;
+
+   675:             if (_frame is not null)
+   676:             {
+   677:                 var frame = _frame;
+   678:                 ffmpeg.av_frame_free(&frame);
+   679:                 _frame = null;
+
+   676:             {
+   677:                 var frame = _frame;
+   678:                 ffmpeg.av_frame_free(&frame);
+   679:                 _frame = null;
+   680:             }
+
+   677:                 var frame = _frame;
+   678:                 ffmpeg.av_frame_free(&frame);
+   679:                 _frame = null;
+   680:             }
+   681: 
+
+   680:             }
+   681: 
+   682:             if (_audioFrame is not null)
+   683:             {
+   684:                 var frame = _audioFrame;
+
+   682:             if (_audioFrame is not null)
+   683:             {
+   684:                 var frame = _audioFrame;
+   685:                 ffmpeg.av_frame_free(&frame);
+   686:                 _audioFrame = null;
+
+   683:             {
+   684:                 var frame = _audioFrame;
+   685:                 ffmpeg.av_frame_free(&frame);
+   686:                 _audioFrame = null;
+   687:             }
+
+   684:                 var frame = _audioFrame;
+   685:                 ffmpeg.av_frame_free(&frame);
+   686:                 _audioFrame = null;
+   687:             }
+   688: 
+
+============================================================
+FILE=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Media\MediaFramePlayback.cs
+SCORE=5
+     7: namespace SharpEmu.Libs.Media;
+     8: 
+     9: internal interface IMediaFrameDecoder : IDisposable
+    10: {
+    11:     uint Width { get; }
+
+    13:     uint Height { get; }
+    14: 
+    15:     uint FramesPerSecondNumerator { get; }
+    16: 
+    17:     uint FramesPerSecondDenominator { get; }
+
+    15:     uint FramesPerSecondNumerator { get; }
+    16: 
+    17:     uint FramesPerSecondDenominator { get; }
+    18: 
+    19:     bool TryDecodeNextFrame(Span<byte> destination);
+
+    17:     uint FramesPerSecondDenominator { get; }
+    18: 
+    19:     bool TryDecodeNextFrame(Span<byte> destination);
+    20: }
+    21: 
+
+    22: /// <summary>
+    23: /// Keeps blocking codec work away from the Vulkan presentation thread and
+    24: /// releases decoded frames according to the movie time base.
+    25: /// </summary>
+    26: internal sealed class MediaFramePlayback : IDisposable
+
+    24: /// releases decoded frames according to the movie time base.
+    25: /// </summary>
+    26: internal sealed class MediaFramePlayback : IDisposable
+    27: {
+    28:     private const int BufferCount = 5;
+
+    29: 
+    30:     private readonly object _gate = new();
+    31:     private readonly IMediaFrameDecoder _decoder;
+    32:     private readonly Queue<byte[]> _freeBuffers = new();
+    33:     private readonly Queue<DecodedFrame> _decodedFrames = new();
+
+    31:     private readonly IMediaFrameDecoder _decoder;
+    32:     private readonly Queue<byte[]> _freeBuffers = new();
+    33:     private readonly Queue<DecodedFrame> _decodedFrames = new();
+    34:     private readonly Thread _decoderThread;
+    35:     private byte[]? _currentFrame;
+
+    33:     private readonly Queue<DecodedFrame> _decodedFrames = new();
+    34:     private readonly Thread _decoderThread;
+    35:     private byte[]? _currentFrame;
+    36:     private byte[]? _retiredFrame;
+    37:     private long _currentFrameIndex = -1;
+
+    34:     private readonly Thread _decoderThread;
+    35:     private byte[]? _currentFrame;
+    36:     private byte[]? _retiredFrame;
+    37:     private long _currentFrameIndex = -1;
+    38:     private long _nextDecodedFrameIndex;
+
+    35:     private byte[]? _currentFrame;
+    36:     private byte[]? _retiredFrame;
+    37:     private long _currentFrameIndex = -1;
+    38:     private long _nextDecodedFrameIndex;
+    39:     private long _playbackStartTimestamp;
+
+    36:     private byte[]? _retiredFrame;
+    37:     private long _currentFrameIndex = -1;
+    38:     private long _nextDecodedFrameIndex;
+    39:     private long _playbackStartTimestamp;
+    40:     private double _audioStartSeconds;
+
+    37:     private long _currentFrameIndex = -1;
+    38:     private long _nextDecodedFrameIndex;
+    39:     private long _playbackStartTimestamp;
+    40:     private double _audioStartSeconds;
+    41:     private long _lastSkewTraceTimestamp;
+
+    38:     private long _nextDecodedFrameIndex;
+    39:     private long _playbackStartTimestamp;
+    40:     private double _audioStartSeconds;
+    41:     private long _lastSkewTraceTimestamp;
+    42:     private bool _playbackClockStarted;
+
+    39:     private long _playbackStartTimestamp;
+    40:     private double _audioStartSeconds;
+    41:     private long _lastSkewTraceTimestamp;
+    42:     private bool _playbackClockStarted;
+    43:     private bool _decoderCompleted;
+
+    46:     private int _disposed;
+    47: 
+    48:     internal MediaFramePlayback(IMediaFrameDecoder decoder)
+    49:     {
+    50:         _decoder = decoder;
+
+    51:         Width = decoder.Width;
+    52:         Height = decoder.Height;
+    53:         FramesPerSecondNumerator = decoder.FramesPerSecondNumerator;
+    54:         FramesPerSecondDenominator = decoder.FramesPerSecondDenominator;
+    55: 
+
+    52:         Height = decoder.Height;
+    53:         FramesPerSecondNumerator = decoder.FramesPerSecondNumerator;
+    54:         FramesPerSecondDenominator = decoder.FramesPerSecondDenominator;
+    55: 
+    56:         var frameBytes = checked((int)((ulong)Width * Height * 4));
+
+    54:         FramesPerSecondDenominator = decoder.FramesPerSecondDenominator;
+    55: 
+    56:         var frameBytes = checked((int)((ulong)Width * Height * 4));
+    57:         for (var index = 0; index < BufferCount; index++)
+    58:         {
+
+    57:         for (var index = 0; index < BufferCount; index++)
+    58:         {
+    59:             _freeBuffers.Enqueue(GC.AllocateUninitializedArray<byte>(frameBytes));
+    60:         }
+    61: 
+
+    72:     internal uint Height { get; }
+    73: 
+    74:     internal uint FramesPerSecondNumerator { get; }
+    75: 
+    76:     internal uint FramesPerSecondDenominator { get; }
+
+    74:     internal uint FramesPerSecondNumerator { get; }
+    75: 
+    76:     internal uint FramesPerSecondDenominator { get; }
+    77: 
+    78:     internal bool IsFinished
+
+    88: 
+    89:     /// <summary>
+    90:     /// Wall-clock seconds since the first frame was presented, and the index of
+    91:     /// the last frame shown. Playback is on its own time base when these agree
+    92:     /// with the movie's frame rate.
+
+    89:     /// <summary>
+    90:     /// Wall-clock seconds since the first frame was presented, and the index of
+    91:     /// the last frame shown. Playback is on its own time base when these agree
+    92:     /// with the movie's frame rate.
+    93:     /// </summary>
+
+    90:     /// Wall-clock seconds since the first frame was presented, and the index of
+    91:     /// the last frame shown. Playback is on its own time base when these agree
+    92:     /// with the movie's frame rate.
+    93:     /// </summary>
+    94:     internal (double Seconds, long FrameIndex) PlaybackProgress
+
+    92:     /// with the movie's frame rate.
+    93:     /// </summary>
+    94:     internal (double Seconds, long FrameIndex) PlaybackProgress
+    95:     {
+    96:         get
+
+   100:                 return (
+   101:                     _playbackClockStarted
+   102:                         ? Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds
+   103:                         : 0,
+   104:                     _currentFrameIndex);
+
+   102:                         ? Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds
+   103:                         : 0,
+   104:                     _currentFrameIndex);
+   105:             }
+   106:         }
+
+   107:     }
+   108: 
+   109:     internal bool TryGetFrame(
+   110:         bool advanceClock,
+   111:         out byte[] pixels,
+
+   121:             }
+   122: 
+   123:             if (_currentFrame is null)
+   124:             {
+   125:                 if (_decodedFrames.Count == 0)
+
+   123:             if (_currentFrame is null)
+   124:             {
+   125:                 if (_decodedFrames.Count == 0)
+   126:                 {
+   127:                     if (_decoderCompleted)
+
+   132:                 }
+   133: 
+   134:                 var first = _decodedFrames.Dequeue();
+   135:                 _currentFrame = first.Pixels;
+   136:                 _currentFrameIndex = first.Index;
+
+   133: 
+   134:                 var first = _decodedFrames.Dequeue();
+   135:                 _currentFrame = first.Pixels;
+   136:                 _currentFrameIndex = first.Index;
+   137:                 advanced = true;
+
+   134:                 var first = _decodedFrames.Dequeue();
+   135:                 _currentFrame = first.Pixels;
+   136:                 _currentFrameIndex = first.Index;
+   137:                 advanced = true;
+   138:                 Monitor.PulseAll(_gate);
+
+   141:             if (advanceClock && !_playbackClockStarted)
+   142:             {
+   143:                 _playbackStartTimestamp = Stopwatch.GetTimestamp();
+   144:                 _audioStartSeconds = GuestAudioClock.PlayedSeconds;
+   145:                 _playbackClockStarted = true;
+
+   142:             {
+   143:                 _playbackStartTimestamp = Stopwatch.GetTimestamp();
+   144:                 _audioStartSeconds = GuestAudioClock.PlayedSeconds;
+   145:                 _playbackClockStarted = true;
+   146:             }
+
+   146:             }
+   147: 
+   148:             var elapsedSeconds = CurrentPlaybackSecondsLocked();
+   149:             TraceClockSkewLocked();
+   150:             var targetFrameIndex = CurrentTargetFrameIndexLocked();
+
+   148:             var elapsedSeconds = CurrentPlaybackSecondsLocked();
+   149:             TraceClockSkewLocked();
+   150:             var targetFrameIndex = CurrentTargetFrameIndexLocked();
+   151:             DecodedFrame? replacement = null;
+   152:             while (_decodedFrames.Count > 0 &&
+
+   149:             TraceClockSkewLocked();
+   150:             var targetFrameIndex = CurrentTargetFrameIndexLocked();
+   151:             DecodedFrame? replacement = null;
+   152:             while (_decodedFrames.Count > 0 &&
+   153:                    _decodedFrames.Peek().Index <= targetFrameIndex)
+
+   150:             var targetFrameIndex = CurrentTargetFrameIndexLocked();
+   151:             DecodedFrame? replacement = null;
+   152:             while (_decodedFrames.Count > 0 &&
+   153:                    _decodedFrames.Peek().Index <= targetFrameIndex)
+   154:             {
+
+   151:             DecodedFrame? replacement = null;
+   152:             while (_decodedFrames.Count > 0 &&
+   153:                    _decodedFrames.Peek().Index <= targetFrameIndex)
+   154:             {
+   155:                 if (replacement is { } skipped)
+
+   157:                     _freeBuffers.Enqueue(skipped.Pixels);
+   158:                 }
+   159:                 replacement = _decodedFrames.Dequeue();
+   160:             }
+   161: 
+
+   162:             if (replacement is { } next)
+   163:             {
+   164:                 if (_retiredFrame is not null)
+   165:                 {
+   166:                     _freeBuffers.Enqueue(_retiredFrame);
+
+   164:                 if (_retiredFrame is not null)
+   165:                 {
+   166:                     _freeBuffers.Enqueue(_retiredFrame);
+   167:                 }
+   168:                 _retiredFrame = _currentFrame;
+
+   166:                     _freeBuffers.Enqueue(_retiredFrame);
+   167:                 }
+   168:                 _retiredFrame = _currentFrame;
+   169:                 _currentFrame = next.Pixels;
+   170:                 _currentFrameIndex = next.Index;
+
+   167:                 }
+   168:                 _retiredFrame = _currentFrame;
+   169:                 _currentFrame = next.Pixels;
+   170:                 _currentFrameIndex = next.Index;
+   171:                 advanced = true;
+
+   168:                 _retiredFrame = _currentFrame;
+   169:                 _currentFrame = next.Pixels;
+   170:                 _currentFrameIndex = next.Index;
+   171:                 advanced = true;
+   172:                 Monitor.PulseAll(_gate);
+
+   173:             }
+   174: 
+   175:             var frameDurationSeconds =
+   176:                 (double)FramesPerSecondDenominator / FramesPerSecondNumerator;
+   177:             if (_playbackClockStarted &&
+
+   174: 
+   175:             var frameDurationSeconds =
+   176:                 (double)FramesPerSecondDenominator / FramesPerSecondNumerator;
+   177:             if (_playbackClockStarted &&
+   178:                 _decoderCompleted &&
+
+   177:             if (_playbackClockStarted &&
+   178:                 _decoderCompleted &&
+   179:                 _decodedFrames.Count == 0 &&
+   180:                 elapsedSeconds >= (_currentFrameIndex + 1) * frameDurationSeconds)
+   181:             {
+
+   178:                 _decoderCompleted &&
+   179:                 _decodedFrames.Count == 0 &&
+   180:                 elapsedSeconds >= (_currentFrameIndex + 1) * frameDurationSeconds)
+   181:             {
+   182:                 _finished = true;
+
+   184:             }
+   185: 
+   186:             pixels = _currentFrame;
+   187:             return true;
+   188:         }
+
+   190: 
+   191:     /// <summary>
+   192:     /// Time base for playback. A host-decoded movie runs on whatever clock it is
+   193:     /// given, but the audio that belongs to it comes from the guest, which does
+   194:     /// not advance at wall-clock rate on a slow frame. Following the audio keeps
+
+   192:     /// Time base for playback. A host-decoded movie runs on whatever clock it is
+   193:     /// given, but the audio that belongs to it comes from the guest, which does
+   194:     /// not advance at wall-clock rate on a slow frame. Following the audio keeps
+   195:     /// the two together; SHARPEMU_MOVIE_CLOCK=wall restores the old behaviour.
+   196:     /// </summary>
+
+   201: 
+   202:     /// <summary>
+   203:     /// Seconds of playback elapsed on the movie's time base. Falls back to wall
+   204:     /// clock whenever guest audio is not flowing: a movie whose audio never
+   205:     /// starts — or stops early — must still finish rather than hang on a clock
+
+   206:     /// that will never advance again.
+   207:     /// </summary>
+   208:     private double CurrentPlaybackSecondsLocked()
+   209:     {
+   210:         if (!_playbackClockStarted)
+
+   213:         }
+   214: 
+   215:         var wallSeconds = Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds;
+   216:         if (!_followGuestAudioClock || !GuestAudioClock.IsRunning)
+   217:         {
+
+   216:         if (!_followGuestAudioClock || !GuestAudioClock.IsRunning)
+   217:         {
+   218:             return wallSeconds;
+   219:         }
+   220: 
+
+   219:         }
+   220: 
+   221:         return Math.Clamp(GuestAudioClock.PlayedSeconds - _audioStartSeconds, 0, wallSeconds);
+   222:     }
+   223: 
+
+   240:         }
+   241: 
+   242:         var now = Stopwatch.GetTimestamp();
+   243:         if (_lastSkewTraceTimestamp != 0 &&
+   244:             Stopwatch.GetElapsedTime(_lastSkewTraceTimestamp) < TimeSpan.FromSeconds(1))
+
+   241: 
+   242:         var now = Stopwatch.GetTimestamp();
+   243:         if (_lastSkewTraceTimestamp != 0 &&
+   244:             Stopwatch.GetElapsedTime(_lastSkewTraceTimestamp) < TimeSpan.FromSeconds(1))
+   245:         {
+
+   242:         var now = Stopwatch.GetTimestamp();
+   243:         if (_lastSkewTraceTimestamp != 0 &&
+   244:             Stopwatch.GetElapsedTime(_lastSkewTraceTimestamp) < TimeSpan.FromSeconds(1))
+   245:         {
+   246:             return;
+
+   247:         }
+   248: 
+   249:         _lastSkewTraceTimestamp = now;
+   250:         var wallSeconds = Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds;
+   251:         var audioSeconds = GuestAudioClock.PlayedSeconds - _audioStartSeconds;
+
+   248: 
+   249:         _lastSkewTraceTimestamp = now;
+   250:         var wallSeconds = Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds;
+   251:         var audioSeconds = GuestAudioClock.PlayedSeconds - _audioStartSeconds;
+   252:         Console.Error.WriteLine(
+
+   249:         _lastSkewTraceTimestamp = now;
+   250:         var wallSeconds = Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds;
+   251:         var audioSeconds = GuestAudioClock.PlayedSeconds - _audioStartSeconds;
+   252:         Console.Error.WriteLine(
+   253:             $"[PERF][MOVIE] wall_s={wallSeconds:F2} audio_s={audioSeconds:F2} " +
+
+   251:         var audioSeconds = GuestAudioClock.PlayedSeconds - _audioStartSeconds;
+   252:         Console.Error.WriteLine(
+   253:             $"[PERF][MOVIE] wall_s={wallSeconds:F2} audio_s={audioSeconds:F2} " +
+   254:             $"playback_s={CurrentPlaybackSecondsLocked():F2} " +
+   255:             $"skew_s={wallSeconds - audioSeconds:F2} frame={_currentFrameIndex} " +
+
+   252:         Console.Error.WriteLine(
+   253:             $"[PERF][MOVIE] wall_s={wallSeconds:F2} audio_s={audioSeconds:F2} " +
+   254:             $"playback_s={CurrentPlaybackSecondsLocked():F2} " +
+   255:             $"skew_s={wallSeconds - audioSeconds:F2} frame={_currentFrameIndex} " +
+   256:             $"audio_running={GuestAudioClock.IsRunning}");
+
+   253:             $"[PERF][MOVIE] wall_s={wallSeconds:F2} audio_s={audioSeconds:F2} " +
+   254:             $"playback_s={CurrentPlaybackSecondsLocked():F2} " +
+   255:             $"skew_s={wallSeconds - audioSeconds:F2} frame={_currentFrameIndex} " +
+   256:             $"audio_running={GuestAudioClock.IsRunning}");
+   257:     }
+
+   258: 
+   259:     /// <summary>
+   260:     /// The frame the movie's own time base says should be on screen right now.
+   261:     /// Returns -1 until the first frame is presented, so the queue prefills
+   262:     /// instead of instantly declaring everything late.
+
+   259:     /// <summary>
+   260:     /// The frame the movie's own time base says should be on screen right now.
+   261:     /// Returns -1 until the first frame is presented, so the queue prefills
+   262:     /// instead of instantly declaring everything late.
+   263:     /// </summary>
+
+   262:     /// instead of instantly declaring everything late.
+   263:     /// </summary>
+   264:     private long CurrentTargetFrameIndexLocked() =>
+   265:         _playbackClockStarted
+   266:             ? (long)Math.Floor(
+
+   265:         _playbackClockStarted
+   266:             ? (long)Math.Floor(
+   267:                 CurrentPlaybackSecondsLocked() *
+   268:                 FramesPerSecondNumerator / FramesPerSecondDenominator)
+   269:             : -1;
+
+   266:             ? (long)Math.Floor(
+   267:                 CurrentPlaybackSecondsLocked() *
+   268:                 FramesPerSecondNumerator / FramesPerSecondDenominator)
+   269:             : -1;
+   270: 
+
+   289:                 }
+   290: 
+   291:                 if (!_decoder.TryDecodeNextFrame(destination))
+   292:                 {
+   293:                     lock (_gate)
+
+   302:                 lock (_gate)
+   303:                 {
+   304:                     var frameIndex = _nextDecodedFrameIndex++;
+   305: 
+   306:                     // Frames are pulled once per guest flip, so a title running
+
+   304:                     var frameIndex = _nextDecodedFrameIndex++;
+   305: 
+   306:                     // Frames are pulled once per guest flip, so a title running
+   307:                     // well under the movie's frame rate cannot drain a queue
+   308:                     // this shallow fast enough and the movie stretches past its
+
+   305: 
+   306:                     // Frames are pulled once per guest flip, so a title running
+   307:                     // well under the movie's frame rate cannot drain a queue
+   308:                     // this shallow fast enough and the movie stretches past its
+   309:                     // real duration — audio finishes while the last picture sits
+
+   307:                     // well under the movie's frame rate cannot drain a queue
+   308:                     // this shallow fast enough and the movie stretches past its
+   309:                     // real duration — audio finishes while the last picture sits
+   310:                     // on screen and the next movie starts late. Once the clock
+   311:                     // has passed a queued frame it can never be shown, so retire
+
+   309:                     // real duration — audio finishes while the last picture sits
+   310:                     // on screen and the next movie starts late. Once the clock
+   311:                     // has passed a queued frame it can never be shown, so retire
+   312:                     // it in favour of this newer one. Only superseded frames are
+   313:                     // dropped, never the newest, so a decoder that cannot keep
+
+   310:                     // on screen and the next movie starts late. Once the clock
+   311:                     // has passed a queued frame it can never be shown, so retire
+   312:                     // it in favour of this newer one. Only superseded frames are
+   313:                     // dropped, never the newest, so a decoder that cannot keep
+   314:                     // up still advances the picture instead of freezing it.
+
+   313:                     // dropped, never the newest, so a decoder that cannot keep
+   314:                     // up still advances the picture instead of freezing it.
+   315:                     var targetFrameIndex = CurrentTargetFrameIndexLocked();
+   316:                     if (frameIndex <= targetFrameIndex)
+   317:                     {
+
+   314:                     // up still advances the picture instead of freezing it.
+   315:                     var targetFrameIndex = CurrentTargetFrameIndexLocked();
+   316:                     if (frameIndex <= targetFrameIndex)
+   317:                     {
+   318:                         while (_decodedFrames.Count > 0 &&
+
+   316:                     if (frameIndex <= targetFrameIndex)
+   317:                     {
+   318:                         while (_decodedFrames.Count > 0 &&
+   319:                                _decodedFrames.Peek().Index <= targetFrameIndex)
+   320:                         {
+
+   317:                     {
+   318:                         while (_decodedFrames.Count > 0 &&
+   319:                                _decodedFrames.Peek().Index <= targetFrameIndex)
+   320:                         {
+   321:                             _freeBuffers.Enqueue(_decodedFrames.Dequeue().Pixels);
+
+   319:                                _decodedFrames.Peek().Index <= targetFrameIndex)
+   320:                         {
+   321:                             _freeBuffers.Enqueue(_decodedFrames.Dequeue().Pixels);
+   322:                         }
+   323:                     }
+
+   323:                     }
+   324: 
+   325:                     _decodedFrames.Enqueue(new DecodedFrame(frameIndex, destination));
+   326:                     Monitor.PulseAll(_gate);
+   327:                 }
+
+   354:         }
+   355:         if (Thread.CurrentThread != _decoderThread &&
+   356:             !_decoderThread.Join(TimeSpan.FromMilliseconds(100)))
+   357:         {
+   358:             _decoder.Dispose();
+
+   357:         {
+   358:             _decoder.Dispose();
+   359:             _decoderThread.Join(TimeSpan.FromSeconds(2));
+   360:         }
+   361:         else
+
+   365:     }
+   366: 
+   367:     private readonly record struct DecodedFrame(long Index, byte[] Pixels);
+   368: }
+   369: 
+
+============================================================
+FILE=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Media\FfmpegMediaStream.cs
+SCORE=5
+    20:     private AVFormatContext* _formatContext;
+    21:     private AVCodecContext* _codecContext;
+    22:     private AVFrame* _frame;
+    23:     private AVPacket* _packet;
+    24:     private SwsContext* _swsContext;
+
+    41:     public override bool CanRead => true;
+    42: 
+    43:     public override bool CanSeek => false;
+    44: 
+    45:     public override bool CanWrite => false;
+
+    71:     {
+    72:         stream = null;
+    73:         FfmpegRuntime.EnsureInitialized();
+    74: 
+    75:         var candidate = new FfmpegMediaStream(mediaType == AVMediaType.AVMEDIA_TYPE_VIDEO, width, height);
+
+   115:             candidate._codecContext = codecContext;
+   116:             candidate._streamIndex = streamIndex;
+   117:             candidate._frame = ffmpeg.av_frame_alloc();
+   118:             candidate._packet = ffmpeg.av_packet_alloc();
+   119:             if (candidate._frame is null || candidate._packet is null)
+
+   117:             candidate._frame = ffmpeg.av_frame_alloc();
+   118:             candidate._packet = ffmpeg.av_packet_alloc();
+   119:             if (candidate._frame is null || candidate._packet is null)
+   120:             {
+   121:                 candidate.Dispose();
+
+   144:         out int width,
+   145:         out int height,
+   146:         out double frameRate,
+   147:         out double durationSeconds)
+   148:     {
+
+   145:         out int height,
+   146:         out double frameRate,
+   147:         out double durationSeconds)
+   148:     {
+   149:         width = 0;
+
+   149:         width = 0;
+   150:         height = 0;
+   151:         frameRate = 0;
+   152:         durationSeconds = 0;
+   153:         FfmpegRuntime.EnsureInitialized();
+
+   150:         height = 0;
+   151:         frameRate = 0;
+   152:         durationSeconds = 0;
+   153:         FfmpegRuntime.EnsureInitialized();
+   154: 
+
+   151:         frameRate = 0;
+   152:         durationSeconds = 0;
+   153:         FfmpegRuntime.EnsureInitialized();
+   154: 
+   155:         AVFormatContext* formatContext = null;
+
+   177:             height = stream->codecpar->height;
+   178: 
+   179:             var rate = stream->avg_frame_rate;
+   180:             if (rate.den > 0 && rate.num > 0)
+   181:             {
+
+   180:             if (rate.den > 0 && rate.num > 0)
+   181:             {
+   182:                 frameRate = (double)rate.num / rate.den;
+   183:             }
+   184: 
+
+   183:             }
+   184: 
+   185:             if (stream->duration > 0 && stream->time_base.den > 0)
+   186:             {
+   187:                 durationSeconds = stream->duration *
+
+   185:             if (stream->duration > 0 && stream->time_base.den > 0)
+   186:             {
+   187:                 durationSeconds = stream->duration *
+   188:                     ((double)stream->time_base.num / stream->time_base.den);
+   189:             }
+
+   186:             {
+   187:                 durationSeconds = stream->duration *
+   188:                     ((double)stream->time_base.num / stream->time_base.den);
+   189:             }
+   190:             else if (formatContext->duration > 0)
+
+   188:                     ((double)stream->time_base.num / stream->time_base.den);
+   189:             }
+   190:             else if (formatContext->duration > 0)
+   191:             {
+   192:                 durationSeconds = (double)formatContext->duration / ffmpeg.AV_TIME_BASE;
+
+   190:             else if (formatContext->duration > 0)
+   191:             {
+   192:                 durationSeconds = (double)formatContext->duration / ffmpeg.AV_TIME_BASE;
+   193:             }
+   194: 
+
+   247:     private bool TryDecodeIntoPending()
+   248:     {
+   249:         if (!TryReceiveFrame())
+   250:         {
+   251:             _finished = true;
+
+   253:         }
+   254: 
+   255:         var produced = _isVideo ? ConvertVideoFrame() : ConvertAudioFrame();
+   256:         ffmpeg.av_frame_unref(_frame);
+   257:         if (produced is null)
+
+   254: 
+   255:         var produced = _isVideo ? ConvertVideoFrame() : ConvertAudioFrame();
+   256:         ffmpeg.av_frame_unref(_frame);
+   257:         if (produced is null)
+   258:         {
+
+   266:     }
+   267: 
+   268:     private byte[]? ConvertVideoFrame()
+   269:     {
+   270:         var width = _videoWidth > 0 ? _videoWidth : _frame->width;
+
+   268:     private byte[]? ConvertVideoFrame()
+   269:     {
+   270:         var width = _videoWidth > 0 ? _videoWidth : _frame->width;
+   271:         var height = _videoHeight > 0 ? _videoHeight : _frame->height;
+   272:         if (width <= 0 || height <= 0)
+
+   269:     {
+   270:         var width = _videoWidth > 0 ? _videoWidth : _frame->width;
+   271:         var height = _videoHeight > 0 ? _videoHeight : _frame->height;
+   272:         if (width <= 0 || height <= 0)
+   273:         {
+
+   277:         _swsContext = ffmpeg.sws_getCachedContext(
+   278:             _swsContext,
+   279:             _frame->width,
+   280:             _frame->height,
+   281:             (AVPixelFormat)_frame->format,
+
+   278:             _swsContext,
+   279:             _frame->width,
+   280:             _frame->height,
+   281:             (AVPixelFormat)_frame->format,
+   282:             width,
+
+   279:             _frame->width,
+   280:             _frame->height,
+   281:             (AVPixelFormat)_frame->format,
+   282:             width,
+   283:             height,
+
+   299:             var rows = ffmpeg.sws_scale(
+   300:                 _swsContext,
+   301:                 _frame->data,
+   302:                 _frame->linesize,
+   303:                 0,
+
+   300:                 _swsContext,
+   301:                 _frame->data,
+   302:                 _frame->linesize,
+   303:                 0,
+   304:                 _frame->height,
+
+   302:                 _frame->linesize,
+   303:                 0,
+   304:                 _frame->height,
+   305:                 planes,
+   306:                 strides);
+
+   309:     }
+   310: 
+   311:     private byte[]? ConvertAudioFrame()
+   312:     {
+   313:         var outputLayout = new AVChannelLayout();
+
+   314:         ffmpeg.av_channel_layout_default(&outputLayout, AudioChannels);
+   315: 
+   316:         var inputLayout = _frame->ch_layout;
+   317:         SwrContext* swrContext = _swrContext;
+   318:         var configureResult = ffmpeg.swr_alloc_set_opts2(
+
+   322:             AudioSampleRate,
+   323:             &inputLayout,
+   324:             (AVSampleFormat)_frame->format,
+   325:             _frame->sample_rate,
+   326:             0,
+
+   323:             &inputLayout,
+   324:             (AVSampleFormat)_frame->format,
+   325:             _frame->sample_rate,
+   326:             0,
+   327:             null);
+
+   338: 
+   339:         var maxSamples = (int)ffmpeg.av_rescale_rnd(
+   340:             ffmpeg.swr_get_delay(_swrContext, _frame->sample_rate) + _frame->nb_samples,
+   341:             AudioSampleRate,
+   342:             _frame->sample_rate,
+
+   340:             ffmpeg.swr_get_delay(_swrContext, _frame->sample_rate) + _frame->nb_samples,
+   341:             AudioSampleRate,
+   342:             _frame->sample_rate,
+   343:             AVRounding.AV_ROUND_UP);
+   344:         if (maxSamples <= 0)
+
+   356:                 planes,
+   357:                 maxSamples,
+   358:                 _frame->extended_data,
+   359:                 _frame->nb_samples);
+   360:             if (converted < 0)
+
+   357:                 maxSamples,
+   358:                 _frame->extended_data,
+   359:                 _frame->nb_samples);
+   360:             if (converted < 0)
+   361:             {
+
+   375:     }
+   376: 
+   377:     private bool TryReceiveFrame()
+   378:     {
+   379:         while (true)
+
+   379:         while (true)
+   380:         {
+   381:             var receiveResult = ffmpeg.avcodec_receive_frame(_codecContext, _frame);
+   382:             if (receiveResult >= 0)
+   383:             {
+
+   403:         while (true)
+   404:         {
+   405:             var readResult = ffmpeg.av_read_frame(_formatContext, _packet);
+   406:             if (readResult < 0)
+   407:             {
+
+   426:     }
+   427: 
+   428:     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+   429: 
+   430:     public override void SetLength(long value) => throw new NotSupportedException();
+
+   456:             }
+   457: 
+   458:             if (_frame is not null)
+   459:             {
+   460:                 var frame = _frame;
+
+   458:             if (_frame is not null)
+   459:             {
+   460:                 var frame = _frame;
+   461:                 ffmpeg.av_frame_free(&frame);
+   462:                 _frame = null;
+
+   459:             {
+   460:                 var frame = _frame;
+   461:                 ffmpeg.av_frame_free(&frame);
+   462:                 _frame = null;
+   463:             }
+
+   460:                 var frame = _frame;
+   461:                 ffmpeg.av_frame_free(&frame);
+   462:                 _frame = null;
+   463:             }
+   464: 
+

@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System;
@@ -33,7 +33,22 @@ public sealed partial class DirectExecutionBackend
 	// UnmanagedCallersOnly prologues; a large prewarm + unbounded concurrency
 	// FailFasts (0xC0000409) mid-storm with no VEH breadcrumb. Pool size and
 	// in-flight Runs are separate knobs.
-	private static readonly int NativeWorkerMaxConcurrent = ReadNativeWorkerMaxConcurrent();
+	private static readonly int NativeWorkerMaxConcurrent = ReadNativeWorkerMaxConcurrentV74014();
+	// SHARPEMU_V74_0_14_DEMONS_RUNTIME_TBB_LIMIT
+	// Preserve the accumulated repo's existing default (16) for other games,
+	// but allow a per-run cap for Demon's Souls startup/stability diagnostics.
+	private static int ReadNativeWorkerMaxConcurrentV74014()
+	{
+		if (int.TryParse(
+			Environment.GetEnvironmentVariable("SHARPEMU_NATIVE_WORKER_MAX_CONCURRENT"),
+			out var parsed) &&
+			parsed > 0)
+		{
+			return Math.Clamp(parsed, 1, 64);
+		}
+
+		return 16;
+	}
 
 	private static int ReadNativeWorkerMaxConcurrent()
 	{
@@ -48,10 +63,76 @@ public sealed partial class DirectExecutionBackend
 		return 2;
 	}
 
+	// SHARPEMU_V74_0_10_RENDERER_RESOURCE_NATIVE_LANE
+	// Keep the historical two-slot limiter for short/bursty TBB runs. The
+	// renderer/resource family is long-lived and must not monopolize that gate.
+	// V74.0.9 proved Nexus Event + Surveillance kept progressing while
+	// Core.Res.TaskManager was Running/ExecutorActive but frozen at 4 imports.
+	private static readonly int RendererResourceNativeWorkerMaxConcurrent =
+		ReadRendererResourceNativeWorkerMaxConcurrent();
+
+	private static int ReadRendererResourceNativeWorkerMaxConcurrent()
+	{
+		if (int.TryParse(
+			    Environment.GetEnvironmentVariable(
+				    "SHARPEMU_RENDERER_RESOURCE_NATIVE_MAX_CONCURRENT"),
+			    out var parsed) &&
+		    parsed > 0)
+		{
+			return Math.Clamp(parsed, 1, 32);
+		}
+
+		return 8;
+	}
+
+	private static bool UsesRendererResourceNativeWorkerLane(string? name)
+	{
+		return
+			string.Equals(name, "HighGraphics", StringComparison.Ordinal) ||
+			(name?.StartsWith("Core.Res.", StringComparison.Ordinal) ?? false) ||
+			string.Equals(name, "NexusRevolution Event", StringComparison.Ordinal) ||
+			string.Equals(name, "NexusRevolution Surveillance", StringComparison.Ordinal);
+	}
+
+	private static void UpdateObservedMaximum(ref int location, int candidate)
+	{
+		while (true)
+		{
+			var observed = Volatile.Read(ref location);
+			if (candidate <= observed)
+			{
+				return;
+			}
+
+			if (Interlocked.CompareExchange(ref location, candidate, observed) == observed)
+			{
+				return;
+			}
+		}
+	}
+
 	private readonly object _nativeWorkerGate = new();
 	private readonly List<NativeGuestExecutor> _allNativeWorkers = new();
 	private readonly Stack<NativeGuestExecutor> _idleNativeWorkers = new();
+
+	// SHARPEMU_V73_20_4_1_DEDICATED_GUEST_NATIVE_EXECUTOR
+	// Long-lived guest pthreads cannot safely execute CallNativeEntry above a
+	// CLR-created Thread, but putting every pthread into the global two-slot
+	// burst pool starves startup. Give each generic guest pthread one raw OS
+	// NativeGuestExecutor keyed by its guest handle.
+	private readonly Dictionary<ulong, NativeGuestExecutor> _dedicatedNativeWorkers = new();
+	private int _v732041DedicatedWorkerCreatedTraceCount;
+	private int _v732041DedicatedWorkerRunTraceCount;
+	// SHARPEMU_V74_0_1_ROOT_AND_TRANSIENT_NATIVE_EXECUTION
+	private int _v740RootNativeTraceCount;
+	private int _v740TransientNativeTraceCount;
 	private readonly SemaphoreSlim _nativeWorkerRunLimiter = new(NativeWorkerMaxConcurrent);
+	private readonly SemaphoreSlim _rendererResourceNativeWorkerRunLimiter =
+		new(RendererResourceNativeWorkerMaxConcurrent);
+	private int _rendererResourceNativeWaiting;
+	private int _rendererResourceNativeActive;
+	private int _rendererResourceNativeMaxObserved;
+	private int _rendererResourceNativeLaneTraceCount;
 	private bool _nativeWorkersDisposed;
 	private int _nativeWorkerCreationFailedLogged;
 
@@ -79,11 +160,48 @@ public sealed partial class DirectExecutionBackend
 	// Callers set the Active* thread-statics before emitting the stub and read the
 	// yield/forced-exit flags right after this returns, so the worker outcome is
 	// copied back into this thread's statics before returning.
+	// SHARPEMU_NATIVE_WORKER_NO_INLINE_WINDOWS_V1_8_12_3
 	private unsafe int RunGuestEntryStub(void* entryStub, ulong hostRspSlot, bool requireNativeWorker = false)
 	{
-		// Limit in-flight native Runs before renting so the idle pool is not
-		// drained by threads blocked on the concurrency gate.
-		_nativeWorkerRunLimiter.Wait();
+		// Renderer/resource workers are long-lived. Keep them off the historical
+		// two-slot TBB gate while still using the same raw NativeGuestExecutor.
+		var laneName = _activeGuestThreadState?.Name ?? "unknown";
+		var rendererResourceLane =
+			requireNativeWorker &&
+			UsesRendererResourceNativeWorkerLane(laneName);
+		var runLimiter =
+			rendererResourceLane
+				? _rendererResourceNativeWorkerRunLimiter
+				: _nativeWorkerRunLimiter;
+		var waitStarted = Environment.TickCount64;
+
+		if (rendererResourceLane)
+		{
+			Interlocked.Increment(ref _rendererResourceNativeWaiting);
+		}
+
+		runLimiter.Wait();
+
+		var runStarted = Environment.TickCount64;
+		if (rendererResourceLane)
+		{
+			Interlocked.Decrement(ref _rendererResourceNativeWaiting);
+			var active = Interlocked.Increment(ref _rendererResourceNativeActive);
+			UpdateObservedMaximum(ref _rendererResourceNativeMaxObserved, active);
+
+			var trace = Interlocked.Increment(ref _rendererResourceNativeLaneTraceCount);
+			if (trace <= 64 || trace % 256 == 0)
+			{
+				Console.Error.WriteLine(
+					$"[V74.0.10][NATIVE_LANE] enter n={trace} " +
+					$"name='{laneName}' wait_ms={unchecked(runStarted - waitStarted)} " +
+					$"active={active} waiting={Volatile.Read(ref _rendererResourceNativeWaiting)} " +
+					$"max_observed={Volatile.Read(ref _rendererResourceNativeMaxObserved)} " +
+					$"lane_limit={RendererResourceNativeWorkerMaxConcurrent} " +
+					$"tbb_limit={NativeWorkerMaxConcurrent}");
+			}
+		}
+
 		NativeGuestExecutor? worker = null;
 		try
 		{
@@ -91,7 +209,10 @@ public sealed partial class DirectExecutionBackend
 			// TerminateThread+respawn. Wait for a native worker — never fall back
 			// to managed inline (FailFast) and never throw (uncaught throw mid-
 			// storm was a silent process die).
-			var maxAttempts = requireNativeWorker ? 500 : 48;
+			var mustUseNativeWorker =
+				requireNativeWorker ||
+				(OperatingSystem.IsWindows() && !NativeGuestWorkersDisabled);
+			var maxAttempts = mustUseNativeWorker ? 500 : 48;
 			for (var attempt = 0; attempt < maxAttempts; attempt++)
 			{
 				worker = RentNativeGuestExecutor();
@@ -100,7 +221,7 @@ public sealed partial class DirectExecutionBackend
 					break;
 				}
 
-				if (!requireNativeWorker)
+				if (!mustUseNativeWorker)
 				{
 					break;
 				}
@@ -110,9 +231,9 @@ public sealed partial class DirectExecutionBackend
 
 			if (worker is null)
 			{
-				if (requireNativeWorker)
+				if (mustUseNativeWorker)
 				{
-					var n = Interlocked.Increment(ref _tbbNativeWorkerRefuseCount);
+					var n = Interlocked.Increment(ref _nativeWorkerSafeRefuseCount);
 					if (n <= 8 || n % 32 == 0)
 					{
 						Console.Error.WriteLine(
@@ -122,13 +243,15 @@ public sealed partial class DirectExecutionBackend
 					}
 
 					_activeGuestThreadYieldRequested = true;
-					_activeGuestThreadYieldReason = "tbb_native_worker_unavailable";
+					_activeGuestThreadYieldReason =
+						requireNativeWorker
+							? "tbb_native_worker_unavailable"
+							: "native_worker_unavailable_no_inline";
 					_activeForcedGuestExit = true;
 					return unchecked((int)0x80020012);
 				}
 
-				TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot);
-				return CallNativeEntry(entryStub);
+				// SHARPEMU_V74_0_3_4_NO_MANAGED_INLINE_FALLBACK 				Console.Error.WriteLine( 				    $"[V74.0.3.4][NO_INLINE] native_worker_unavailable " + 				    $"required={requireNativeWorker} attempts={maxAttempts}; " + 				    "guest execution refused instead of entering CLR-managed inline path"); 				Console.Error.Flush();  				_activeGuestThreadYieldRequested = true; 				_activeGuestThreadYieldReason = "native_worker_unavailable_no_managed_inline"; 				_activeForcedGuestExit = true; 				return unchecked((int)0x80020012);
 			}
 
 			try
@@ -170,12 +293,317 @@ public sealed partial class DirectExecutionBackend
 		}
 		finally
 		{
-			_nativeWorkerRunLimiter.Release();
+			if (rendererResourceLane)
+			{
+				var active = Interlocked.Decrement(ref _rendererResourceNativeActive);
+				var trace = Interlocked.Increment(ref _rendererResourceNativeLaneTraceCount);
+				if (trace <= 64 || trace % 256 == 0)
+				{
+					Console.Error.WriteLine(
+						$"[V74.0.10][NATIVE_LANE] exit n={trace} " +
+						$"name='{laneName}' run_ms={unchecked(Environment.TickCount64 - runStarted)} " +
+						$"active={active} waiting={Volatile.Read(ref _rendererResourceNativeWaiting)} " +
+						$"max_observed={Volatile.Read(ref _rendererResourceNativeMaxObserved)}");
+				}
+			}
+
+			runLimiter.Release();
 		}
 	}
 
-	private static int _tbbNativeRunEnterCount;
+		private unsafe int RunGuestEntryStubDedicated(
+		void* entryStub,
+		ulong hostRspSlot)
+	{
+		if (!OperatingSystem.IsWindows() || NativeGuestWorkersDisabled)
+		{
+			TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot);
+			return CallNativeEntry(entryStub);
+		}
+
+		var state = _activeGuestThreadState;
+		var guestThreadHandle =
+			GuestThreadExecution.CurrentGuestThreadHandle;
+
+		if (guestThreadHandle == 0 && state is { } activeState)
+		{
+			guestThreadHandle = activeState.ThreadHandle;
+		}
+
+		if (guestThreadHandle == 0)
+		{
+			Console.Error.WriteLine(
+				"[V74.0.2][CALLBACK_NATIVE] no_guest_thread_handle -> transient-native");
+
+			return RunTransientGuestEntryStub(
+				entryStub,
+				hostRspSlot);
+		}
+
+NativeGuestExecutor? worker;
+
+		lock (_nativeWorkerGate)
+		{
+			if (_nativeWorkersDisposed)
+			{
+				_activeGuestThreadYieldRequested = true;
+				_activeGuestThreadYieldReason =
+					"dedicated_native_worker_backend_disposed";
+				_activeForcedGuestExit = true;
+
+				return unchecked((int)0x80020012);
+			}
+
+			_dedicatedNativeWorkers.TryGetValue(
+				guestThreadHandle,
+				out worker);
+		}
+
+		if (worker is null)
+		{
+			var created = NativeGuestExecutor.TryCreate(this);
+
+			if (created is null)
+			{
+				Console.Error.WriteLine(
+					$"[V73.20.4.1][DEDICATED][ERROR] create_failed " +
+					$"guest=0x{guestThreadHandle:X16} " +
+					$"name='{state?.Name ?? "unknown"}'");
+
+				_activeGuestThreadYieldRequested = true;
+				_activeGuestThreadYieldReason =
+					"dedicated_native_worker_create_failed";
+				_activeForcedGuestExit = true;
+
+				return unchecked((int)0x80020012);
+			}
+
+			lock (_nativeWorkerGate)
+			{
+				if (_nativeWorkersDisposed)
+				{
+					created.Dispose();
+
+					_activeGuestThreadYieldRequested = true;
+					_activeGuestThreadYieldReason =
+						"dedicated_native_worker_backend_disposed";
+					_activeForcedGuestExit = true;
+
+					return unchecked((int)0x80020012);
+				}
+
+				if (_dedicatedNativeWorkers.TryGetValue(
+						guestThreadHandle,
+						out worker))
+				{
+					created.Dispose();
+				}
+				else
+				{
+					worker = created;
+
+					_dedicatedNativeWorkers.Add(
+						guestThreadHandle,
+						worker);
+
+					_allNativeWorkers.Add(worker);
+
+					var n = Interlocked.Increment(
+						ref _v732041DedicatedWorkerCreatedTraceCount);
+
+					if (n <= 64)
+					{
+						Console.Error.WriteLine(
+							$"[V73.20.4.1][DEDICATED] create n={n} " +
+							$"guest=0x{guestThreadHandle:X16} " +
+							$"name='{state?.Name ?? "unknown"}'");
+					}
+				}
+			}
+		}
+
+		if (worker is null)
+		{
+			_activeGuestThreadYieldRequested = true;
+			_activeGuestThreadYieldReason =
+				"dedicated_native_worker_resolution_failed";
+			_activeForcedGuestExit = true;
+
+			return unchecked((int)0x80020012);
+		}
+
+		var runN = Interlocked.Increment(
+			ref _v732041DedicatedWorkerRunTraceCount);
+
+		if (runN <= 96)
+		{
+			Console.Error.WriteLine(
+				$"[V73.20.4.1][DEDICATED] run n={runN} " +
+				$"guest=0x{guestThreadHandle:X16} " +
+				$"name='{state?.Name ?? "unknown"}'");
+		}
+
+		var nativeReturn = worker.Run(
+			_activeCpuContext!,
+			state,
+			guestThreadHandle,
+			_activeEntryReturnSentinelRip,
+			_activeGuestReturnSlotAddress,
+			(nint)hostRspSlot,
+			(nint)entryStub,
+			state?.AffinityMask ?? 0,
+			out var yieldRequested,
+			out var yieldReason,
+			out var forcedExit);
+
+		_activeGuestThreadYieldRequested = yieldRequested;
+		_activeGuestThreadYieldReason = yieldReason;
+		_activeForcedGuestExit = forcedExit;
+
+		return nativeReturn;
+	}
+	// SHARPEMU_V74_0_1_ROOT_NATIVE_ENTRY
+	// ExecuteEntry is the last normal guest-code path that still entered its
+	// emitted guest stub directly from a CLR-created thread. Run it on a raw
+	// NativeGuestExecutor without consuming the burst-worker semaphore.
+	private unsafe int RunTopLevelGuestEntryStub(
+		CpuContext context,
+		void* entryStub,
+		ulong hostRspSlot)
+	{
+		if (!OperatingSystem.IsWindows() || NativeGuestWorkersDisabled)
+		{
+			TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot);
+			return CallNativeEntry(entryStub);
+		}
+
+		var worker = NativeGuestExecutor.TryCreate(this);
+		if (worker is null)
+		{
+			LastError = "Failed to create raw native worker for top-level guest entry";
+			_activeForcedGuestExit = true;
+			return unchecked((int)0x80020012);
+		}
+
+		try
+		{
+			var n = Interlocked.Increment(ref _v740RootNativeTraceCount);
+			if (n <= 8)
+			{
+				Console.Error.WriteLine(
+					$"[V74.0.2][ROOT_NATIVE] enter n={n} native_tid={worker.NativeThreadId} " +
+					$"stub=0x{(ulong)entryStub:X16}");
+			}
+
+			Volatile.Write(
+				ref _entryHostThreadId,
+				unchecked((int)worker.NativeThreadId));
+			Volatile.Write(ref _entryManagedThreadId, 0);
+
+			var nativeReturn = worker.Run(
+				context,
+				null,
+				0,
+				_activeEntryReturnSentinelRip,
+				_activeGuestReturnSlotAddress,
+				(nint)hostRspSlot,
+				(nint)entryStub,
+				0,
+				out var yieldRequested,
+				out var yieldReason,
+				out var forcedExit);
+
+			_activeGuestThreadYieldRequested = yieldRequested;
+			_activeGuestThreadYieldReason = yieldReason;
+			_activeForcedGuestExit = forcedExit;
+
+			return nativeReturn;
+		}
+		finally
+		{
+			Volatile.Write(ref _entryHostThreadId, 0);
+			Volatile.Write(ref _entryManagedThreadId, 0);
+			worker.Dispose();
+		}
+	}
+
+	// SHARPEMU_V74_0_1_TRANSIENT_NATIVE_CALLBACK
+	// HLE callbacks such as scePthreadOnce can execute a guest function without
+	// a scheduled pthread handle. They still must not place guest stubs above
+	// CLR frames, so execute them on a one-shot raw worker.
+	private unsafe int RunTransientGuestEntryStub(
+		void* entryStub,
+		ulong hostRspSlot)
+	{
+		if (!OperatingSystem.IsWindows() || NativeGuestWorkersDisabled)
+		{
+			TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot);
+			return CallNativeEntry(entryStub);
+		}
+
+		var context = ActiveCpuContext;
+		if (context is null)
+		{
+			Console.Error.WriteLine(
+				"[V74.0.2][CALLBACK_NATIVE][ERROR] no_active_cpu_context");
+			_activeGuestThreadYieldRequested = true;
+			_activeGuestThreadYieldReason =
+				"transient_native_callback_no_context";
+			_activeForcedGuestExit = true;
+			return unchecked((int)0x80020012);
+		}
+
+		var worker = NativeGuestExecutor.TryCreate(this);
+		if (worker is null)
+		{
+			Console.Error.WriteLine(
+				"[V74.0.2][CALLBACK_NATIVE][ERROR] create_failed");
+			_activeGuestThreadYieldRequested = true;
+			_activeGuestThreadYieldReason =
+				"transient_native_callback_create_failed";
+			_activeForcedGuestExit = true;
+			return unchecked((int)0x80020012);
+		}
+
+		try
+		{
+			var n = Interlocked.Increment(
+				ref _v740TransientNativeTraceCount);
+
+			if (n <= 64)
+			{
+				Console.Error.WriteLine(
+					$"[V74.0.2][CALLBACK_NATIVE] enter n={n} native_tid={worker.NativeThreadId} " +
+					$"stub=0x{(ulong)entryStub:X16}");
+			}
+
+			var nativeReturn = worker.Run(
+				context,
+				null,
+				0,
+				_activeEntryReturnSentinelRip,
+				_activeGuestReturnSlotAddress,
+				(nint)hostRspSlot,
+				(nint)entryStub,
+				0,
+				out var yieldRequested,
+				out var yieldReason,
+				out var forcedExit);
+
+			_activeGuestThreadYieldRequested = yieldRequested;
+			_activeGuestThreadYieldReason = yieldReason;
+			_activeForcedGuestExit = forcedExit;
+
+			return nativeReturn;
+		}
+		finally
+		{
+			worker.Dispose();
+		}
+	}
+private static int _tbbNativeRunEnterCount;
 	private static int _tbbNativeWorkerRefuseCount;
+	private static int _nativeWorkerSafeRefuseCount;
 	internal static int _tbbWorkerPrologueFaultCount;
 
 	private void PrewarmNativeGuestWorkers(int count)
@@ -247,7 +675,7 @@ public sealed partial class DirectExecutionBackend
 			if (Interlocked.Exchange(ref _nativeWorkerCreationFailedLogged, 1) == 0)
 			{
 				Console.Error.WriteLine(
-					"[LOADER][WARN] Failed to create a native guest worker thread; falling back to inline guest execution.");
+					"[LOADER][WARN] Failed to create a native guest worker thread; caller will use the safe no-inline policy on Windows.");
 			}
 			return null;
 		}
@@ -289,6 +717,7 @@ public sealed partial class DirectExecutionBackend
 			workers = _allNativeWorkers.ToArray();
 			_allNativeWorkers.Clear();
 			_idleNativeWorkers.Clear();
+			_dedicatedNativeWorkers.Clear();
 		}
 		foreach (var worker in workers)
 		{
@@ -333,11 +762,25 @@ public sealed partial class DirectExecutionBackend
 		private static nint _posixPrologueThunk;
 		private static nint _posixEpilogueThunk;
 		private static readonly object PosixThunkGate = new();
+
+        // SHARPEMU_NATIVE_WORKER_DELEGATE_THUNK_V1_8_11
+        // Rooted reverse-P/Invoke callbacks replace UnmanagedCallersOnly
+        // only at native-worker run entry/exit.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate nint RunPrologueCallback(nint executorHandle);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void RunEpilogueCallback(nint executorHandle, int nativeResult);
+
+        private static readonly RunPrologueCallback RunPrologueCallbackInstance = RunPrologue;
+        private static readonly RunEpilogueCallback RunEpilogueCallbackInstance = RunEpilogue;
 		private GCHandle _selfHandle;
 		private void* _controlBlock;
 		private void* _loopStub;
 		private nint _threadHandle;
 		private uint _nativeThreadId;
+
+		public uint NativeThreadId => _nativeThreadId;
 
 		// Single in-flight run; publication is ordered by the work/done event pair.
 		private CpuContext? _runContext;
@@ -424,8 +867,8 @@ public sealed partial class DirectExecutionBackend
 				return false;
 			}
 
-			var prologuePtr = (nint)(delegate* unmanaged<nint, nint>)&RunPrologue;
-			var epiloguePtr = (nint)(delegate* unmanaged<nint, int, void>)&RunEpilogue;
+			var prologuePtr = Marshal.GetFunctionPointerForDelegate(RunPrologueCallbackInstance);
+			var epiloguePtr = Marshal.GetFunctionPointerForDelegate(RunEpilogueCallbackInstance);
 			var executorHandle = GCHandle.ToIntPtr(_selfHandle);
 			nint workHandle;
 			nint doneHandle;
@@ -578,6 +1021,12 @@ public sealed partial class DirectExecutionBackend
 			out string? yieldReason,
 			out bool forcedExit)
 		{
+			// [V72.4.3.2.15][GUEST_CPU_EVENT_PARK]
+			// Park before any V72.4.3.2.14 1-ms gate can run. When the event
+			// releases, active host decoder count is zero and the legacy gate
+			// becomes a no-op.
+			SharpEmu.Libs.Media.BinkHostPlaybackAssist.WaitForGuestCpuPermit();
+
 			_runContext = context;
 			_runState = state;
 			_runGuestThreadHandle = guestThreadHandle;
@@ -684,7 +1133,6 @@ public sealed partial class DirectExecutionBackend
 			_ = PosixHostStubs.WaitWorkerEvent(_doneSemaphore, -1);
 		}
 
-		[UnmanagedCallersOnly]
 		private static nint RunPrologue(nint executorHandle)
 		{
 			try
@@ -706,7 +1154,6 @@ public sealed partial class DirectExecutionBackend
 			}
 		}
 
-		[UnmanagedCallersOnly]
 		private static void RunEpilogue(nint executorHandle, int nativeResult)
 		{
 			try
@@ -883,3 +1330,6 @@ public sealed partial class DirectExecutionBackend
 		}
 	}
 }
+
+
+

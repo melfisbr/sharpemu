@@ -1,0 +1,23 @@
+V74.0.25 evidence summary
+
+V74.0.24 result:
+- V74.0.24 fresh stale-source path reached 4 times.
+- repeated stale hash pairs fell to one each.
+- 0x102A400000 missing-baseline=0, refresh=0, owner=1, reuse=15.
+- peak process-tree working set ~7111.2 MiB; private ~12672 MiB.
+- no DeviceLost / heap corruption.
+- seven startup WAIT_REG_MEM registrations remained visible through the run.
+- no natural guest Bink request in ~125 s.
+
+Current accumulated AGC source:
+- ApplySubmittedWriteData is the ONLY call site passing requiresGpuBufferReadback:false.
+- that branch routes to SubmitOrderedGuestActionAfterQueueCompletion().
+- the older baseline source routed the same WRITE_DATA action through SubmitOrderedGuestAction().
+
+Historical title traces:
+- 0x456CFF360 / 0x456CFF580 / 0x456CFF700 / 0x456CFF4C0 and 0x442FFF300/200
+  have real WRITE_DATA producer/completion evidence and queue_resumed evidence.
+
+V74.0.25 therefore restores the earlier scheduling contract behind an opt-in gate only.
+It never writes a wait label itself; it only changes WHEN the already-decoded real
+WRITE_DATA packet action is allowed to execute.

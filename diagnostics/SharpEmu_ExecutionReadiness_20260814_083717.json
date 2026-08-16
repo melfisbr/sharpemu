@@ -1,0 +1,137 @@
+﻿{
+    "schema":  "SharpEmu.ExecutionReadinessAudit/1",
+    "utc":  "2026-08-14T11:37:17.4332285Z",
+    "repositoryRoot":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu",
+    "projectCount":  13,
+    "solutionCount":  1,
+    "rootBuildConfigCount":  13454,
+    "checks":  [
+                   {
+                       "check":  "vulkan-vsad-u32",
+                       "source":  "SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.Alu.cs",
+                       "exists":  true,
+                       "matches":  1,
+                       "lines":  [
+                                     946
+                                 ],
+                       "sha256":  "0AFECA65BFDF3C7F6F486B94FA857E12AEC67AECEE5D7776B545EF6E000A7B39"
+                   },
+                   {
+                       "check":  "metal-vsad-u32",
+                       "source":  "SharpEmu.ShaderCompiler.Metal\\Gen5MslTranslator.Alu.cs",
+                       "exists":  true,
+                       "matches":  1,
+                       "lines":  [
+                                     317
+                                 ],
+                       "sha256":  "366B689C6E1AE5B47F5507A5DDE50F564135BEE1533A59AEEF70FAD1AC32C63A"
+                   },
+                   {
+                       "check":  "vulkan-gds-gate",
+                       "source":  "SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.cs",
+                       "exists":  true,
+                       "matches":  1,
+                       "lines":  [
+                                     2177
+                                 ],
+                       "sha256":  "0311FB58DA514859062912C4FB4586612E1CA6EBCD0B3FD456011DB83C72ECA4"
+                   },
+                   {
+                       "check":  "vulkan-lds-gate",
+                       "source":  "SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.cs",
+                       "exists":  true,
+                       "matches":  2,
+                       "lines":  [
+                                     2413,
+                                     2491
+                                 ],
+                       "sha256":  "0311FB58DA514859062912C4FB4586612E1CA6EBCD0B3FD456011DB83C72ECA4"
+                   },
+                   {
+                       "check":  "vulkan-buffer-gate",
+                       "source":  "SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.cs",
+                       "exists":  true,
+                       "matches":  2,
+                       "lines":  [
+                                     2875,
+                                     2963
+                                 ],
+                       "sha256":  "0311FB58DA514859062912C4FB4586612E1CA6EBCD0B3FD456011DB83C72ECA4"
+                   },
+                   {
+                       "check":  "vulkan-image-gate",
+                       "source":  "SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.cs",
+                       "exists":  true,
+                       "matches":  1,
+                       "lines":  [
+                                     4299
+                                 ],
+                       "sha256":  "0311FB58DA514859062912C4FB4586612E1CA6EBCD0B3FD456011DB83C72ECA4"
+                   },
+                   {
+                       "check":  "vulkan-vector-gate",
+                       "source":  "SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.Alu.cs",
+                       "exists":  true,
+                       "matches":  1,
+                       "lines":  [
+                                     1131
+                                 ],
+                       "sha256":  "0AFECA65BFDF3C7F6F486B94FA857E12AEC67AECEE5D7776B545EF6E000A7B39"
+                   }
+               ],
+    "projects":  [
+                     {
+                         "path":  "src\\SharpEmu.CLI\\SharpEmu.CLI.csproj",
+                         "sha256":  "CD330E4F756DC3A772658B3DBB61B083924CF7BC5B7F152F40291C8262A67081"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.Core\\SharpEmu.Core.csproj",
+                         "sha256":  "BA57335A69D2435AD3E4CD8D0E2DA14A1F4FBFA518076A92D9A2A0B485018440"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.DebugClient\\SharpEmu.DebugClient.csproj",
+                         "sha256":  "D371B01AF92F97D44F2199DE93F3313E81022BFA5E24F9E4999E087A866E6A2F"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.Debugger\\SharpEmu.Debugger.csproj",
+                         "sha256":  "5D437DB341B90F7EDAC5B657848D6F4AE89099EF260C3858D62444EA382C795A"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.GUI\\SharpEmu.GUI.csproj",
+                         "sha256":  "47763CC3B9E39A460BAF9537C4F508FAF999520D7257F71C9B87C0F5195A36CC"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.HLE\\SharpEmu.HLE.csproj",
+                         "sha256":  "897CB1CECBEE5C8CF406A7A17878F2A61A53239F4B5EB9876B32A6F9F7F5DCBE"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.LibAtrac9\\SharpEmu.LibAtrac9.csproj",
+                         "sha256":  "7DB8513726044E18A3C5DCF7652AF984BEDBD64B241B60E76411E8023D418C87"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.Libs\\SharpEmu.Libs.csproj",
+                         "sha256":  "9B61404268A1AB652097B2F71AA7C8B5B44B821269DA09120BA136A9B92B99FF"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.Logging\\SharpEmu.Logging.csproj",
+                         "sha256":  "C202A00B7CF7AA7D9BD608D67F556F00FE0F845F673F5E03861A5188DFC0C609"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.ShaderCompiler.Metal\\SharpEmu.ShaderCompiler.Metal.csproj",
+                         "sha256":  "0F7528976EE6D501CD87136F2D533DC7776B61A4801EC70AC4F5E503AACE8624"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.ShaderCompiler.Vulkan\\SharpEmu.ShaderCompiler.Vulkan.csproj",
+                         "sha256":  "50C6D2265FAA8018E023EDFF2B560F7B7F1B8B519084EDA87409EA0D6E96AE0B"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.ShaderCompiler\\SharpEmu.ShaderCompiler.csproj",
+                         "sha256":  "134BA73557B23AE5C57768235571F52BA6809E0AB060A75615938BD714AAFEEC"
+                     },
+                     {
+                         "path":  "src\\SharpEmu.SourceGenerators\\SharpEmu.SourceGenerators.csproj",
+                         "sha256":  "0C15529DBD3226AAC5FE360B7DC11C700E2B6EFA28551643012436E5AF2E9B92"
+                     }
+                 ],
+    "conclusion":  "Fail-closed shader gates must be resolved only from captured guest opcode evidence; do not change them to successful no-ops."
+}

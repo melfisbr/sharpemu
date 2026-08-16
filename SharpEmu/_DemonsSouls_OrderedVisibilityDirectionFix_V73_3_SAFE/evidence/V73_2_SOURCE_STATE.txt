@@ -1,0 +1,13 @@
+version=73.2
+canonical_empty_fastpath=True
+record_produced_range=True
+producer_completion_action=True
+wait_record_produced=True
+wait_canonicalize=True
+indirect_expired=True
+ordered_gpu_side_effect=True
+event_fastpath=False
+presenter_backpressure=True
+presenter_ordered_wait=True
+discovered_source_files=11
+discovered_source_files_copied=11

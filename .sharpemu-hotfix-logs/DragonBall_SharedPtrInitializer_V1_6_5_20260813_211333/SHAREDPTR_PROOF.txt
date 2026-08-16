@@ -1,0 +1,27 @@
+﻿V1.6.4 static proof:
+
+Resolver1 at 0x800C7F1E0:
+  vmovups xmm0,[rsi+0xC0]
+  mov     rdi,[rsi+0xC8]
+  vmovups [rbx],xmm0
+  if (rdi != 0) ref/control-block increment at rdi+8
+
+Resolver2 at 0x800C7F220 is identical but uses +0xD0/+0xD8.
+
+The crash caller at 0x800C6BE80:
+  if destination0 state <= 1:
+      source = [rbx+0x10]
+      copy shared_ptr(source+0xC0) to local
+      object = local.ptr
+      getter(object+0x40)
+      assign to destination0
+
+The observed local.ptr is NULL, so source+0xC0 was already empty.
+
+The class constructor around 0x800C80D10 explicitly calls the default shared_ptr
+initializer for object+0xC0. Therefore NULL is a valid construction state, but a later
+update path must populate it before the caller above is allowed to consume it.
+
+0x800C82220 is invoked from the class update/insertion path observed near 0x800C80ED7.
+V1.6.5 extracts that helper family plus referenced strings/RTTI to identify the missing
+population transition. No guest-code guard or fake object is installed.

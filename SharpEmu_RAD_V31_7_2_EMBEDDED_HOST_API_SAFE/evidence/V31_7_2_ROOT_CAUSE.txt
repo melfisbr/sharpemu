@@ -1,0 +1,20 @@
+V72.4.3.2.31.7.2 ROOT CAUSE / REPAIR
+
+Observed SharpEmu.Libs compiler errors in V31.7.1:
+  RadBinkEmbeddedHostApiV724323171.cs(297,21) CS0266 uint -> nint
+  RadBinkEmbeddedHostApiV724323171.cs(351,21) CS0266 uint -> nint
+
+Root cause:
+  EnumWindows callbacks used `(window, _) =>`. In C#, `_` is a real lambda
+  parameter here (type nint), not a discard. Statements such as
+  `_ = GetWindowThreadProcessId(...)` therefore attempted to assign the API's
+  uint return value into that nint callback parameter.
+
+Repair:
+  Rename the EnumWindows second callback parameter to `ignored`, so `_ = ...`
+  is again a true discard expression. No Win32 ABI/PInvoke signature changed.
+
+Additional validation:
+  The package validator rejects the historical `(window, _) =>` form in the
+  embedded host payload, and the payload is compiled in an isolated net10.0
+  smoke project during package construction.

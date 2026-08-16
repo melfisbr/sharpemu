@@ -1,0 +1,115 @@
+                    var uValue = (sumU + 4) / 9;
+                    var vValue = (sumV + 4) / 9;
+
+                    if (swapUv)
+                    {
+                        (uValue, vValue) =
+                            (vValue, uValue);
+                    }
+
+                    var cbValue = uValue - 128;
+                    var crValue = vValue - 128;
+
+                    var v7243230AttractReferenceColor =
+                        Path.GetFileName(_moviePath).Equals(
+                            "attract_movie.bk2",
+                            StringComparison.OrdinalIgnoreCase);
+
+                    int red;
+                    int green;
+                    int blue;
+
+                    if (v7243230AttractReferenceColor && fullRange)
+                    {
+                        // V72.4.3.2.30 ATTRACT_REFERENCE_112_COLOR_Q14
+                        //
+                        // Fit from the direct NihAV RAW PGMYUV frame containing
+                        // "On the second day" to the geometrically aligned
+                        // reference-video frame at ~112 s.
+                        //
+                        // Input domain: Y 0..255, Cb/Cr centered -128..127.
+                        // Direct [Y,Cb,Cr,1] -> RGB Q14 transform.
+                        //
+                        // R = 1.255669Y - 0.633472Cb + 0.092579Cr + 3.476
+                        // G = 1.199629Y + 0.092245Cb - 0.515560Cr + 4.375
+                        // B = 1.241525Y + 0.613057Cb - 0.854455Cr + 5.867
+                        //
+                        // Do not apply the V17 logo-fit chroma transform or the
+                        // neutral gate on attract_movie: both are already
+                        // represented by this title-specific reference fit.
+                        var rAccumulator =
+                            20573 * yy -
+                            10379 * cbValue +
+                            1517 * crValue +
+                            56959;
+                        var gAccumulator =
+                            19655 * yy +
+                            1511 * cbValue -
+                            8447 * crValue +
+                            71678;
+                        var bAccumulator =
+                            20341 * yy +
+                            10044 * cbValue -
+                            13999 * crValue +
+                            96120;
+
+                        red =
+                            Math.Clamp(
+                                (rAccumulator + 8192) >> 14,
+                                0,
+                                255);
+                        green =
+                            Math.Clamp(
+                                (gAccumulator + 8192) >> 14,
+                                0,
+                                255);
+                        blue =
+                            Math.Clamp(
+                                (bAccumulator + 8192) >> 14,
+                                0,
+                                255);
+                    }
+                    else
+                    {
+                        // V72.4.3.2.17 REFERENCE_CHROMA_Q14_EXACT
+                        // Keep the already-validated logo calibration for the
+                        // non-attract boot movies.
+                        if (v7243217ReferenceCalibration && fullRange)
+                        {
+                            var cbAccumulator =
+                                12044 * cbValue -
+                                14647 * crValue -
+                                762 * yy;
+                            var crAccumulator =
+                                -2187 * cbValue +
+                                8259 * crValue +
+                                799 * yy;
+
+                            cbValue =
+                                cbAccumulator >= 0
+                                    ? (cbAccumulator + 8192) >> 14
+                                    : -(((-cbAccumulator) + 8192) >> 14);
+                            crValue =
+                                crAccumulator >= 0
+                                    ? (crAccumulator + 8192) >> 14
+                                    : -(((-crAccumulator) + 8192) >> 14);
+
+                            cbValue = Math.Clamp(cbValue, -128, 127);
+                            crValue = Math.Clamp(crValue, -128, 127);
+                        }
+
+                        // V72.4.3.2.21 REFERENCE_NEUTRAL_PRECONVERT
+                        ApplyV7243221ReferenceNeutralGate(
+                            ref yy,
+                            ref cbValue,
+                            ref crValue);
+
+                        ConvertBt709Sample(
+                            yy,
+                            cbValue,
+                            crValue,
+                            fullRange,
+                            out red,
+                            out green,
+                            out blue);
+                    }

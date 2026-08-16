@@ -155,4 +155,19 @@ public static class ShareExports
 
         Console.Error.WriteLine($"[LOADER][TRACE] share.{message}");
     }
+
+// SHARPEMU_DBFZ_SHARE_PARTIAL_V1_8_12_3 5wjxESwX68I
+    [SysAbiExport(Nid = "5wjxESwX68I", ExportName = "sceShareFeatureProhibit", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceShareUtility")]
+    public static int ShareFeatureProhibitV18123(CpuContext ctx) => ctx.SetReturn(0);
+
+// SHARPEMU_DBFZ_SHARE_PARTIAL_V1_8_12_3 T64o-315wbg
+    [SysAbiExport(Nid = "T64o-315wbg", ExportName = "sceShareSetScreenshotOverlayImage", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceShareUtility")]
+    public static int ShareSetScreenshotOverlayImageV18123(CpuContext ctx)
+    {
+        var address = ctx[CpuRegister.Rdi];
+        if (address == 0) return ctx.SetReturn(unchecked((int)0x80020016));
+        Span<byte> probe = stackalloc byte[1];
+        if (!ctx.Memory.TryRead(address, probe)) return ctx.SetReturn(unchecked((int)0x8002000E));
+        return ctx.SetReturn(0);
+    }
 }

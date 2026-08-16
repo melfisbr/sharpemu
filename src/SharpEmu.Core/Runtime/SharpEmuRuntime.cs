@@ -433,8 +433,40 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
         IReadOnlyDictionary<string, ulong> activeRuntimeSymbols,
         string processImageName)
     {
+        // Generic ELF uses the normal runtime-linker order. PS5 SceDynExec is a
+        // platform executable format whose startup stub owns the process CRT path.
+        // In observed PS5 images DT_INIT commonly resolves to imageBase+0x10; calling
+        // it from the host before e_entry duplicates process startup state. Keep PRX
+        // (SceDynamic) initializers host-driven, but leave the main SceDynExec startup
+        // entirely guest-driven from e_entry.
+        var guestDrivenMainStartup =
+            mainImage.ElfHeader.ImageType == ElfImageType.SceDynExec;
+        if (!guestDrivenMainStartup)
+        {
+            var preInitResult = RunInitializerList(
+                $"{processImageName}:preinit",
+                mainImage.PreInitializerFunctions,
+                generation,
+                activeImportStubs,
+                activeRuntimeSymbols,
+                processImageName);
+            if (preInitResult is not null)
+            {
+                return preInitResult;
+            }
+        }
+        else if (mainImage.PreInitializerFunctions.Count != 0 ||
+                 mainImage.InitializerFunctions.Count != 0)
+        {
+            Console.Error.WriteLine(
+                $"[RUNTIME] SceDynExec startup is guest-driven: skipping host dispatch of " +
+                $"main-image preinit={mainImage.PreInitializerFunctions.Count} " +
+                $"init={mainImage.InitializerFunctions.Count}; entering e_entry directly after PRX init.");
+        }
+
+        var orderedModules = OrderModulesForInitialization(loadedModuleImages);
         var moduleStartResult = RunPreloadedModuleInitializers(
-            loadedModuleImages,
+            orderedModules,
             generation,
             activeImportStubs,
             activeRuntimeSymbols);
@@ -443,10 +475,18 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
             return moduleStartResult;
         }
 
-        // On current PS5 dumps DT_INIT commonly resolves to imageBase+0x10, which is inside
-        // the mapped ELF header rather than a callable guest routine. Startup must remain
-        // guest-driven until the PS5 init/module ABI is identified precisely.
-        return null;
+        if (guestDrivenMainStartup)
+        {
+            return null;
+        }
+
+        return RunInitializerList(
+            $"{processImageName}:init",
+            mainImage.InitializerFunctions,
+            generation,
+            activeImportStubs,
+            activeRuntimeSymbols,
+            processImageName);
     }
 
     private bool TryGetEhFrameInfo(
@@ -513,8 +553,8 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
                 continue;
             }
 
-            var initEntryPoint = loadedModule.Image.InitFunctionEntryPoint;
-            if (initEntryPoint < 0x10000)
+            var initializerFunctions = loadedModule.Image.InitializerFunctions;
+            if (initializerFunctions.Count == 0)
             {
                 continue;
             }
@@ -531,19 +571,31 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
             }
 
             Console.Error.WriteLine(
-                $"[RUNTIME] Starting module {moduleName}: dt_init=0x{initEntryPoint:X16}");
+                $"[RUNTIME] Starting module {moduleName}: initializers={initializerFunctions.Count} dt_init=0x{loadedModule.Image.InitFunctionEntryPoint:X16}");
 
-            var result = _cpuDispatcher.DispatchModuleInitializer(
-                initEntryPoint,
-                generation,
-                activeImportStubs,
-                activeRuntimeSymbols,
-                moduleName,
-                _cpuExecutionOptions);
-            KernelModuleRegistry.CompleteModuleStart(
-                loadedModule.Handle,
-                result == OrbisGen2Result.ORBIS_GEN2_OK);
-            if (result != OrbisGen2Result.ORBIS_GEN2_OK)
+            var succeeded = true;
+            OrbisGen2Result result = OrbisGen2Result.ORBIS_GEN2_OK;
+            for (var initializerIndex = 0; initializerIndex < initializerFunctions.Count; initializerIndex++)
+            {
+                var initializerAddress = initializerFunctions[initializerIndex];
+                Console.Error.WriteLine(
+                    $"[RUNTIME]   Module initializer {moduleName}[{initializerIndex}] -> 0x{initializerAddress:X16}");
+                result = _cpuDispatcher.DispatchModuleInitializer(
+                    initializerAddress,
+                    generation,
+                    activeImportStubs,
+                    activeRuntimeSymbols,
+                    moduleName,
+                    _cpuExecutionOptions);
+                if (result != OrbisGen2Result.ORBIS_GEN2_OK)
+                {
+                    succeeded = false;
+                    break;
+                }
+            }
+
+            KernelModuleRegistry.CompleteModuleStart(loadedModule.Handle, succeeded);
+            if (!succeeded)
             {
                 Console.Error.WriteLine(
                     $"[RUNTIME] Module start failed: {moduleName} -> {result}");
@@ -554,41 +606,80 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
         return null;
     }
 
-    private OrbisGen2Result? RunImageInitializers(
-        string label,
-        SelfImage image,
-        Generation generation,
-        IReadOnlyDictionary<ulong, string> activeImportStubs,
-        IReadOnlyDictionary<string, ulong> activeRuntimeSymbols,
-        string processImageName)
+    private static IReadOnlyList<LoadedModuleImage> OrderModulesForInitialization(
+        IReadOnlyList<LoadedModuleImage> loadedModuleImages)
     {
-        if (image.PreInitializerFunctions.Count == 0 && image.InitializerFunctions.Count == 0)
+        if (loadedModuleImages.Count < 2)
         {
-            return null;
+            return loadedModuleImages;
         }
 
-        Console.Error.WriteLine(
-            $"[RUNTIME] Running initializers for {label}: preinit={image.PreInitializerFunctions.Count}, init={image.InitializerFunctions.Count}");
-
-        var result = RunInitializerList(
-            $"{label}:preinit",
-            image.PreInitializerFunctions,
-            generation,
-            activeImportStubs,
-            activeRuntimeSymbols,
-            processImageName);
-        if (result is not null)
+        var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < loadedModuleImages.Count; i++)
         {
-            return result;
+            var fileName = Path.GetFileName(loadedModuleImages[i].Path);
+            if (!string.IsNullOrWhiteSpace(fileName))
+            {
+                byName.TryAdd(fileName, i);
+                var stem = Path.GetFileNameWithoutExtension(fileName);
+                if (!string.IsNullOrWhiteSpace(stem))
+                {
+                    byName.TryAdd(stem, i);
+                }
+            }
         }
 
-        return RunInitializerList(
-            $"{label}:init",
-            image.InitializerFunctions,
-            generation,
-            activeImportStubs,
-            activeRuntimeSymbols,
-            processImageName);
+        var state = new byte[loadedModuleImages.Count];
+        var ordered = new List<LoadedModuleImage>(loadedModuleImages.Count);
+
+        void Visit(int index)
+        {
+            if (state[index] == 2)
+            {
+                return;
+            }
+
+            if (state[index] == 1)
+            {
+                Console.Error.WriteLine(
+                    $"[RUNTIME][WARN] Module dependency cycle near {Path.GetFileName(loadedModuleImages[index].Path)}; preserving stable fallback order.");
+                return;
+            }
+
+            state[index] = 1;
+            var dependencies = loadedModuleImages[index].Image.NeededModuleNames;
+            for (var dependencyIndex = 0; dependencyIndex < dependencies.Count; dependencyIndex++)
+            {
+                var dependencyName = dependencies[dependencyIndex];
+                if (!byName.TryGetValue(dependencyName, out var targetIndex))
+                {
+                    var dependencyStem = Path.GetFileNameWithoutExtension(dependencyName);
+                    if (string.IsNullOrWhiteSpace(dependencyStem) ||
+                        !byName.TryGetValue(dependencyStem, out targetIndex))
+                    {
+                        continue;
+                    }
+                }
+
+                Visit(targetIndex);
+            }
+
+            state[index] = 2;
+            ordered.Add(loadedModuleImages[index]);
+        }
+
+        for (var i = 0; i < loadedModuleImages.Count; i++)
+        {
+            Visit(i);
+        }
+
+        if (!ordered.Select(entry => entry.Path).SequenceEqual(loadedModuleImages.Select(entry => entry.Path), StringComparer.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                $"[RUNTIME] ELF dependency initializer order: {string.Join(" -> ", ordered.Select(entry => Path.GetFileName(entry.Path)))}");
+        }
+
+        return ordered;
     }
 
     private OrbisGen2Result? RunInitializerList(
@@ -610,7 +701,7 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
             Console.Error.WriteLine(
                 $"[RUNTIME]   Initializer {label}[{i}] -> 0x{initializerAddress:X16}");
 
-            var result = _cpuDispatcher.DispatchEntry(
+            var result = _cpuDispatcher.DispatchModuleInitializer(
                 initializerAddress,
                 generation,
                 activeImportStubs,
@@ -994,6 +1085,7 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
             size,
             image.EntryPoint,
             image.InitFunctionEntryPoint,
+            image.InitializerFunctions,
             ehFrameHeaderAddress,
             ehFrameAddress,
             ehFrameSize,

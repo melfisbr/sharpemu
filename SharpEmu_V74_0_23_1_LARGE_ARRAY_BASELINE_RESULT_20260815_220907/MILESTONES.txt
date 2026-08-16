@@ -1,0 +1,3 @@
+﻿24.7s main_loop guest_seconds=18.9189
+24.7s first_guest_frame size=3840x2160
+31.0s array_baseline logged=1

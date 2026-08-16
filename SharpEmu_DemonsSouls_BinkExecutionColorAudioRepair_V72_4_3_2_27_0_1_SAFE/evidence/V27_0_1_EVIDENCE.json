@@ -1,0 +1,13 @@
+{
+  "revision": "V72.4.3.2.27.0.1",
+  "source_prerequisite": "V27 already applied",
+  "repairs": [
+    "PowerShell 5.1 diagnostic parser error",
+    "persistent native NIHAV deployment through SharpEmu.CLI.csproj"
+  ],
+  "runtime_hash_expected": "cc911d477e772598f7a5995b6738265fb77bda0061f7a0b8ba79711acf263a18",
+  "observed_runtime_hash_after_v27_build": "668f1bbc7c10220d7d0f4f63d3753abbc02aea1876055ce2224814788b99fb87",
+  "msbuild_target": "CopySharpEmuNihavToolV6113166",
+  "old_msbuild_source": ".sharpemu-tools/bink2/src/nihav/nihav-tool/target/release/nihav-tool.exe",
+  "new_msbuild_source": ".sharpemu-tools/bink2/optimized/nihav-tool-v27-native.exe"
+}

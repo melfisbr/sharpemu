@@ -458,7 +458,8 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
         ulong desiredAddress,
         ulong alignedSize,
         HostPageProtection hostProtection,
-        bool traceReject = true)
+        bool traceReject = true,
+        List<ulong>? reservationJournal = null)
     {
         if (!OperatingSystem.IsWindows() || desiredAddress == 0 || alignedSize == 0)
         {
@@ -592,6 +593,15 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
             {
                 TraceVmem($"Fixed alloc committed into existing granule reservations: 0x{desiredAddress:X16}+0x{alignedSize:X}");
             }
+            else if (reservationJournal is not null)
+            {
+                // SHARPEMU_FIXED_RANGE_TRANSACTIONAL_ROLLBACK_V1_8_0
+                // Publish ownership only after this granule operation has
+                // completed successfully. Failed TryAllocateFixedThroughGranules
+                // calls free their own local reservations in Reject(), so adding
+                // them earlier would make the outer transaction double-free.
+                reservationJournal.AddRange(newReservations);
+            }
 
             return desiredAddress;
         }
@@ -633,38 +643,62 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
 
     public bool TryBackFixedRange(ulong address, ulong size, bool executable)
     {
+        // SHARPEMU_FIXED_RANGE_TRANSACTIONAL_ROLLBACK_V1_8_0
+        //
+        // Fixed backing on Windows uses 64 KiB reservation granules while the
+        // guest page size is 4 KiB. Keep the complete multi-run operation under
+        // the same re-entrant fixed-allocation gate so a rollback cannot release
+        // a reservation another fixed-map thread started using mid-transaction.
+        lock (_fixedAllocationGate)
+        {
+            return TryBackFixedRangeTransactional(address, size, executable);
+        }
+    }
+
+    private bool TryBackFixedRangeTransactional(ulong address, ulong size, bool executable)
+    {
         if (size == 0)
         {
             return false;
         }
 
+        ulong endInput;
+        try
+        {
+            endInput = checked(address + size);
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+
         var start = AlignDown(address, PageSize);
-        var end = AlignUp(address + size, PageSize);
+        var end = AlignUp(endInput, PageSize);
         if (end <= start)
         {
             return false;
         }
 
-        var hostProtection = executable ? HostPageProtection.ReadWriteExecute : HostPageProtection.ReadWrite;
+        var hostProtection = executable
+            ? HostPageProtection.ReadWriteExecute
+            : HostPageProtection.ReadWrite;
 
-        // Walk the range page-run by page-run. VirtualQuery reports the largest run
-        // of same-state pages from the queried address, so a single query advances
-        // us over whole free or occupied stretches. Only free stretches get backed;
-        // stretches already reserved or committed by another allocation are left as
-        // they are, which is exactly what a fixed mapping does on hardware.
-        //
-        // Because backing may span several disjoint free runs, allocations are
-        // staged: host pages are reserved/committed first, and the corresponding
-        // MemoryRegions are inserted only once every gap in the range has been
-        // backed. If any gap fails to back, every earlier host allocation is freed
-        // and no region is inserted, so the address space is left untouched.
-        var stagedAllocations = new List<(ulong Address, ulong Size, bool GranuleTracked)>();
+        // Host allocations are staged and guest MemoryRegions are inserted only
+        // after every requested gap has been backed. The granule journal records
+        // reservation bases CREATED by successful inner granule operations so a
+        // later failure can release exactly those reservations.
+        var stagedAllocations =
+            new List<(ulong Address, ulong Size, bool GranuleTracked)>();
+        var stagedGranuleReservations = new List<ulong>();
 
         var cursor = start;
         while (cursor < end)
         {
             if (!_hostMemory.Query(cursor, out var info))
             {
+                Log.Warn(
+                    $"fixed-back reject: want=0x{address:X16}+0x{size:X} " +
+                    $"segment=0x{cursor:X16} query-failed");
                 goto Rollback;
             }
 
@@ -674,27 +708,40 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
             var runEnd = Math.Min(end, queriedEnd);
             if (runEnd <= cursor)
             {
+                Log.Warn(
+                    $"fixed-back reject: want=0x{address:X16}+0x{size:X} " +
+                    $"segment=0x{cursor:X16} query-no-progress");
                 goto Rollback;
             }
 
-            var needsGranuleAwareBacking = OperatingSystem.IsWindows() &&
-                (info.State == HostRegionState.Free || info.State == HostRegionState.Reserved);
+            var runSize = runEnd - cursor;
+            var needsGranuleAwareBacking =
+                OperatingSystem.IsWindows() &&
+                (info.State == HostRegionState.Free ||
+                 info.State == HostRegionState.Reserved);
 
             if (needsGranuleAwareBacking)
             {
-                var runSize = runEnd - cursor;
-                if (TryAllocateFixedThroughGranules(cursor, runSize, hostProtection, traceReject: false) != cursor)
+                if (TryAllocateFixedThroughGranules(
+                        cursor,
+                        runSize,
+                        hostProtection,
+                        traceReject: true,
+                        reservationJournal: stagedGranuleReservations) != cursor)
                 {
                     goto Rollback;
                 }
 
                 stagedAllocations.Add((cursor, runSize, true));
-                TraceVmem($"Backed fixed range gap: 0x{cursor:X16} - 0x{runEnd:X16} ({runSize} bytes)");
+                TraceVmem(
+                    $"Backed fixed range gap: 0x{cursor:X16} - " +
+                    $"0x{runEnd:X16} ({runSize} bytes)");
             }
             else if (info.State == HostRegionState.Free)
             {
-                var runSize = runEnd - cursor;
-                var allocated = _hostMemory.Allocate(cursor, runSize, hostProtection);
+                var allocated =
+                    _hostMemory.Allocate(cursor, runSize, hostProtection);
+
                 if (allocated != cursor)
                 {
                     if (allocated != 0)
@@ -702,24 +749,51 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
                         _hostMemory.Free(allocated);
                     }
 
+                    Log.Warn(
+                        $"fixed-back reject: want=0x{address:X16}+0x{size:X} " +
+                        $"segment=0x{cursor:X16} direct-fixed-allocate-failed");
                     goto Rollback;
                 }
 
                 stagedAllocations.Add((cursor, runSize, false));
-                TraceVmem($"Backed fixed range gap: 0x{cursor:X16} - 0x{runEnd:X16} ({runSize} bytes)");
+                TraceVmem(
+                    $"Backed fixed range gap: 0x{cursor:X16} - " +
+                    $"0x{runEnd:X16} ({runSize} bytes)");
             }
+            else
+            {
+                // Never silently adopt arbitrary host committed pages as guest
+                // memory. They are acceptable only when the guest region table
+                // already owns the complete occupied run.
+                if (!IsAccessible(cursor, runSize))
+                {
+                    Log.Warn(
+                        $"fixed-back reject: want=0x{address:X16}+0x{size:X} " +
+                        $"segment=0x{cursor:X16} foreign {info.State} " +
+                        $"allocBase=0x{info.AllocationBase:X16} " +
+                        $"base=0x{info.BaseAddress:X16} " +
+                        $"region=0x{info.RegionSize:X} " +
+                        $"prot=0x{info.RawProtection:X}");
+                    goto Rollback;
+                }
 
+                TraceVmem(
+                    $"Fixed range already guest-owned: " +
+                    $"0x{cursor:X16}-0x{runEnd:X16}");
+            }
 
             cursor = runEnd;
         }
 
         if (stagedAllocations.Count == 0)
         {
-            return false;
+            // The entire range was already represented by guest MemoryRegions.
+            return IsAccessible(start, end - start);
         }
 
-        // All gaps backed successfully — insert regions in one batch.
-        var protection = executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+        var protection =
+            executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+
         _gate.EnterWriteLock();
         try
         {
@@ -740,9 +814,12 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
             _gate.ExitWriteLock();
         }
 
+        Interlocked.Increment(ref _mappingGeneration);
         return true;
 
     Rollback:
+        // Direct non-granule allocations are individually owned by this
+        // transaction.
         foreach (var (gapAddress, _, granuleTracked) in stagedAllocations)
         {
             if (!granuleTracked)
@@ -750,6 +827,37 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
                 _hostMemory.Free(gapAddress);
             }
         }
+
+        // Granule-backed runs may have created 64 KiB reservations in earlier
+        // successful inner calls. Those reservations were previously leaked on
+        // a later failure, leaving committed host pages with no MemoryRegion and
+        // poisoning every retry. The journal contains only reservations created
+        // by successful calls in THIS outer transaction.
+        if (stagedGranuleReservations.Count != 0)
+        {
+            var released = new HashSet<ulong>();
+            foreach (var reservationBase in stagedGranuleReservations)
+            {
+                if (!released.Add(reservationBase))
+                {
+                    continue;
+                }
+
+                if (_fixedGranuleReservationBases.Remove(reservationBase))
+                {
+                    _hostMemory.Free(reservationBase);
+                    TraceVmem(
+                        $"Rolled back fixed granule reservation: " +
+                        $"0x{reservationBase:X16}");
+                }
+            }
+        }
+
+        Log.Warn(
+            $"fixed-back transaction rolled back: " +
+            $"want=0x{address:X16}+0x{size:X} " +
+            $"granules={stagedGranuleReservations.Count} " +
+            $"runs={stagedAllocations.Count}");
 
         return false;
     }

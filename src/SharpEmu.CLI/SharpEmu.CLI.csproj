@@ -161,4 +161,25 @@ SPDX-License-Identifier: GPL-2.0-or-later
       SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- V61.13.16.6_BINK_RUNTIME_DEPLOY -->
+  <!-- V72.4.3.2.27.0.1 PERSISTENT_NATIVE_NIHAV_DEPLOY -->
+  <Target Name="CopySharpEmuNihavToolV6113166" AfterTargets="Build">
+    <PropertyGroup>
+      <SharpEmuNihavToolV6113166>$(MSBuildProjectDirectory)\..\..\.sharpemu-tools\bink2\optimized\nihav-tool-v27-native.exe</SharpEmuNihavToolV6113166>
+      <SharpEmuNihavDestDirV6113166>$(TargetDir)plugins\bink2</SharpEmuNihavDestDirV6113166>
+      <SharpEmuNihavDestV6113166>$(SharpEmuNihavDestDirV6113166)\nihav-tool.exe</SharpEmuNihavDestV6113166>
+    </PropertyGroup>
+    <MakeDir
+      Directories="$(SharpEmuNihavDestDirV6113166)"
+      Condition="Exists('$(SharpEmuNihavToolV6113166)')" />
+    <Copy
+      SourceFiles="$(SharpEmuNihavToolV6113166)"
+      DestinationFiles="$(SharpEmuNihavDestV6113166)"
+      SkipUnchangedFiles="true"
+      Condition="Exists('$(SharpEmuNihavToolV6113166)')" />
+    <Message
+      Importance="high"
+      Text="[V61.13.16.6] NIHAV runtime deployed to $(SharpEmuNihavDestV6113166)"
+      Condition="Exists('$(SharpEmuNihavToolV6113166)')" />
+  </Target>
 </Project>

@@ -1,0 +1,35 @@
+SharpEmu / Demon's Souls V61.22.0
+AGC WRITE_DATA active WAIT_REG_MEM latch fix
+================================================
+
+Evidence from V61.21.0:
+- Main loop reached.
+- 3 Bink movies completed.
+- deviceLost=False.
+- Two AGC WAIT_REG_MEM packets remained suspended with producer=none-observed:
+  labels 0x456CFF580 and 0x456CFF4C0, ref=1, cmp=EQ.
+- Current GpuWaitRegistry is deliberately fail-closed and must NOT blindly force
+  unsatisfied waits.
+- ApplySubmittedWriteData writes guest memory but does not latch an active waiter
+  at the ordered write point.
+
+V61.22.0 change:
+- In ApplySubmittedWriteData only, when GPU wait suspension is enabled and at
+  least one waiter exists, check whether the exact DWORD being written overlaps
+  an active waiter.
+- Only for that active watched DWORD, call GpuWaitRegistry.RecordProduced at the
+  exact ordered write point.
+- If the write satisfies a waiter, the existing registry latches it so a later
+  label reset cannot lose the wake edge.
+- Emits: agc.write_data_wait_latched
+- Does NOT fabricate values, force-satisfy waits, or release producerless waits.
+
+Execution order:
+1. RUN_VALIDATE_PACKAGE_V61_22_0.cmd
+2. RUN_PRECHECK_V61_22_0.cmd
+3. RUN_APPLY_BUILD_V61_22_0.cmd
+4. RUN_DEMONS_DIAGNOSTIC_V61_22_0.cmd
+
+The diagnostic creates:
+SharpEmu_V61_22_0_DEMONS_RESULT_YYYYMMDD_HHMMSS.zip
+Send that ZIP back for the next automatic correction.

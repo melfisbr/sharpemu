@@ -1,0 +1,13 @@
+﻿Dragon Ball FighterZ AppContent Temporary Space V1.6.1 Result
+ExitCode=-1073741819
+TempSpaceTraceCount=1
+UnresolvedSaKib=False
+OldAV40=True
+InvalidDirectoryOpen=True
+Deadlock9UK=False
+NativeException=True
+AmprStillMaterialized=True
+AsyncLoadingThread=True
+ProjectFileNotFound=False
+GEngineLoopPreInitFailed=False
+OpaqueOwnerSyncStillPresent=True

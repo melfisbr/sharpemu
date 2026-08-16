@@ -1,0 +1,19 @@
+    internal static bool ShouldThrottleGuestGpu
+    {
+        get
+        {
+            if (Environment.GetEnvironmentVariable(
+                    "SHARPEMU_BINK_THROTTLE_GUEST_GPU") != "1")
+            {
+                return false;
+            }
+
+            if (IsBootMovieComplete())
+            {
+                return false;
+            }
+
+            return Volatile.Read(ref _activeHostMovieDecoders) > 0 ||
+                   Interlocked.Read(ref _frameCount) > 0;
+        }
+    }

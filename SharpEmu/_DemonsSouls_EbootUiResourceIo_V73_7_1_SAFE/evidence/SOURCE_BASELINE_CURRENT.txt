@@ -1,0 +1,5 @@
+KernelMemoryCompatExports.cs current baseline
+SHA256=61D151DF2DDD8E9B1E7AF9451F1BDE3A7D109DB0B92F37F04D5BB60B4AD74103
+Source origin: V73.0.13.1 ResourceDirent/TitleIsolation payload, matching the user's actual precheck hash.
+V73.7.1 modifies only KernelReadUnderscore/_read/read/sceKernelRead behavior.
+AmprExports.cs is NOT modified in V73.7.1.

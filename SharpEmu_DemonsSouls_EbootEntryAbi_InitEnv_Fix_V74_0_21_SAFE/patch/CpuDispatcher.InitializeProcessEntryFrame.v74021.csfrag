@@ -1,0 +1,85 @@
+// SHARPEMU_V74_0_21_EBOOT_ENTRY_ABI
+private static bool InitializeProcessEntryFrame(
+    CpuContext context,
+    string processImageName,
+    ulong programExitHandlerAddress,
+    ulong entryPoint)
+{
+    const int maxArguments = 33;
+    const ulong argvBaseOffset = 0x08;
+    const ulong entryAddressOffset = 0x110;
+    const ulong entryParamsSize = 0x118;
+
+    var imageName = string.IsNullOrWhiteSpace(processImageName) ? "eboot.bin" : processImageName;
+    var arguments = new List<string>(maxArguments) { imageName };
+    var configuredArguments = Environment.GetEnvironmentVariable("SHARPEMU_GUEST_ARGS");
+    if (!string.IsNullOrWhiteSpace(configuredArguments))
+    {
+        var compatibilityArguments = configuredArguments.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        arguments.AddRange(compatibilityArguments.Take(maxArguments - 1));
+    }
+
+    var cursor = context[CpuRegister.Rsp];
+    var argumentAddresses = new ulong[arguments.Count];
+    for (var index = arguments.Count - 1; index >= 0; index--)
+    {
+        var encoded = Encoding.UTF8.GetBytes(arguments[index] + '\0');
+        cursor = AlignDown(cursor - (ulong)encoded.Length, 16);
+        if (!context.Memory.TryWrite(cursor, encoded))
+        {
+            return false;
+        }
+
+        argumentAddresses[index] = cursor;
+    }
+
+    var entryParamsAddress = AlignDown(cursor - entryParamsSize, 16);
+    if (!context.Memory.TryWrite(entryParamsAddress, new byte[(int)entryParamsSize]) ||
+        !TryWriteUInt32(context, entryParamsAddress + 0x00, (uint)arguments.Count) ||
+        !TryWriteUInt32(context, entryParamsAddress + 0x04, 0))
+    {
+        return false;
+    }
+
+    for (var index = 0; index < argumentAddresses.Length; index++)
+    {
+        var slotAddress = entryParamsAddress + argvBaseOffset + ((ulong)index * sizeof(ulong));
+        if (!context.TryWriteUInt64(slotAddress, argumentAddresses[index]))
+        {
+            return false;
+        }
+    }
+
+    if (!context.TryWriteUInt64(entryParamsAddress + entryAddressOffset, entryPoint))
+    {
+        return false;
+    }
+
+    if (arguments.Count > 1)
+    {
+        Console.Error.WriteLine(
+            $"[DISPATCHER] Guest arguments: {string.Join(' ', arguments.Skip(1))}");
+    }
+
+    var entryStackPointer = entryParamsAddress - sizeof(ulong);
+    if (!context.TryWriteUInt64(entryStackPointer, 0))
+    {
+        return false;
+    }
+
+    Console.Error.WriteLine(
+        $"[V74.0.21][ENTRY_ABI] frame params=0x{entryParamsAddress:X16} size=0x{entryParamsSize:X} " +
+        $"argc={arguments.Count} argv0=0x{argumentAddresses[0]:X16} entry=0x{entryPoint:X16} " +
+        $"rsp_seed=0x{entryStackPointer:X16}");
+
+    context[CpuRegister.Rsp] = entryStackPointer;
+    context[CpuRegister.Rdi] = entryParamsAddress;
+    context[CpuRegister.Rsi] = programExitHandlerAddress;
+    context[CpuRegister.Rdx] = 0;
+    context[CpuRegister.Rcx] = 0;
+    context[CpuRegister.R8] = 0;
+    context[CpuRegister.R9] = 0;
+    return true;
+}

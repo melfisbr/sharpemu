@@ -1,0 +1,55 @@
+﻿{
+    "Version":  "20.1",
+    "Created":  "2026-08-08T14:02:47.6858757-03:00",
+    "Repository":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu",
+    "Entries":  [
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\VideoOut\\VulkanVideoPresenter.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "97D9C6C98EA87CA79D57E8797B3E55CEB13BAC5B4918EF7F1CBEB88ACAFD844C",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\Agc\\AgcExports.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "143E700AAD6C843C535841D26F97E8B789E0B406686AF95D2FE77F92600AD88B",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler\\Gen5ShaderTranslator.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "C8E2B4FD852A2277FCBE11EFABCEC4A90E0881A57B0371ABF309DE89D7406595",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.Libs\\VideoOut\\VulkanDeviceBufferPool.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "318C90B91B1A4685CE0ED1243785D9A1528060F7C1E2EA9B9CF7C2F5BE1921A2",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "0FFCD70BCE3683D53E4A1744D30B67E9C0E08E7CE59EFF7B68916103D66E7F2F",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler.Vulkan\\Gen5SpirvTranslator.Alu.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "67C13799C6B27DAA5A4FC54A0FBDDA8D8C7FF2EF89536587FFE87D7C3517BBBD",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler\\Gen5ShaderIr.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "533EEA0914BD430FCB859E8677A612FE597E4E86A6E4ED90AD379996920C71CC",
+                        "AfterSha256":  null
+                    },
+                    {
+                        "Relative":  "src\\SharpEmu.ShaderCompiler\\Gen5ShaderScalarEvaluator.cs",
+                        "Existed":  true,
+                        "BeforeSha256":  "28815064FEF87C9012A523A8A743D68BB133EB3DA65BB49FFA7BF5287AA2F20C",
+                        "AfterSha256":  null
+                    }
+                ]
+}

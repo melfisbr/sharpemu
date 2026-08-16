@@ -1,0 +1,27 @@
+{
+  "version": "74.0.15",
+  "target": "Demon's Souls PPSA01341 startup black-screen memory/GPU pressure",
+  "source_edits": [
+    "src/SharpEmu.Libs/Agc/AgcExports.cs (structural only)"
+  ],
+  "runtime_profile": {
+    "render_scale": "0.25",
+    "gpu_detile": "1",
+    "native_worker_max": 2,
+    "renderer_resource_max": 8,
+    "texture_cache_mb": 768,
+    "sampled_cache_mb": 256,
+    "guest_buffer_cache_mb": 192,
+    "device_buffer_cache_mb": 384
+  },
+  "preserve": [
+    "V74.0.4+ cumulative AGC/presenter fixes",
+    "V74.0.14 TBB override",
+    "DBFZ NativeWorker scheduler/ownership work"
+  ],
+  "forbidden": [
+    "whole-file source payload overwrite",
+    "array layer skipping",
+    "fake texture substitution"
+  ]
+}

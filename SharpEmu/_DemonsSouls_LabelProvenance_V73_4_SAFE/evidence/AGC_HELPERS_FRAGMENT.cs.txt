@@ -1,0 +1,217 @@
+    private static bool ShouldEmitLabelProvenanceEventV734()
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return false;
+        }
+
+        var count = Interlocked.Increment(ref _labelProvenanceEventCountV734);
+        return count <= 256 || (count & (count - 1)) == 0;
+    }
+
+    private static void TraceLabelProvenanceV734(string message)
+    {
+        if (!ShouldEmitLabelProvenanceEventV734())
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[V73.4][LABEL] {message}");
+    }
+
+    private static void RegisterLabelProvenanceTargetV734(
+        object memory,
+        GpuWaitRegistry.WaitingDcb waiter,
+        ulong currentValue,
+        bool hasObservedProducer)
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return;
+        }
+
+        memory = CanonicalMemory(memory);
+        var added = false;
+        lock (_labelProvenanceGateV734)
+        {
+            if (!_labelProvenanceTargetsV734.TryGetValue(memory, out var labels))
+            {
+                labels = new HashSet<ulong>();
+                _labelProvenanceTargetsV734.Add(memory, labels);
+            }
+
+            // Keep this diagnostic bounded even if a malformed title creates
+            // thousands of distinct waits.
+            if (labels.Count < 64)
+            {
+                added = labels.Add(waiter.WaitAddress);
+            }
+        }
+
+        if (added)
+        {
+            TraceLabelProvenanceV734(
+                $"wait_target label=0x{waiter.WaitAddress:X16} " +
+                $"queue={waiter.QueueName} submission={waiter.SubmissionId} " +
+                $"current=0x{currentValue:X16} ref=0x{waiter.ReferenceValue:X16} " +
+                $"mask=0x{waiter.Mask:X16} cmp={waiter.CompareFunction} " +
+                $"observed_producer={(hasObservedProducer ? 1 : 0)}");
+        }
+    }
+
+    private static ulong[] SnapshotLabelProvenanceTargetsV734(object memory)
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return [];
+        }
+
+        memory = CanonicalMemory(memory);
+        lock (_labelProvenanceGateV734)
+        {
+            return _labelProvenanceTargetsV734.TryGetValue(memory, out var labels)
+                ? labels.ToArray()
+                : [];
+        }
+    }
+
+    private static bool RangeContainsLabelV734(
+        ulong start,
+        ulong length,
+        ulong label)
+    {
+        if (start == 0 || length == 0)
+        {
+            return false;
+        }
+
+        var end = start > ulong.MaxValue - length
+            ? ulong.MaxValue
+            : start + length;
+        return label >= start && label < end;
+    }
+
+    private static int TraceLabelProvenanceRangeV734(
+        object memory,
+        ulong start,
+        ulong length,
+        string source)
+    {
+        if (!_traceLabelProvenanceV734 || start == 0 || length == 0)
+        {
+            return 0;
+        }
+
+        var overlaps = 0;
+        foreach (var label in SnapshotLabelProvenanceTargetsV734(memory))
+        {
+            if (!RangeContainsLabelV734(start, length, label))
+            {
+                continue;
+            }
+
+            overlaps++;
+            TraceLabelProvenanceV734(
+                $"range_overlap label=0x{label:X16} " +
+                $"range=0x{start:X16}+0x{length:X} source={source}");
+        }
+
+        return overlaps;
+    }
+
+    private static void TraceComputeLabelCoverageV734(
+        object memory,
+        ulong shaderAddress,
+        string queueName,
+        ulong submissionId,
+        IReadOnlyList<GuestMemoryBuffer> buffers)
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return;
+        }
+
+        var targets = SnapshotLabelProvenanceTargetsV734(memory);
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        var scan = Interlocked.Increment(ref _labelProvenanceComputeScanCountV734);
+        var overlaps = 0;
+        var nearestDistance = ulong.MaxValue;
+        ulong nearestBase = 0;
+        var nearestLength = 0;
+        var nearestWritable = false;
+        var nearestWriteBack = false;
+
+        foreach (var buffer in buffers)
+        {
+            if (buffer.BaseAddress == 0 || buffer.Length <= 0)
+            {
+                continue;
+            }
+
+            var length = (ulong)buffer.Length;
+            var end = buffer.BaseAddress > ulong.MaxValue - length
+                ? ulong.MaxValue
+                : buffer.BaseAddress + length;
+
+            foreach (var label in targets)
+            {
+                if (RangeContainsLabelV734(buffer.BaseAddress, length, label))
+                {
+                    overlaps++;
+                    TraceLabelProvenanceV734(
+                        $"compute_overlap label=0x{label:X16} " +
+                        $"cs=0x{shaderAddress:X16} queue={queueName} " +
+                        $"submission={submissionId} " +
+                        $"buffer=0x{buffer.BaseAddress:X16}+0x{length:X} " +
+                        $"writable={(buffer.Writable ? 1 : 0)} " +
+                        $"writeback={(buffer.WriteBackToGuest ? 1 : 0)}");
+                    continue;
+                }
+
+                ulong distance;
+                if (label < buffer.BaseAddress)
+                {
+                    distance = buffer.BaseAddress - label;
+                }
+                else
+                {
+                    distance = label >= end
+                        ? label - end
+                        : 0;
+                }
+
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearestBase = buffer.BaseAddress;
+                    nearestLength = buffer.Length;
+                    nearestWritable = buffer.Writable;
+                    nearestWriteBack = buffer.WriteBackToGuest;
+                }
+            }
+        }
+
+        // No-overlap scans are sampled aggressively: first 32 then powers of 2.
+        // This proves whether compute work kept running without turning the
+        // diagnostic into per-dispatch AGC logging.
+        if (overlaps == 0 &&
+            (scan <= 32 || (scan & (scan - 1)) == 0))
+        {
+            var nearestText = nearestDistance == ulong.MaxValue
+                ? "none"
+                : $"0x{nearestBase:X16}+0x{nearestLength:X}/" +
+                  $"distance=0x{nearestDistance:X}/" +
+                  $"writable={(nearestWritable ? 1 : 0)}/" +
+                  $"writeback={(nearestWriteBack ? 1 : 0)}";
+            TraceLabelProvenanceV734(
+                $"compute_scan n={scan} cs=0x{shaderAddress:X16} " +
+                $"queue={queueName} submission={submissionId} " +
+                $"targets={targets.Length} buffers={buffers.Count} " +
+                $"overlaps=0 nearest={nearestText}");
+        }
+    }
+

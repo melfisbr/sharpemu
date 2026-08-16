@@ -1,0 +1,22 @@
+Observed V74.0.11 precheck failure:
+
+current NativeWorker SHA:
+8E0FE4E3C23860592E29A9A5B2EA5D6AE974D221098D2ABBB31474087124CFC3
+
+packaged V74.0.10 reference SHA:
+F4AF1A786A5F949F420050BA763762918D1AFAD98270684A26EBF5E6D1B82E38
+
+This failure occurred before presenter modification/build.
+
+V74.0.10 runtime behavior had already proven the native lane:
+- Core.Res.TaskManager advanced from 4 to 64881 imports
+- EVENT_FASTPATH advanced from 2048 to 16384
+- presenter timeline advanced from 1318 to 14604
+- 0x45D acquired 949 writers
+- natural ps_studios_logo.bk2 request occurred
+
+Therefore V74.0.11.1 gates on the actual structural/native-lane contract rather
+than rejecting a semantically valid accumulated NativeWorker solely because
+its file hash differs.
+
+The NativeWorker is never copied/modified by this package.

@@ -1,0 +1,57 @@
+SharpEmu V73.0.19 - Demon's Souls UI/Texture Materialization Evidence
+
+EBOOT
+=====
+PPSA01341 SHA256
+22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E
+
+RUNTIME EVIDENCE FROM V73.0.16
+==============================
+APR resource reads complete successfully, including the game's 2D UI shader family:
+- coredata\enginesupport\shaders\_ps5\shader2d\...
+- coredata\enginesupport\shaders\_ps5\shader2dtex\vs_main_...
+- coredata\enginesupport\shaders\_ps5\shader2dtex\ps_main_...
+
+APR_READ_FAILED=0 in that run.
+
+The renderer later reported sampled render-target identities such as:
+- 0x463810000 gpu_resident=False
+- 0x467E00000 gpu_resident=False
+- 0x45BC00000 gpu_resident=False
+
+SOURCE INCONSISTENCIES
+======================
+1. Windows default GuestImageWriteTracker is disabled unless
+   SHARPEMU_GUEST_IMAGE_CPU_SYNC=1.
+
+2. Vulkan IsTextureContentCached() only checked whether a descriptor identity
+   existed in a ConcurrentDictionary. It did NOT check whether the guest CPU
+   changed the backing texels after the texture was cached.
+
+3. Therefore tiled assets / UI sheets / font atlases whose guest memory changed
+   could continue shipping an empty texel payload forever while Vulkan reused
+   an old image.
+
+4. IsGuestImageUploadKnown() had an 8x64-byte sparse probe, but ordinary
+   _textureCache identities bypassed that logic entirely.
+
+5. Render-thread self-heal TryReadGuestTexturePixels() used only ICpuMemory.TryRead,
+   while AGC sampled texture reads already support:
+   - normal guest memory
+   - tracked libc heap
+   - low-46-bit GPU alias of tracked libc heap.
+
+6. ProvideRenderTargetInitialData() also used CpuMemory-only access even though
+   its own purpose includes CPU-prefilled UI/overlay layers.
+
+V73.0.19
+========
+- Sparse 512-byte content generation probe for cached Demon Souls textures when
+  write tracking is off.
+- Probe is seeded from the exact submitted bytes when possible.
+- Changed guest bytes mark the cache identity stale.
+- Render thread retires the old VkImage safely after prior batch references and
+  creates a new resource from the fresh texels.
+- Vulkan self-heal now resolves tracked libc heap and GPU aliases.
+- CPU-prefilled render-target initial data uses the same alias-aware reader.
+- Does NOT set SHARPEMU_NO_TEXTURE_SKIP, preserving the performance cache.

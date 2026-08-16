@@ -56,6 +56,7 @@ public static class KernelExports
     {
         var status = unchecked((int)ctx[CpuRegister.Rdi]);
         Console.Error.WriteLine($"[LOADER][INFO] exit(status={status})");
+        RunCxaFinalizersV6501(ctx, 0, "exit");
         GuestThreadExecution.RequestCurrentEntryExit("exit", status);
         ctx[CpuRegister.Rax] = unchecked((ulong)status);
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
@@ -76,15 +77,41 @@ public static class KernelExports
     }
 
     [SysAbiExport(
-        Nid = "bzQExy189ZI",
-        ExportName = "_init_env",
-        Target = Generation.Gen4 | Generation.Gen5,
-        LibraryName = "libc")]
-    public static int InitEnv(CpuContext ctx)
+    Nid = "bzQExy189ZI",
+    ExportName = "_init_env",
+    Target = Generation.Gen4 | Generation.Gen5,
+    LibraryName = "libc")]
+// SHARPEMU_V74_0_21_INIT_ENV_FALLBACK_DIAGNOSTIC
+public static int InitEnv(CpuContext ctx)
+{
+    const ulong entryAddressOffset = 0x110;
+    var parameters = ctx[CpuRegister.Rdi];
+    ulong argcAndPadding = 0;
+    ulong argv0 = 0;
+    ulong entryAddress = 0;
+    var headerKnown = parameters != 0 && ctx.TryReadUInt64(parameters, out argcAndPadding);
+    var argc = headerKnown ? (uint)(argcAndPadding & 0xFFFF_FFFFUL) : 0U;
+    var parsed = headerKnown && argc <= 33 && ctx.TryReadUInt64(parameters + 0x08, out argv0);
+    var fullEntryKnown = parsed &&
+        ctx.TryReadUInt64(parameters + entryAddressOffset, out entryAddress) &&
+        entryAddress >= 0x0000_0000_0001_0000UL;
+
+    if (parsed)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var entryText = fullEntryKnown ? $"0x{entryAddress:X16}" : "unavailable";
+        Console.Error.WriteLine(
+            $"[V74.0.21][ENTRY_ABI] init_env_hle_fallback params=0x{parameters:X16} " +
+            $"argc={argc} argv0=0x{argv0:X16} entry={entryText} full={fullEntryKnown}");
     }
+    else
+    {
+        Console.Error.WriteLine(
+            $"[V74.0.21][ENTRY_ABI] init_env_hle_fallback params=0x{parameters:X16} malformed=True");
+    }
+
+    ctx[CpuRegister.Rax] = 0;
+    return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+}
 
     [SysAbiExport(
         Nid = "8G2LB+A3rzg",
@@ -93,6 +120,15 @@ public static class KernelExports
         LibraryName = "libc")]
     public static int Atexit(CpuContext ctx)
     {
+        var function = ctx[CpuRegister.Rdi];
+        if (function != 0)
+        {
+            lock (_cxaGate)
+            {
+                _cxaDestructors.Add(new CxaDestructorEntry(function, 0, 0));
+            }
+        }
+
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
@@ -132,28 +168,66 @@ public static class KernelExports
         LibraryName = "libc")]
     public static int CxaFinalize(CpuContext ctx)
     {
-        var moduleHandle = ctx[CpuRegister.Rdi];
+        RunCxaFinalizersV6501(ctx, ctx[CpuRegister.Rdi], "__cxa_finalize");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
 
+    // V65.0.1: execute registered C/C++ finalizers.
+    private static void RunCxaFinalizersV6501(
+        CpuContext ctx,
+        ulong moduleHandle,
+        string reason)
+    {
+        var pending = new List<CxaDestructorEntry>();
         lock (_cxaGate)
         {
-            if (moduleHandle == 0)
+            for (var i = _cxaDestructors.Count - 1; i >= 0; i--)
             {
-                _cxaDestructors.Clear();
-            }
-            else
-            {
-                for (var i = _cxaDestructors.Count - 1; i >= 0; i--)
+                var entry = _cxaDestructors[i];
+                if (moduleHandle != 0 && entry.ModuleHandle != moduleHandle)
                 {
-                    if (_cxaDestructors[i].ModuleHandle == moduleHandle)
-                    {
-                        _cxaDestructors.RemoveAt(i);
-                    }
+                    continue;
                 }
+
+                pending.Add(entry);
+                _cxaDestructors.RemoveAt(i);
             }
         }
 
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        var scheduler = GuestThreadExecution.Scheduler;
+        if (scheduler is null)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][WARN] cxa.finalize scheduler_unavailable reason={reason} count={pending.Count}");
+            return;
+        }
+
+        foreach (var entry in pending)
+        {
+            if (!scheduler.TryCallGuestFunction(
+                    ctx,
+                    entry.Function,
+                    entry.Argument,
+                    0,
+                    0,
+                    0,
+                    0,
+                    reason,
+                    out _,
+                    out var error))
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][WARN] cxa.finalizer_failed reason={reason} " +
+                    $"fn=0x{entry.Function:X16} arg=0x{entry.Argument:X16} " +
+                    $"dso=0x{entry.ModuleHandle:X16} error={error ?? "unknown"}");
+            }
+        }
     }
 
     [SysAbiExport(
@@ -369,36 +443,25 @@ public static class KernelExports
         ExportName = "sceKernelOpen",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int KernelOpen(CpuContext ctx) => KernelMemoryCompatExports.KernelOpenUnderscore(ctx);
-
-    [SysAbiExport(
-        Nid = "mqQMh1zPPT8",
-        ExportName = "fstat",
-        Target = Generation.Gen4 | Generation.Gen5,
-        LibraryName = "libc")]
-    public static int Fstat(CpuContext ctx) => KernelMemoryCompatExports.PosixFstat(ctx);
-
-    [SysAbiExport(
-        Nid = "hcuQgD53UxM",
-        ExportName = "printf",
-        Target = Generation.Gen4 | Generation.Gen5,
-        LibraryName = "libc")]
-    public static int Printf(CpuContext ctx)
-    {
-        ulong fmtPtr = ctx[CpuRegister.Rdi];
-        string fmt = ReadCString(ctx, fmtPtr, 4096);
-        string outStr = KernelMemoryCompatExports.FormatStringFromVarArgs(ctx, fmt, firstGpArgIndex: 1);
-        if (outStr.EndsWith('\n') || outStr.EndsWith('\r'))
-        {
-            Console.Write($"[DEBUG][PRINF] {outStr}");
-        }
-        else
-        {
-            Console.WriteLine($"[DEBUG][PRINF] {outStr}");
-        }
-
-        ctx[CpuRegister.Rax] = (ulong)System.Text.Encoding.UTF8.GetByteCount(outStr);
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    public static int KernelOpen(CpuContext ctx)
+    {
+        // SHARPEMU_DBFZ_KERNEL_OPEN_DIRECTORY_COMPAT_V1_5_0
+        // sceKernelOpen and _open share the same path/flag/fd machinery. Keeping a
+        // second implementation here caused O_DIRECTORY-only DBFZ probes
+        // (flags=0x00020000) to return EINVAL even though the compatibility open
+        // correctly treats them as read-only directory opens.
+        var flags = unchecked((int)ctx[CpuRegister.Rsi]);
+        var result = KernelMemoryCompatExports.KernelOpenUnderscore(ctx);
+
+        if (flags == 0x00020000)
+        {
+            var rax = ctx[CpuRegister.Rax];
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] dbfz.kernel_open_directory flags=0x{flags:X8} " +
+                $"mode=0x{unchecked((uint)ctx[CpuRegister.Rdx]):X8} result=0x{unchecked((uint)result):X8} rax=0x{rax:X16}");
+        }
+
+        return result;
     }
 
     [SysAbiExport(

@@ -1,0 +1,487 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>SharpEmu.Debugger</name>
+    </assembly>
+    <members>
+        <member name="T:SharpEmu.Debugger.Breakpoints.Breakpoint">
+            <summary>
+            A single breakpoint or watchpoint. Instances are immutable; the owning
+            <see cref="T:SharpEmu.Debugger.Breakpoints.BreakpointStore"/> replaces an entry to change its enabled state.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Breakpoints.Breakpoint.Id">
+            <summary>The store-assigned identifier used by clients to reference it.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Breakpoints.Breakpoint.Address">
+            <summary>The first guest address the breakpoint covers.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Breakpoints.Breakpoint.Length">
+            <summary>
+            The number of bytes the breakpoint covers. Always one for
+            <see cref="F:SharpEmu.Debugger.Breakpoints.BreakpointKind.Execute"/>; the watch kinds may span a range.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.Breakpoint.Covers(System.UInt64)">
+            <summary>True when <paramref name="address"/> falls within this breakpoint.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.Breakpoint.WithEnabled(System.Boolean)">
+            <summary>Returns a copy with a different enabled state.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Breakpoints.BreakpointKind">
+            <summary>
+            The kind of stop a breakpoint requests. Execution breakpoints are honoured
+            at the frame-boundary seam that exists today; the data-watch kinds are part
+            of the surface so client protocols and tooling can be built against them,
+            and are armed once the execution backend can report the corresponding
+            accesses.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Breakpoints.BreakpointKind.Execute">
+            <summary>Stop when the instruction pointer reaches the address.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Breakpoints.BreakpointKind.ReadWatch">
+            <summary>Stop when the guest reads from the address range.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Breakpoints.BreakpointKind.WriteWatch">
+            <summary>Stop when the guest writes to the address range.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Breakpoints.BreakpointKind.AccessWatch">
+            <summary>Stop when the guest reads from or writes to the address range.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Breakpoints.BreakpointStore">
+            <summary>
+            A thread-safe registry of breakpoints. The debug server mutates it from
+            client-servicing threads while the emulation thread queries it at frame
+            boundaries, so every operation takes the same lock.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.BreakpointStore.Add(SharpEmu.Debugger.Breakpoints.BreakpointKind,System.UInt64,System.UInt64)">
+            <summary>Adds a breakpoint and returns the created entry with its id.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.BreakpointStore.Remove(System.Int32)">
+            <summary>Removes a breakpoint by id. Returns false when it did not exist.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.BreakpointStore.SetEnabled(System.Int32,System.Boolean)">
+            <summary>Enables or disables a breakpoint by id.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.BreakpointStore.Clear">
+            <summary>Removes every breakpoint.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.BreakpointStore.Snapshot">
+            <summary>Returns a point-in-time copy of all breakpoints.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Breakpoints.BreakpointStore.FindExecuteHit(System.UInt64)">
+            <summary>
+            Finds the first enabled execution breakpoint covering <paramref name="address"/>,
+            or null when none applies.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.DebuggerServerHost">
+            <summary>
+            One-call wiring of the live debugger: it owns a <see cref="T:SharpEmu.Debugger.Session.DebuggerSession"/>
+            and a <see cref="T:SharpEmu.Debugger.Server.DebuggerServer"/>, exposes the <see cref="P:SharpEmu.Debugger.DebuggerServerHost.Hook"/> to attach
+            to <c>SharpEmuRuntimeOptions.DebugHook</c>, and starts/stops the network
+            front-end. A host constructs one, hands <see cref="P:SharpEmu.Debugger.DebuggerServerHost.Hook"/> to the runtime,
+            calls <see cref="M:SharpEmu.Debugger.DebuggerServerHost.Start"/>, and calls <see cref="M:SharpEmu.Debugger.DebuggerServerHost.NotifyRunCompleted"/> once the
+            runtime returns.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.DebuggerServerHost.Session">
+            <summary>The session driving the target.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.DebuggerServerHost.Hook">
+            <summary>
+            The dispatcher hook to hand to the runtime so guest frames route through
+            the debugger.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.DebuggerServerHost.Endpoint">
+            <summary>The endpoint the server bound to, or null before <see cref="M:SharpEmu.Debugger.DebuggerServerHost.Start"/>.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.DebuggerServerHost.Start">
+            <summary>Begins accepting debugger clients.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.DebuggerServerHost.NotifyRunCompleted">
+            <summary>
+            Releases a parked emulation thread and marks the target terminated. Call
+            after the runtime's run returns so any attached client is notified and the
+            guest thread is never left blocked in the debugger.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.DebugRegisterFile">
+            <summary>
+            An immutable snapshot of the guest integer register state at a stop. XMM/YMM
+            state is intentionally omitted here and read on demand through the target to
+            keep the common register-dump path cheap.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.DebugRegisterFile.Item(SharpEmu.Debugger.DebugRegisterId)">
+            <summary>Reads a register by identifier.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.DebugRegisterFile.Item(SharpEmu.HLE.CpuRegister)">
+            <summary>Reads a general-purpose register.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.DebugRegisterFile.Capture(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)">
+            <summary>Captures the integer register state of a live debug frame.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.DebugRegisterId">
+            <summary>
+            The registers a debugger can name. The first sixteen values line up with
+            <see cref="T:SharpEmu.HLE.CpuRegister"/> so a general-purpose register can be converted
+            between the two enums by casting; the remaining values cover the special
+            registers a debug frame exposes.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.DebugRegisterIdExtensions">
+            <summary>Helpers for mapping between debug and CPU register identifiers.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.DebugRegisterIdExtensions.IsGeneralPurpose(SharpEmu.Debugger.DebugRegisterId)">
+            <summary>
+            True when the identifier names one of the sixteen general-purpose
+            registers and can be cast to <see cref="T:SharpEmu.HLE.CpuRegister"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.DebugRegisterIdExtensions.ToCpuRegister(SharpEmu.Debugger.DebugRegisterId)">
+            <summary>
+            Converts a general-purpose identifier to its <see cref="T:SharpEmu.HLE.CpuRegister"/>.
+            Throws when <paramref name="id"/> is a special register.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Protocol.DebugCommandDispatcher">
+            <summary>
+            Translates parsed <see cref="T:SharpEmu.Debugger.Protocol.DebugRequest"/> verbs into operations on an
+            <see cref="T:SharpEmu.Debugger.Session.IDebuggerSession"/> and packages the outcome as a
+            <see cref="T:SharpEmu.Debugger.Protocol.DebugResponse"/>. This is the single place command semantics live,
+            so it is shared by every connection and independent of the wire format.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Protocol.DebugRequest">
+            <summary>
+            A parsed client request: a <see cref="P:SharpEmu.Debugger.Protocol.DebugRequest.Command"/> verb plus a bag of named
+            arguments backed by the original JSON. Numeric arguments accept either JSON
+            numbers or <c>"0x"</c>-prefixed hex strings so addresses read naturally on
+            the wire.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Protocol.DebugRequest.Command">
+            <summary>The lower-cased command verb.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Protocol.DebugRequest.TryParse(System.String,SharpEmu.Debugger.Protocol.DebugRequest@,System.String@)">
+            <summary>
+            Parses a single JSON object into a request. Returns false when the text is
+            not a JSON object or is missing a string <c>command</c> field.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Protocol.DebugResponse">
+            <summary>
+            The reply to a <see cref="T:SharpEmu.Debugger.Protocol.DebugRequest"/>: either success with an optional
+            data payload, or a failure with a human-readable message.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Protocol.DebugResponse.Command">
+            <summary>Echoes the command the reply answers, when known.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Protocol.IDebugProtocol">
+            <summary>
+            Frames debugger traffic on a connection. A protocol turns bytes into
+            <see cref="T:SharpEmu.Debugger.Protocol.DebugRequest"/> objects and serialises <see cref="T:SharpEmu.Debugger.Protocol.DebugResponse"/>
+            replies plus asynchronous events (stops, resumes, termination) back to the
+            client. Swapping the implementation (line-delimited JSON today, a GDB remote
+            serial stub later) leaves the session and server untouched.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Protocol.IDebugProtocol.Name">
+            <summary>A short protocol name reported in the handshake.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Protocol.IDebugProtocol.ReadRequestAsync(System.IO.TextReader,System.Threading.CancellationToken)">
+            <summary>
+            Reads the next request, or null at end of stream. Parse failures are
+            surfaced as a request with a reserved error command rather than throwing.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Protocol.IDebugProtocol.WriteResponseAsync(System.IO.TextWriter,SharpEmu.Debugger.Protocol.DebugResponse,System.Threading.CancellationToken)">
+            <summary>Writes a reply to a request.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Protocol.IDebugProtocol.WriteEventAsync(System.IO.TextWriter,System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Object},System.Threading.CancellationToken)">
+            <summary>Writes an unsolicited event (for example a stop notification).</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Protocol.JsonLineDebugProtocol">
+            <summary>
+            A newline-delimited JSON protocol: one JSON object per line in each
+            direction. Requests carry a <c>command</c>; replies carry <c>ok</c> plus
+            <c>data</c>/<c>error</c>; events carry an <c>event</c> name. It is trivial to
+            drive from a socket, <c>nc</c>, or a small script, which suits bring-up and
+            tooling while a richer protocol is layered on later.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Protocol.JsonLineDebugProtocol.ParseErrorCommand">
+            <summary>The command assigned to a request that failed to parse.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Server.DebuggerClientConnection">
+            <summary>
+            Services a single connected client: reads requests, dispatches them against
+            the shared session, and pushes session lifecycle events. Writes from the
+            request loop and from event callbacks are serialised through one lock so the
+            two never interleave a half-written line.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Server.DebuggerServer">
+            <summary>
+            A TCP server that exposes an <see cref="T:SharpEmu.Debugger.Session.IDebuggerSession"/> to remote
+            clients over a pluggable <see cref="T:SharpEmu.Debugger.Protocol.IDebugProtocol"/>. Every connection sees
+            the same session, so multiple clients (for example a UI and a scripted
+            probe) observe a consistent view of the target.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Server.DebuggerServerOptions">
+            <summary>Network configuration for a <see cref="T:SharpEmu.Debugger.Server.DebuggerServer"/>.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Server.DebuggerServerOptions.DefaultPort">
+            <summary>The default TCP port the debug server listens on.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Server.DebuggerServerOptions.BindAddress">
+            <summary>
+            The address to bind. Defaults to loopback so the debug surface is not
+            exposed off-box; a caller must opt in to a routable address explicitly.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Server.DebuggerServerOptions.Port">
+            <summary>The TCP port to listen on.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Server.DebuggerServerOptions.MaxClients">
+            <summary>
+            The maximum number of simultaneous client connections. Additional
+            connections wait in the accept backlog.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Server.DebuggerServerOptions.TryParseEndpoint(System.String,SharpEmu.Debugger.Server.DebuggerServerOptions@,System.String@)">
+            <summary>
+            Parses a <c>host:port</c>, bare <c>port</c>, or bare host into options.
+            Returns false when the text cannot be interpreted.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Server.IDebuggerServer">
+            <summary>
+            A network front-end that exposes a debugger session to remote clients.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Server.IDebuggerServer.IsListening">
+            <summary>True once the listener is accepting connections.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Server.IDebuggerServer.Endpoint">
+            <summary>The endpoint the server is bound to, or null before start.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Server.IDebuggerServer.Start">
+            <summary>Binds and begins accepting client connections.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Server.IDebuggerServer.StopAsync">
+            <summary>Stops accepting connections and closes active clients.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.DebuggerRunState">
+            <summary>The execution state of a debugged target as seen by the debugger.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebuggerRunState.Detached">
+            <summary>No guest frame has entered the debugger yet.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebuggerRunState.Running">
+            <summary>The guest is executing and cannot be inspected safely.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebuggerRunState.Paused">
+            <summary>
+            The guest is parked at a frame boundary. Registers and memory can be
+            read and written, and breakpoints can be edited.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebuggerRunState.Terminated">
+            <summary>The guest has finished; no further frames will run.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.DebuggerSession">
+            <summary>
+            The default <see cref="T:SharpEmu.Debugger.Session.IDebuggerSession"/>. It plugs into the CPU dispatcher
+            as an <see cref="T:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook"/>: when a frame boundary warrants a stop it
+            parks the emulation thread inside <see cref="M:SharpEmu.Core.Cpu.Debugging.ICpuDebugHook.OnFrameEnter(SharpEmu.Core.Cpu.Debugging.ICpuDebugFrame)"/>
+            while a debug client inspects and edits state, then releases it on
+            continue/step.
+            </summary>
+            <remarks>
+            Pausing works by blocking the emulation thread on <see cref="F:SharpEmu.Debugger.Session.DebuggerSession._resumeGate"/>
+            from within the hook call. Because that thread is the one that owns the guest
+            context, register and memory accessors are safe to serve from other threads
+            only while it is parked — which is exactly the <see cref="F:SharpEmu.Debugger.Session.DebuggerRunState.Paused"/>
+            window the accessors gate on.
+            </remarks>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.DebuggerSession.NotifyTerminated">
+            <summary>
+            Signals that the whole guest run has finished. Releases any parked
+            emulation thread and moves the session to
+            <see cref="F:SharpEmu.Debugger.Session.DebuggerRunState.Terminated"/>.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.DebuggerSessionOptions">
+            <summary>Configuration for a <see cref="T:SharpEmu.Debugger.Session.DebuggerSession"/>.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebuggerSessionOptions.StopAtEntry">
+            <summary>
+            When true, the session pauses at the first frame it observes so a client
+            can attach breakpoints before the guest runs. Defaults to true, matching
+            the "stop at entry" behaviour most debuggers expose.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebuggerSessionOptions.BreakOnFault">
+            <summary>
+            When true, the session pauses when a frame ends with a non-OK result (a
+            CPU trap, memory fault, or unimplemented path) so a client can inspect the
+            post-fault register/memory state before the frame is torn down. Defaults
+            to true. The stop reports <see cref="F:SharpEmu.Debugger.Session.DebugStopReason.Fault"/>.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebuggerSessionOptions.BreakOnStall">
+            <summary>
+            When true, the session pauses when the backend detects an execution stall
+            (a mutex spin loop / livelock) before the guest is forced out of the loop,
+            so a client can inspect the stalled state. Defaults to true. The stop
+            reports <see cref="F:SharpEmu.Debugger.Session.DebugStopReason.Stall"/>.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.DebugStopEvent">
+            <summary>
+            Describes a stop delivered to debugger clients: why the target stopped,
+            where, and the register snapshot at that point.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebugStopEvent.Address">
+            <summary>The instruction pointer where the target stopped.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebugStopEvent.Breakpoint">
+            <summary>The breakpoint responsible for the stop, when applicable.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebugStopEvent.Result">
+            <summary>
+            The frame result for a <see cref="F:SharpEmu.Debugger.Session.DebugStopReason.Fault"/> stop; null for
+            non-fault stops.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebugStopEvent.Detail">
+            <summary>A human-readable summary of a fault, when applicable.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebugStopEvent.OpcodeBytes">
+            <summary>
+            A hex preview of the bytes at <see cref="P:SharpEmu.Debugger.Session.DebugStopEvent.Address"/> (the faulting
+            instruction), when the stop is a fault and the bytes were readable.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.DebugStopEvent.StallInfo">
+            <summary>Structured backend evidence for a stall stop.</summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.DebugStopReason">
+            <summary>Why the target stopped and handed control to the debugger.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.EntryPoint">
+            <summary>Stopped at the configured entry point before running any frame.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.Breakpoint">
+            <summary>An execution breakpoint was hit.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.Watchpoint">
+            <summary>A data watchpoint was hit.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.Step">
+            <summary>A single-step (frame step) request completed.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.Pause">
+            <summary>A client-requested pause took effect.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.Fault">
+            <summary>The guest raised a fault or trap.</summary>
+        </member>
+        <member name="F:SharpEmu.Debugger.Session.DebugStopReason.Stall">
+            <summary>
+            The backend detected an execution stall (for example a mutex spin loop /
+            livelock) with no forward progress.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.IDebuggerSession">
+            <summary>
+            The debugger's coordination point. It bridges the CPU dispatcher seam
+            (<see cref="P:SharpEmu.Debugger.Session.IDebuggerSession.Hook"/>) to the inspection surface (<see cref="T:SharpEmu.Debugger.Session.IDebugTarget"/>),
+            owns breakpoint state, and raises lifecycle events that a server relays to
+            connected clients.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.IDebuggerSession.Breakpoints">
+            <summary>The breakpoints armed for this session.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.IDebuggerSession.Hook">
+            <summary>
+            The dispatcher-facing hook. Assign this to
+            <c>SharpEmuRuntimeOptions.DebugHook</c> so guest frames are routed through
+            the session.
+            </summary>
+        </member>
+        <member name="E:SharpEmu.Debugger.Session.IDebuggerSession.Stopped">
+            <summary>Raised on the emulation thread each time the target stops.</summary>
+        </member>
+        <member name="E:SharpEmu.Debugger.Session.IDebuggerSession.Resumed">
+            <summary>Raised when a paused target resumes.</summary>
+        </member>
+        <member name="E:SharpEmu.Debugger.Session.IDebuggerSession.Terminated">
+            <summary>Raised once the target has terminated.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebuggerSession.NotifyTerminated">
+            <summary>
+            Signals that the guest run has finished. Releases any parked emulation
+            thread and transitions the session to
+            <see cref="F:SharpEmu.Debugger.Session.DebuggerRunState.Terminated"/>. Hosts call this after the
+            runtime returns.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Debugger.Session.IDebugTarget">
+            <summary>
+            The inspection and control surface a debugger front-end (for example a
+            network server) drives. Register and memory accessors succeed only while the
+            target is <see cref="F:SharpEmu.Debugger.Session.DebuggerRunState.Paused"/>; they return <c>false</c>
+            otherwise so callers never read torn state from a running guest.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.IDebugTarget.State">
+            <summary>The current execution state.</summary>
+        </member>
+        <member name="P:SharpEmu.Debugger.Session.IDebugTarget.LastStop">
+            <summary>The most recent stop, or null if the target has not stopped yet.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.TryGetRegisters(SharpEmu.Debugger.DebugRegisterFile@)">
+            <summary>Reads the integer register file. Fails unless paused.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.TrySetRegister(SharpEmu.Debugger.DebugRegisterId,System.UInt64)">
+            <summary>Writes a single register. Fails unless paused.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.TryReadMemory(System.UInt64,System.Span{System.Byte})">
+            <summary>Reads guest memory into <paramref name="destination"/>. Fails unless paused.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.TryWriteMemory(System.UInt64,System.ReadOnlySpan{System.Byte})">
+            <summary>Writes guest memory from <paramref name="source"/>. Fails unless paused.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.TryReadXmm(System.Int32,System.UInt64@,System.UInt64@)">
+            <summary>Reads a 128-bit XMM register. Fails unless paused.</summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.Continue">
+            <summary>
+            Resumes a paused target. Returns false when the target was not paused.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.StepFrame">
+            <summary>
+            Resumes a paused target and stops again at the next frame boundary.
+            Returns false when the target was not paused.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Debugger.Session.IDebugTarget.RequestPause">
+            <summary>
+            Requests that a running target stop at the next frame boundary. Has no
+            effect if the target is already paused or terminated.
+            </summary>
+        </member>
+    </members>
+</doc>

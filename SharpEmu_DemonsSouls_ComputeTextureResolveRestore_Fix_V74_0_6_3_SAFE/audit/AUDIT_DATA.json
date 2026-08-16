@@ -1,0 +1,51 @@
+{
+  "package_version": "V74.0.1",
+  "eboot": {
+    "path_reference": "F:\\JOGOSPS5\\PPSA01341\\eboot.bin",
+    "size_bytes": 46575201,
+    "sha256": "22DD832BAE21ABEB57FC66074D2BFA5F4C53F6EFED4544A9BE6B9E0D0316130E",
+    "self_segment_count": 12,
+    "self_file_size": 46568672,
+    "elf_offset": 416,
+    "elf_type": "0xFE10",
+    "elf_machine": 62,
+    "entry": "0x70",
+    "program_headers": 14,
+    "sce_libraries": 53,
+    "sce_modules": 49,
+    "sce_metadata_rejected_libraries": 0,
+    "sce_metadata_rejected_modules": 0,
+    "dynamic_strtab_va": "0x34400B0",
+    "dynamic_strtab_size": 20773,
+    "dynamic_symtab_va": "0x34451D8",
+    "dynamic_symtab_size": 28200,
+    "relocations": 173377,
+    "rela_count": 172228,
+    "jmprel_count": 1149,
+    "unique_relocation_referenced_nids": 1173
+  },
+  "source": {
+    "csharp_files_scanned": 500,
+    "unique_direct_sysabi_nids": 29800,
+    "eboot_direct_sysabi_matches": 691,
+    "eboot_not_in_direct_attribute_inventory": 482
+  },
+  "runtime_v73_20_4_1": {
+    "imported_data_rebind_unresolved": 0,
+    "import_stubs_setup": "1385/1385",
+    "lle_redirects": 176,
+    "main_loop": true,
+    "first_vulkan_guest_frame": "3840x2160",
+    "event_fastpath_count_before_abort": 1,
+    "clr_failfast": "0x80131506",
+    "pthread_once_callback_missing_guest_handle": true,
+    "natural_bink_before_abort": false
+  },
+  "implemented_v74": {
+    "top_level_raw_native_execution": true,
+    "transient_handleless_callback_raw_native_execution": true,
+    "texture_producer_contract_trace": true,
+    "fabricated_hle_exports": 0,
+    "fabricated_texture_aliases": 0
+  }
+}

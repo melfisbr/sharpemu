@@ -1,0 +1,45 @@
+SharpEmu V72.4.3.2.31.7.1 root cause / design note
+=================================================
+Observed V31.6 result:
+- RAD_STARTED=3, RAD_ATTACHED=3, no NIHAV fallback.
+- attract_movie.bk2 header: tracks=0.
+- bink2.ds_intro_audio_start was emitted before bink2.rad_required_started and
+  before Bink RAD bridge attached.  The external WAV therefore had no reliable
+  first-frame anchor and could lead the visible RAD playback.
+- RAD_RENDER_LOCATION=external-process-window.
+
+V31.7.1 design:
+1) Keep the official RAD decoder because it is the only tested path producing
+   correct color/performance for these KB2j files.
+2) Add IRadBinkHostApi + RadBinkEmbeddedHostApiV724323171.
+3) Start BinkPlay with /I2, immediately hide its HWND, convert it to WS_CHILD,
+   SetParent it into the SharpEmu SDL window, and keep it resized to the host
+   client area.  If embedding fails, kill RAD; an external top-level window is
+   forbidden in this mode.
+4) Anchor attract external audio only after the RAD window is embedded and the
+   RAD process has begun consuming decode CPU, plus a small configurable delay.
+5) Preserve the current HostMovieBridge contract by retaining the
+   RadBinkExternalPlaybackV7243231 class name.
+
+Important licensing/architecture boundary:
+RAD Video Tools installs the player but the audited installation contains no
+Bink SDK runtime DLL.  Therefore this package does NOT claim to provide true
+same-process Bink decoding.  The new IRadBinkHostApi boundary is intentionally
+ready for a future licensed Bink SDK provider; today it provides integrated
+child-window presentation with no independent player window.
+
+V31.7.1 packaging/runtime repair after 2026-08-15 18:26 test:
+- RUN_1 passed %~dp0 with a terminal backslash immediately before a quote; on
+  the user's Windows command-line path this arrived at PowerShell with a literal
+  trailing quote. V31.7.1 passes %~dp0. instead.
+- apply_build searched the copied RAD source for one contiguous string
+  BinkDemonSoulsIntroAudioV7243227.NotifyPresentationStarted. The source formats
+  the class and method across line breaks, so the semantic call existed while
+  the brittle textual marker did not. V31.7.1 validates class + method tokens
+  separately and validates the actual intro-audio source contract.
+- A latent constructor regression passed toolPath twice to
+  RadBinkExternalPlaybackV7243231. V31.7.1 removes the duplicate argument before
+  the first build attempt can expose it.
+- SetParent NULL can mean success for a former top-level HWND. V31.7.1 clears
+  the P/Invoke last-error slot before SetParent so stale GetWindowLong errors do
+  not cause a false embedded-host failure.

@@ -1,0 +1,8 @@
+{
+  "revision": "V72.4.3.2.26.0.16.0.1",
+  "script_only": true,
+  "source_change": false,
+  "build": false,
+  "runtime_behavior_changed": false,
+  "fix": "validator now checks dynamic RAW output naming instead of nonexistent literal filename markers"
+}

@@ -1,0 +1,32 @@
+V73.3 exact-source bug proof
+
+VulkanVideoPresenter SHA-256:
+534EB79448DF504500D1B018DA98714778FB13D06EC2FF887AC9544C2A1A6364
+
+VulkanOrderedGuestAction field order:
+1. Action
+2. DebugName
+3. RequireGlobalVisibility
+4. RequiresGpuToCpuVisibility
+
+Audited V73.2 constructor in SubmitOrderedGuestActionWithVisibility:
+    new VulkanOrderedGuestAction(
+        action,
+        debugName,
+        requiresGpuToCpuVisibility)
+
+The method's requiresGpuToCpuVisibility value is therefore bound to field #3,
+RequireGlobalVisibility. Field #4 keeps its default value true.
+
+Exact AGC callers in the V73.2 source:
+- ACQUIRE_MEM passes requiresGpuToCpuVisibility: false
+- known-producer WAIT visibility passes requiresGpuToCpuVisibility: true
+
+V73.3 correction:
+    new VulkanOrderedGuestAction(
+        action,
+        debugName,
+        RequireGlobalVisibility: false,
+        RequiresGpuToCpuVisibility: requiresGpuToCpuVisibility)
+
+Explicit SubmitGlobalOrderedGuestAction is unchanged.

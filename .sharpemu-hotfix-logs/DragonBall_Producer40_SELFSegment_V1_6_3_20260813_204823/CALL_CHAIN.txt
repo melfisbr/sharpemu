@@ -1,0 +1,11 @@
+﻿Runtime-proven chain:
+  0x800C6BED9 call producer 0x800C222F0
+  0x800C6BEDE mov rdi,[rbx]
+  0x800C6BEE1 mov rsi,rax
+  0x800C6BEE4 call copy/object routine 0x800011300
+  crash at 0x80001130E because RSI=0x40
+
+CALL1 bytes=E8 12 64 FB FF rel=-302062 target=0x0000000800C222F0
+CALL2 bytes=E8 17 54 3A FF rel=-12954601 target=0x0000000800011300
+ProducerCallVerified=True
+CopyCallVerified=True

@@ -1,0 +1,30 @@
+﻿V74.0.19 BOOT-SEQUENCE CORRECTION EVIDENCE
+
+V74.0.18 RESULT
+main_loop_game_seconds=18.0960
+gather_resource_file_info_seconds=32.6980
+first natural ps_studios_logo.bk2 host time=373.7s
+first movie completion host time=384.0s
+second natural startup movie within 605.2s=NO
+bink_auto_boot=0
+startup_completion_shim=1
+
+HISTORICAL KNOWN-GOOD DIRECT BOOT
+Two-intro variant:
+bink2.boot_sequence_selected source=explicit movies=2
+bink2.direct_boot_started movies=2 mode=Native
+Bink2 bridge queued: logo_intro.bk2
+Bink2 bridge completed: ps_studios_logo.bk2
+Bink2 bridge completed: logo_intro.bk2
+bink2.direct_boot_completed ... guest presentation restored.
+
+Three-intro auto-discovery variant:
+bink2.auto_boot_order movies=3 sequence='ps_studios_logo.bk2 -> logo_intro.bk2 -> logo_intro_loop.bk2'
+bink2.boot_sequence_selected source=auto-app0 movies=3
+bink2.direct_boot_started movies=3 mode=Native
+Bink2 bridge queued: logo_intro.bk2
+Bink2 bridge queued: logo_intro_loop.bk2
+
+CORRECTION
+The previous test profile disabled the exact boot coordinator that had produced the intended sequence.
+V74.0.19 restores that coordinator instead of adding another synthetic movie handoff.

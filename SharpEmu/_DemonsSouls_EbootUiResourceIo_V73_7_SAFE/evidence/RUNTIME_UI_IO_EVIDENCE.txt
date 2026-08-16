@@ -1,0 +1,28 @@
+Current runtime evidence used by V73.7
+
+V73.6:
+classification=post-bink-no-agc-flip-packets
+runtime_unresolved=0
+device_lost=0
+Resource dependency file loaded
+Starting Script: $/scripts/cp11/_cmn/cp11main.cgpr
+ResourcePool::GatherResourceFileInfo() completed
+Core.Res.FileLoader guest thread scheduled
+AMPR payload reads observed and guest destination bytes changed.
+
+Later V73.0.13.1 representative result:
+dirent_calls=0
+gather_resource_lines=1
+flip_checkpoints=1
+scanout_lineage=1
+guest_frames=1
+runtime_unresolved=0
+device_lost=0
+
+Implication:
+- getdents/directory enumeration is not the demonstrated Demon’s Souls UI blocker.
+- ResolveGuestPath works for the title's $/ paths far enough to load dependencies
+  and the main startup script.
+- APR/AMPR reads are operational; the next audit should focus on read failures,
+  short/failed resource reads and async fd lifetime races, not invent missing
+  APR register layouts.

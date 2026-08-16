@@ -1,0 +1,16 @@
+// SHARPEMU_V74_0_21_LLE_INIT_ENV_GATE
+private static bool IsSafeLleLibcExport(string exportName)
+{
+	return exportName switch
+	{
+		"_init_env" => string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_LLE_INIT_ENV"),
+			"1",
+			StringComparison.Ordinal),
+		"memcpy" or
+		"memmove" or
+		"memset" or
+		"memcmp" => true,
+		_ => false,
+	};
+}

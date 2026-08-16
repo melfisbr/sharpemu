@@ -1,0 +1,12 @@
+﻿version=74.0.14
+runtime=Release
+render_scale=0.5
+native_worker_max_concurrent=2
+renderer_resource_native_max_concurrent=8
+sampled_guest_image_cache_mb=256
+standalone_texture_cache_mb=768
+guest_buffer_cache_mb=192
+device_buffer_cache_mb=384
+bink_auto_boot=0
+startup_completion_shim=1
+process_telemetry=aggregate_process_tree

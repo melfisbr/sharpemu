@@ -1,0 +1,33 @@
+SharpEmu Demon\'s Souls V61.22.2 - AGC Producer Lineage Repair / Diagnostic SAFE
+
+Purpose
+-------
+This package replaces V61.22.1 because its precheck used a fragile method slicer.
+V61.22.1 searched for the first bare occurrence of ApplySubmittedWriteData( and
+could land on a call-site that appears before the method declaration. That made
+it incorrectly report that WRITE_DATA lacked GpuWaitRegistry.RecordProduced.
+
+V61.22.2 changes the detector to anchor on the actual private-static method
+declaration and stop at the next private-static declaration. The same corrected
+slice is used in AGC_SOURCE_EVIDENCE.txt.
+
+Safety
+------
+* No emulator source code is modified by this package.
+* Existing WRITE_DATA, DMA, RELEASE_MEM and GpuWaitRegistry producer tracking is
+  validated and preserved.
+* RUN_APPLY_BUILD only validates/prechecks and builds the current repository.
+* The diagnostic enables AGC/shader/Vulkan resource tracing and packages logs.
+* Diagnostic process exit status is read from Start-Process -PassThru -Wait;
+  it does not use an undefined $LASTEXITCODE.
+
+Run order
+---------
+1. RUN_VALIDATE_PACKAGE_V61_22_2.cmd
+2. RUN_PRECHECK_V61_22_2.cmd
+3. RUN_APPLY_BUILD_V61_22_2.cmd
+4. RUN_DEMONS_DIAGNOSTIC_V61_22_2.cmd
+
+Expected result ZIP
+-------------------
+SharpEmu_V61_22_2_DEMONS_PRODUCER_LINEAGE_YYYYMMDD_HHMMSS.zip

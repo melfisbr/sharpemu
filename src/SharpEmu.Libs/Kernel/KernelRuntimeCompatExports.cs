@@ -1252,21 +1252,29 @@ public static class KernelRuntimeCompatExports
         {
             var scheduler = GuestThreadExecution.Scheduler;
             string? startError = null;
-            var started = scheduler is not null && scheduler.TryCallGuestFunction(
-                ctx,
-                moduleToStart.InitEntryPoint,
-                argumentSize,
-                argumentAddress,
-                0,
-                0,
-                $"sceKernelLoadStartModule:{moduleToStart.Name}",
-                out startError);
+            var started = scheduler is not null;
+            var initializers = moduleToStart.InitializerEntryPoints;
+            for (var initializerIndex = 0; started && initializerIndex < initializers.Count; initializerIndex++)
+            {
+                var initializerAddress = initializers[initializerIndex];
+                var isDtInit = initializerAddress == moduleToStart.InitEntryPoint;
+                started = scheduler!.TryCallGuestFunction(
+                    ctx,
+                    initializerAddress,
+                    isDtInit ? argumentSize : 0,
+                    isDtInit ? argumentAddress : 0,
+                    0,
+                    0,
+                    $"sceKernelLoadStartModule:{moduleToStart.Name}:init[{initializerIndex}]",
+                    out startError);
+            }
+
             KernelModuleRegistry.CompleteModuleStart(handle, started);
             if (!started)
             {
                 Console.Error.WriteLine(
-                    $"[LOADER][ERROR] sceKernelLoadStartModule failed to start '{moduleToStart.Name}' " +
-                    $"at 0x{moduleToStart.InitEntryPoint:X16}: {startError ?? "guest scheduler unavailable"}");
+                    $"[LOADER][ERROR] sceKernelLoadStartModule failed to start '{moduleToStart.Name}': " +
+                    $"{startError ?? "guest scheduler unavailable"}");
                 var error = (int)OrbisGen2Result.ORBIS_GEN2_ERROR_CPU_TRAP;
                 if (resultAddress != 0)
                 {
@@ -1279,7 +1287,7 @@ public static class KernelRuntimeCompatExports
 
             Console.Error.WriteLine(
                 $"[LOADER][INFO] sceKernelLoadStartModule started '{moduleToStart.Name}' " +
-                $"at 0x{moduleToStart.InitEntryPoint:X16}");
+                $"initializers={initializers.Count}");
         }
 
         ctx[CpuRegister.Rax] = unchecked((uint)handle);

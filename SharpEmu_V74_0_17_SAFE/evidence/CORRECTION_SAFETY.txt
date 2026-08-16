@@ -1,0 +1,11 @@
+V74.0.17 correction safety
+==========================
+1. Existing behavior is the default. SHARPEMU_PTHREAD_OPAQUE_OWNER_SYNC is enabled
+   when unset, so Dragon Ball FighterZ behavior is unchanged outside this test.
+2. Demon's Souls RUN_4 disables only the post-success DBFZ opaque-owner shadow
+   synchronization. Core mutex ownership/waiter semantics remain unchanged.
+3. No AGC WAIT value is fabricated. No producer, queue, DCC image or texture data
+   is modified by this source patch.
+4. DCC history remains installed but is set to TTL=0 only in RUN_4 because the
+   last result measured 64 seeds and 0 hits.
+5. APPLY creates a source backup and restores it on any patch or build failure.

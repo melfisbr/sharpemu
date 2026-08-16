@@ -1,0 +1,5 @@
+[STARTMENU][AUTO_OPTIONS][V2.1.0] configured raw='' count=0 mode=sample-edge-retry press_samples=1 release_samples=1
+[LOADER][TRACE] apr_resolve path='/app0/ui/scripts/_cmn/uistartmenu.cgpr' host='F:\JOGOSPS5\PPSA01341\ui\scripts\_cmn\uistartmenu.cgpr' index=460 count=1024 id=0xB54A744D size=1550288
+[LOADER][TRACE] ampr.read_file: cmd=0x0000000608CB9490 id=0xB54A744D dst=0x00000004EC800000 size=0x000000000017A7D0 offset=0x0000000000000000 read=0x000000000017A7D0 result=0x00000000 path='F:\JOGOSPS5\PPSA01341\ui\scripts\_cmn\uistartmenu.cgpr' ret=0x0000000801DC1624
+[LOADER][INFO] Vulkan VideoOut presented guest frame: image=0x0000000457C00000 3840x2160
+[LOADER][TRACE] ampr.read_file: cmd=0x0000000608CC2130 id=0x7D42912E dst=0x0000001069500000 size=0x0000000001FE004D offset=0x0000000000000000 read=0x0000000001FE004D result=0x00000000 path='F:\JOGOSPS5\PPSA01341\ui\textures\startmenu\_ps5\subscreen_overlay_backing.ctxr' ret=0x0000000801DC1624

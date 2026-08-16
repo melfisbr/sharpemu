@@ -1,0 +1,6 @@
+        Interlocked.Increment(ref _hostMovieDecoderGeneration);
+
+        // V72.4.3.2.14 HOST_MOVIE_CPU_GATE_BEGIN
+        SharpEmu.HLE.HostMovieExecutionGateV7243214.Begin();
+
+        var count = Interlocked.Increment(ref _activeHostMovieDecoders);

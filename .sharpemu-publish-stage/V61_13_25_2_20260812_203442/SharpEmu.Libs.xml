@@ -1,0 +1,2397 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>SharpEmu.Libs</name>
+    </assembly>
+    <members>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.GetIsTrinityMode(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Reports that the GPU is not running in Trinity mode, matching the base
+            console this backend emulates.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.RecordProducedLabelsInRange(SharpEmu.HLE.CpuContext,System.UInt64,System.UInt64)">
+            <summary>
+            Records the final values of suspended labels overlapped by a completed
+            producer range. Only watched addresses are read, so very large DMA copies
+            do not require scanning the entire destination buffer.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.NotifyGpuMemoryWriteback(SharpEmu.HLE.ICpuMemory,System.UInt64,System.UInt64)">
+             <summary>
+             V61.17.0_GPU_WRITEBACK_PRODUCER_CHAIN
+             Bridges real Vulkan shader/global-buffer writeback into the AGC waiter
+             registry. Explicit PM4 WRITE_DATA/RELEASE_MEM/DMA paths already record
+             produced labels; shader-written guest buffers must do the same after the
+             GPU-to-CPU writeback actually succeeds.
+            
+             This method never fabricates a value and never force-satisfies a wait.
+             It reads only currently watched labels overlapped by the successful host
+             write range and records the value that is really present in guest memory.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.SyncCpuWrittenGuestImages(SharpEmu.HLE.CpuContext,System.UInt64,System.UInt64)">
+            <summary>
+            PS5 render targets alias guest memory, so a CP DMA fill or copy that
+            lands on an RT is visible to later GPU reads. Our render targets live
+            in Vulkan images, so mirror DMA writes into them: fills become
+            vkCmdClearColorImage, copies re-upload the guest bytes. Without this,
+            per-frame DMA clears never reach the image (the fog layer in Dreaming
+            Sarah accumulates until it saturates, washing the scene out).
+            </summary>
+            <summary>
+            PS5 render targets alias unified memory, so the game's CPU can rewrite a
+            surface (Chowdren memsets its fog-noise layer every frame) and the GPU
+            observes it. Our Vulkan guest images are separate storage, so re-upload
+            CPU-authored surfaces once per flip. Surfaces only the GPU writes keep
+            all-zero guest memory and are skipped, preserving their GPU content.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ScheduleRuntimeCorrectionWaitVisibilityProbe(SharpEmu.HLE.CpuContext,SharpEmu.Libs.Agc.GpuWaitRegistry.WaitingDcb,System.UInt64,System.Boolean)">
+            <summary>
+            Direct guest CPU stores can satisfy a GPU wait without crossing another
+            AGC import. Keep one low-frequency monitor per guest memory while waits
+            exist so those real stores wake their queues. The monitor never changes
+            a label: it uses the same masked comparison as submission-time parsing
+            and resumes only after the guest value genuinely satisfies the packet.
+            </summary>
+            <summary>
+            Evidence-matched visibility probe for the PS5 AGC NOP-form WAIT_REG_MEM.
+            Never fabricates a label: it re-reads the real guest value after earlier work
+            in the waiting queue is CPU-visible; cross-queue producers wake by label.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ForceSatisfyGpuWait(SharpEmu.HLE.CpuContext,SharpEmu.Libs.Agc.GpuWaitRegistry.WaitingDcb@,System.UInt64)">
+            <summary>
+            Writes a value that satisfies the waiter's comparison. This deliberately
+            exists only behind SHARPEMU_GPU_WAIT_MODE=force for legacy A/B testing;
+            normal and stale waits must never mutate their watched label.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ReportLabelWriteFailure(System.String,System.UInt64,System.UInt64,System.UInt32)">
+            <summary>
+            Reports a GPU release-label write that could not reach guest memory.
+            Rate-limited (first 16, then powers of two) because a wedged queue can
+            retry, but never silenced: this is the difference between a diagnosable
+            fault and a permanently suspended graphics queue with no explanation.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.TryGetGraphicsContextRegisterForTests(SharpEmu.HLE.CpuContext,System.UInt32,System.UInt32@)">
+            <summary>
+            Test-only view of a parsed graphics context register. False when the
+            register was never written.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.TryGetGraphicsShRegisterForTests(SharpEmu.HLE.CpuContext,System.UInt32,System.UInt32@)">
+            <summary>
+            SH-register counterpart of <see cref="M:SharpEmu.Libs.Agc.AgcExports.TryGetGraphicsContextRegisterForTests(SharpEmu.HLE.CpuContext,System.UInt32,System.UInt32@)"/>;
+            the shader stage addresses live here.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ApplyUcIndexTypeIfNeeded(SharpEmu.Libs.Agc.AgcExports.SubmittedDcbState,System.UInt32,System.UInt32)">
+            <summary>
+            GraphicsDcbSetIndexSize writes VGT_INDEX_TYPE via SET_UCONFIG_REG.
+            Mirror that into <see cref="P:SharpEmu.Libs.Agc.AgcExports.SubmittedDcbState.IndexSize"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.PublishTranslatedColorWriters(SharpEmu.Libs.Agc.AgcExports.SubmittedDcbState,System.UInt64,System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Agc.AgcExports.RenderTargetDescriptor},System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Agc.AgcExports.RenderTargetDescriptor},System.UInt64,System.UInt64,System.UInt32,System.UInt32,System.Boolean,System.String)">
+            <summary>
+            V61.12: publishes colour-writer provenance only for MRTs that survived
+            pixel-export filtering and were actually submitted to the host GPU.
+            Bound-but-unexported CB_COLOR slots remain KnownRenderTargets, but they
+            must not suppress targetless composites or masquerade as GPU producers.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ApplyTransparentPremultipliedFillClear(SharpEmu.Libs.Gpu.GuestRenderState,System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Agc.AgcExports.TranslatedImageBinding},System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding},System.Collections.Generic.IReadOnlyList{System.UInt32})">
+            <summary>
+            Treat an untextured fill that outputs pure transparent black through
+            premultiplied blending as an overwrite. Chowdren issues exactly this
+            draw once per frame to reset its effect layers (fog smoke, vignette
+            masks); under the blend factors it sets (One, OneMinusSrcAlpha) a
+            (0,0,0,0) source is a mathematical no-op, so without this the layers
+            accumulate until they saturate and the fog composites as a flat veil
+            over the whole scene. The workaround applies only when every MRT
+            attachment uses the same blend pattern. Disable with
+            SHARPEMU_DISABLE_FILL_CLEAR=1.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Agc.AgcExports.TriangleStripPrimitive">
+             <summary>
+             Recognises the covering quad a GFX10 driver issues to clear a
+             DCC-compressed colour target. There is no clear packet: the driver
+             programs CB_COLORn_CLEAR_WORD0/1 and draws a quad that the colour block
+             turns into DCC clear codes, discarding whatever the pixel shader
+             exported. Executing it as an ordinary draw writes the shaded output
+             instead, and because the blend it uses computes
+             <c>a &lt;- a_src + a_dst * (1 - a_src)</c> - fixed point 1 - the target's
+             alpha then climbs every frame and saturates.
+            
+             Restricted to clear-to-zero. The reset performed for a match clears the
+             attachment to zero, so a nonzero CLEAR_WORD would be cleared to the
+             wrong colour; those fall through and are drawn. Zero is zero under every
+             encoding the register can carry, so the pair needs no format handling.
+            
+             The clip-space test is load-bearing rather than belt-and-braces: fills
+             sharing the vertex count, topology and blend outnumber the clears by two
+             orders of magnitude and sit at coordinates well outside the frame.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.CoversClipSpace(System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding},System.UInt32)">
+            <summary>
+            True when the draw's float32x3 position stream spans the full clip
+            rectangle, i.e. x and y both reach -1 and +1.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.GetBaseVertex(SharpEmu.Libs.Agc.AgcExports.SubmittedDcbState)">
+            <summary>
+            ResolveVertexOffset for the common UC path: GE_INDX_OFFSET is the
+            DrawIndexed vertexOffset / DrawAuto firstVertex. Embedded-fetch SGPR
+            fallback is not required when the game latches this register (GTA UI).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ComputeShaderStructuralFingerprint(SharpEmu.ShaderCompiler.Gen5ShaderEvaluation)">
+            <summary>
+            Fingerprint of everything that shapes the translated SPIR-V besides
+            scalar register values (those arrive in a per-draw buffer): the
+            resolved binding set with its format-shaping descriptor words, vertex
+            input layouts, and compute system registers. Value churn in user data
+            no longer forces a new translation and pipeline.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.TrackCbMetadataColorTargets(SharpEmu.Libs.Agc.AgcExports.SubmittedDcbState,System.UInt64,System.UInt32,System.UInt64,System.UInt64,System.UInt32,System.UInt32)">
+            <summary>
+            Publishes the resource identity/order of CB metadata operations. SharpEmu
+            keeps Vulkan colour images in an already-materialized representation, so
+            EliminateFastClear/DccDecompress do not need to reproduce hardware DCC
+            blocks in the host image. They do, however, need to preserve the guest
+            colour-surface identity and producer ordering so later metadata-backed SRDs
+            resolve to the live GPU image instead of guest RAM.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.DecodeBlendConstant(System.Collections.Generic.IReadOnlyDictionary{System.UInt32,System.UInt32})">
+            <summary>CB_BLEND_RED..ALPHA carry the constant blend color as raw
+            float bits; unwritten registers read as the reset value (0.0).</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.CreateTranslatedDrawGlobalBuffers(SharpEmu.Libs.Agc.AgcExports.TranslatedGuestDraw)">
+            <summary>
+            Guest storage buffers for a translated draw, followed by the per-draw
+            initial scalar registers of each stage (pixel then vertex), matching
+            the binding layout the shaders were compiled against.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.CreateTranslatedDrawGlobalBuffersForPresent(SharpEmu.HLE.CpuContext,SharpEmu.Libs.Agc.AgcExports.TranslatedGuestDraw)">
+            <summary>
+            Present-time variant: the flip path can reuse the same translated
+            draw across several flips and swapchain retries, so it must not wrap
+            the (pooled, single-consumption) binding arrays. Buffer contents are
+            re-read from guest memory instead, which also presents current data.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ReturnPooledEvaluationArrays(SharpEmu.ShaderCompiler.Gen5ShaderEvaluation)">
+            <summary>
+            Returns the pooled buffer arrays an evaluation produced. Called only
+            on translation-failure paths, where no <see cref="T:SharpEmu.Libs.Agc.AgcExports.TranslatedGuestDraw"/>
+            is built to take ownership; on success the draw's consumers return them.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ReturnPooledDrawArrays(SharpEmu.Libs.Agc.AgcExports.TranslatedGuestDraw,System.Boolean,System.Boolean,System.Boolean)">
+            <summary>
+            Returns pooled data arrays a translated draw owns but did not hand to
+            a presenter consumer. The offscreen path hands globals, vertex and
+            index buffers to the presenter (which returns them), so it passes all
+            three false; other draw sinks pass true for whatever they dropped.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.QueueComputeGlobalWritePublication(SharpEmu.HLE.CpuContext,SharpEmu.Libs.Agc.AgcExports.SubmittedGpuState,SharpEmu.Libs.Agc.AgcExports.SubmittedDcbState,System.UInt64,System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Gpu.GuestMemoryBuffer})">
+            <summary>
+            Guest storage buffers for a compute dispatch followed by its initial
+            scalar registers. Dispatch-specific SGPR values remain runtime data so
+            one translated pipeline serves every matching shader/resource shape.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.IsGpuDetileEquation(SharpEmu.Libs.Agc.DetileEquation)">
+            <summary>
+            Deswizzles a tiled texture source into linear layout when tiling is
+            enabled and the format is understood; returns null to keep the raw
+            bytes (linear surfaces, unknown modes, or non-power-of-two elements).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.ProvideRenderTargetInitialData(SharpEmu.HLE.CpuContext,SharpEmu.Libs.Agc.AgcExports.RenderTargetDescriptor)">
+            <summary>
+            On PS5 render targets alias guest memory, so pixels the game wrote with
+            the CPU are visible before the first GPU draw (Chowdren pre-fills its
+            fog/overlay layers that way). Seed newly created Vulkan guest images
+            with the current guest memory contents to preserve that base layer.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.DumpTextureSourceIfRequested(SharpEmu.Libs.Agc.AgcExports.TextureDescriptor@,System.UInt32,System.Byte[])">
+            <summary>
+            Writes raw sampled-texture bytes (as read from guest memory) when
+            SHARPEMU_TEXTURE_DUMP_DIR is set, so upload-time content can be
+            inspected offline. File name records size and effective pitch.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.DumpLinearTextureIfRequested(SharpEmu.Libs.Agc.AgcExports.TextureDescriptor@,System.UInt32,System.Byte[])">
+            <summary>
+            Writes the bytes after detiling when SHARPEMU_TEXTURE_LINEAR_DUMP_DIR is
+            set. Keeping this separate from the raw-source dump makes AddrLib
+            equation changes directly inspectable with ordinary image tools.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.TrySubmitMaskedDwordCopyKernel(SharpEmu.HLE.CpuContext,SharpEmu.ShaderCompiler.Gen5ShaderProgram,SharpEmu.ShaderCompiler.Gen5ShaderEvaluation,SharpEmu.Libs.Agc.AgcExports.ComputeDispatch,System.UInt32,System.UInt32,System.UInt32,System.Int64@,System.String@)">
+            <summary>
+            Recognizes the SDK's masked-dword resource initialization kernel and
+            executes its exact semantics over the guest-memory window that the
+            emulator can map. The guest dispatches this kernel over multi-gigabyte
+            virtual heaps (up to ~67 million 64-lane workgroups); translating every
+            out-of-window invocation to Vulkan dominated startup despite those
+            stores being bounds-discarded. This is a semantic kernel replacement,
+            not a generic dispatch cap: the complete instruction shape and SGPR
+            bindings must match before the ordered CPU action is used.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcExports.InvalidateDcbWindowIfOverlaps(System.UInt64,System.UInt64)">
+            <summary>
+            Drops the bulk-read window when a self-patching command buffer writes
+            into its own bytes during parse, so subsequent reads see live guest
+            memory instead of the pre-write snapshot. Self-patching is rare, so
+            paying live-read cost for the rest of that one submit is acceptable.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.AgcGraphicsSizingV55Exports">
+            <summary>
+            V55 graphics command sizing completion.
+            Each size is derived from the fixed TryAllocateCommandDwords count of the
+            corresponding already-implemented AGC command emitter in AgcExports.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.AgcIndexHelpers">
+            <summary>Prospero/AGC IndexType helpers (gpu_defs / renderDraw index8 expand).</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcIndexHelpers.ExpandIndex8ToU16(System.ReadOnlySpan{System.Byte},System.Span{System.Byte})">
+            <summary>Expand guest u8 indices to host u16 (Vulkan/Metal bindable).</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.AgcPrimitiveHelpers">
+            <summary>
+            Shared Prospero/AGC primitive-type helpers (renderDraw / gpu_defs).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcPrimitiveHelpers.PrimitiveTypeToGsOut(System.UInt32)">
+            <summary>
+            Maps draw prim type to VGT_GS_OUT_PRIM_TYPE when NGG is not enabled
+            on the GS (GraphicsPrimitiveTypeToGsOut).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcPrimitiveHelpers.ShouldDrawRectListAsTriangleStrip(System.UInt32,System.Boolean,System.UInt32,System.Boolean)">
+            <summary>
+            Rect-list auto-draw topology selection.
+            NGG single-rect UI quads (DualSense prompts) submit count 1/3/4 and
+            must become a 4-vert triangle strip — even when the VS has embedded
+            vertex-buffer fetches (those still show up as host VBs). Indexed and
+            larger auto counts stay triangle list so the loading video is safe.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcPrimitiveHelpers.GetRectListDrawVertexCount(System.UInt32,System.UInt32,System.Boolean,System.Boolean)">
+            <summary>
+            Host vertex count for auto rect-list draws that expand to a strip.
+            NGG single-rect: always 4. Legacy 0x11: 3 -> 4.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcPrimitiveHelpers.IsRectListTriangleStrip(System.UInt32)">
+            <summary>
+            Legacy helper — prefer
+            <see cref="M:SharpEmu.Libs.Agc.AgcPrimitiveHelpers.ShouldDrawRectListAsTriangleStrip(System.UInt32,System.Boolean,System.UInt32,System.Boolean)"/>.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.AgcShaderCompilerHooks">
+            <summary>
+            Wires the backend-neutral shader compiler to this assembly's HLE services. The
+            module initializer runs before any Libs code can invoke the evaluator, so the hook
+            is always installed first.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.AgcVertexMetadata">
+            <summary>
+            AGC embedded vertex metadata. Locates
+            PtrVertexBufferTable / PtrVertexAttribDescTable and builds authoritative
+            attribute layouts that draw translation merges onto IR-discovered fetches.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource">
+            <summary>
+            One AGC attrib-table resource.
+            Representation: <see cref="P:SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource.SharpBase"/> is the V# base; attribute byte
+            offset is applied as <see cref="P:SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource.OffsetBytes"/> (Vulkan bind offset),
+            not folded into the base — avoids double-counting when the IR prolog
+            already bumped the sharp address.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource.#ctor(System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.Boolean)">
+            <summary>
+            One AGC attrib-table resource.
+            Representation: <see cref="P:SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource.SharpBase"/> is the V# base; attribute byte
+            offset is applied as <see cref="P:SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource.OffsetBytes"/> (Vulkan bind offset),
+            not folded into the base — avoids double-counting when the IR prolog
+            already bumped the sharp address.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.TryGetVertexTableRegisters(SharpEmu.HLE.CpuContext,System.UInt64,System.UInt64,SharpEmu.Libs.Agc.AgcVertexMetadata.VertexTableRegisters@)">
+            <summary>
+            Reads AGC user-data direct-resource offsets for the ES header mapped to
+            <paramref name="shaderCodeAddress"/>. Returns false when the header is
+            unknown or the tables are absent (attribute-less clears).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.TryBuildVertexResourcesFromMetadata(SharpEmu.HLE.CpuContext,System.Collections.Generic.IReadOnlyList{System.UInt32},SharpEmu.Libs.Agc.AgcVertexMetadata.VertexTableRegisters,System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource}@)">
+            <summary>
+            Builds attrib resources from AGC input_semantics + tables.
+            ShaderSemantic packing:
+              bits [7:0]   semantic          → attrib table index
+              bits [15:8]  hardware_mapping  → VGPR destination
+              bits [19:16] size_in_elements
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.MergeVertexInputsFromMetadata(SharpEmu.HLE.CpuContext,System.Collections.Generic.IReadOnlyList{System.UInt32},SharpEmu.Libs.Agc.AgcVertexMetadata.VertexTableRegisters,System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding})">
+            <summary>
+            Patch IR-discovered fetches from the attrib table onto the V# format/offset.
+            Prefer 1:1 Location pairing when counts match on one interleaved stream
+            (GTA UI glyphs). Otherwise match by stride + byte offset. Never rebases
+            BaseAddress/Data/Location/Pc/PerInstance.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.TryMergeByLocationPairing(System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding},System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Agc.AgcVertexMetadata.MetadataVertexResource},System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding}@)">
+            <summary>
+            When discovery and metadata describe the same interleaved stream with
+            equal attribute counts, pair by sorted Location (semantic order).
+            Keeps each binding's Pc/Location for SPIR-V; overlays format + offset.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.RefineVertexInputs(SharpEmu.HLE.CpuContext,System.Collections.Generic.IReadOnlyList{System.UInt32},SharpEmu.Libs.Agc.AgcVertexMetadata.VertexTableRegisters,System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding})">
+            <summary>
+            Legacy entry point — forwards to <see cref="M:SharpEmu.Libs.Agc.AgcVertexMetadata.MergeVertexInputsFromMetadata(SharpEmu.HLE.CpuContext,System.Collections.Generic.IReadOnlyList{System.UInt32},SharpEmu.Libs.Agc.AgcVertexMetadata.VertexTableRegisters,System.Collections.Generic.IReadOnlyList{SharpEmu.ShaderCompiler.Gen5VertexInputBinding})"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.CollectFetchPrologPcs(SharpEmu.ShaderCompiler.Gen5ShaderProgram,SharpEmu.Libs.Agc.AgcVertexMetadata.VertexTableRegisters)">
+            <summary>
+            Collects SBufferLoad / SLoad PCs that read the AGC attrib or buffer
+            tables (embedded-fetch prolog). Those loads are executed on the
+            CPU during scalar evaluation; once vertex inputs are bound they must
+            not run again as live SSBOs on the GPU.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.VertexAttribFormatToBufferFormat(System.UInt32)">
+            <summary>
+            Attrib-table format
+            fields are VertexAttribFormat; V# / Vulkan paths need BufferFormat.
+            Unknown values pass through (already BufferFormat).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.AgcVertexMetadata.MapAttribFormat(System.UInt32,System.UInt32)">
+            <summary>
+            Maps Prospero attrib-table formats onto GNM (DataFormat, NumberFormat,
+            Components) for <c>ToVkVertexFormat</c>. Accepts VertexAttribFormat
+            or BufferFormat (pass-through). NumberFormat: 0 Unorm, 1 SNorm,
+            2 UScaled, 3 SScaled, 4 UInt, 5 SInt, 7 Float.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.DetileEquation">
+            <summary>Which in-block address equation a <see cref="T:SharpEmu.Libs.Agc.DetileParams"/> carries.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Agc.DetileEquation.None">
+            <summary>Unsupported mode/format; caller must use the CPU path or raw upload.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Agc.DetileEquation.ExactXor">
+            <summary>Exact AddrLib XOR equation (RDNA2 modes 1/5/9/24/27): factored X/Y terms.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Agc.DetileEquation.BlockTable">
+            <summary>Other modes: a precomputed in-block Morton/standard element-offset table.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.DetileParams">
+            <summary>
+            Backend-agnostic description of how to deswizzle one surface, produced by
+            <see cref="M:SharpEmu.Libs.Agc.GnmTiling.GetDetileParams(System.UInt32,System.Int32,System.Int32,System.Int32)"/>. Holds only plain integers and small
+            int[] tables — no host graphics-API types — so it can cross the guest-GPU
+            backend seam and drive a Vulkan (SPIR-V) or Metal (MSL) detile compute kernel
+            identically to the CPU <see cref="M:SharpEmu.Libs.Agc.GnmTiling.TryDetile(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.UInt32,System.Int32,System.Int32,System.Int32)"/> fallback. The single
+            shared addressing formula both consume is:
+            <code>
+              inBlockByte = Equation == ExactXor
+                  ? XByteTerm[x &amp; XMask] ^ YByteTerm[y &amp; YMask]
+                  : BlockTable[(y % BlockHeight) * BlockWidth + (x % BlockWidth)] * BytesPerElement;
+              srcByte = ((y / BlockHeight) * BlocksPerRow + (x / BlockWidth)) * BlockBytes + inBlockByte;
+            </code>
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.DetileParams.#ctor(SharpEmu.Libs.Agc.DetileEquation,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32[],System.Int32,System.Int32[],System.Int32,System.Int32[])">
+            <summary>
+            Backend-agnostic description of how to deswizzle one surface, produced by
+            <see cref="M:SharpEmu.Libs.Agc.GnmTiling.GetDetileParams(System.UInt32,System.Int32,System.Int32,System.Int32)"/>. Holds only plain integers and small
+            int[] tables — no host graphics-API types — so it can cross the guest-GPU
+            backend seam and drive a Vulkan (SPIR-V) or Metal (MSL) detile compute kernel
+            identically to the CPU <see cref="M:SharpEmu.Libs.Agc.GnmTiling.TryDetile(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.UInt32,System.Int32,System.Int32,System.Int32)"/> fallback. The single
+            shared addressing formula both consume is:
+            <code>
+              inBlockByte = Equation == ExactXor
+                  ? XByteTerm[x &amp; XMask] ^ YByteTerm[y &amp; YMask]
+                  : BlockTable[(y % BlockHeight) * BlockWidth + (x % BlockWidth)] * BytesPerElement;
+              srcByte = ((y / BlockHeight) * BlocksPerRow + (x / BlockWidth)) * BlockBytes + inBlockByte;
+            </code>
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Agc.DetileParams.IsSupported">
+            <summary>False when the mode/format is not GPU-portable (Equation == None).</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.GnmTiling">
+             <summary>
+             Deswizzles RDNA2 (GFX10) tiled texture surfaces into linear layout so they
+             can be uploaded to Vulkan. PS5 stores most textures in a swizzled layout
+             selected by the 5-bit SWIZZLE_MODE in the image descriptor; uploading those
+             bytes verbatim samples as garbage.
+            
+             The GFX10 addressing uses power-of-two swizzle blocks (256 B / 4 KiB /
+             64 KiB) whose internal element order follows the standard (S), display (D),
+             render (R), or z-order/depth (Z) equations. This implements the exact base
+             S and Z 2D single-sample modes plus the PS5's RB+ 64 KiB Z_X/R_X equations;
+             other D/R and pipe/bank-XOR modes stay opt-in while their complete AddrLib
+             equations are being ported.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.IsTrustedByDefault(System.UInt32)">
+            <summary>
+            Base S/Z modes and the Oberon RB+ 64 KiB Z_X/R_X modes for which this
+            implementation carries the exact AddrLib address equations. Other
+            bank/pipe-XOR variants remain opt-in.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.NeedsDetile(System.UInt32)">
+            <summary>
+            True when a surface with the given swizzle mode needs deswizzling.
+            Mode 0 is linear and never needs it.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.TryGetTiledByteCount(System.UInt32,System.Int32,System.Int32,System.Int32,System.UInt64@)">
+            <summary>
+            Gets the physical byte span occupied by a tiled mip. GNM allocates whole
+            swizzle blocks even when the logical image is much smaller than a block;
+            reading only the logical texel count truncates most source offsets during
+            detiling (a 64x64 BC1 mode-9 image is 2 KiB logically but occupies one
+            64 KiB swizzle block).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.TryGetBaseMipPlacement(System.UInt32,System.Int32,System.Int32,System.Int32,System.UInt32,System.UInt64@,System.Boolean@,System.Int32@,System.Int32@,System.UInt64@)">
+            <summary>
+            Locates mip 0 in a GFX10 mip chain, which AddrLib stores smallest-first
+            (Gfx10Lib::ComputeSurfaceInfoMacroTiled/MicroTiled).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.TryDetile(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.UInt32,System.Int32,System.Int32,System.Int32)">
+            <summary>
+            Deswizzles <paramref name="tiled"/> into linear row-major order.
+            Elements are pixels for uncompressed formats and 4x4 blocks for
+            block-compressed formats, so callers pass the element grid dimensions
+            and the bytes per element. Returns false (leaving output untouched) for
+            unsupported swizzle modes so the caller can fall back to the raw bytes.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.GetDetileParams(System.UInt32,System.Int32,System.Int32,System.Int32)">
+            <summary>
+            Computes the detile parameters for a surface without performing the copy,
+            so a GPU compute kernel can run the deswizzle instead of the CPU. Returns
+            <see cref="P:SharpEmu.Libs.Agc.DetileParams.IsSupported"/> == false (Equation == None) when the
+            mode/format is not GPU-portable, so the caller keeps the CPU
+            <see cref="M:SharpEmu.Libs.Agc.GnmTiling.TryDetile(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.UInt32,System.Int32,System.Int32,System.Int32)"/> path or a raw upload. Reuses the same helpers and
+            caches as <see cref="M:SharpEmu.Libs.Agc.GnmTiling.TryDetile(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.UInt32,System.Int32,System.Int32,System.Int32)"/>, so the two never disagree on addressing.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GnmTiling.DetileWithParams(SharpEmu.Libs.Agc.DetileParams@,System.ReadOnlySpan{System.Byte},System.Span{System.Byte})">
+            <summary>
+            CPU deswizzle driven entirely by a resolved <see cref="T:SharpEmu.Libs.Agc.DetileParams"/> — the
+            exact addressing the Vulkan/Metal compute kernel runs per texel, so a
+            backend that packaged <paramref name="parameters"/> for the GPU path can
+            fall back to this without re-deriving the swizzle. Copies
+            <c>ElementsWide * ElementsHigh</c> elements from <paramref name="tiled"/>
+            into <paramref name="linear"/>; returns false when unsupported or the output
+            span is too small. Out-of-range source elements are left zero (matching the
+            reference), so a truncated <paramref name="tiled"/> degrades gracefully.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.GpuWaitProfile">
+             <summary>
+             Aggregate accounting for suspended WAIT_REG_MEM packets, enabled with
+             SHARPEMU_PROFILE_GPU_WAIT=1.
+            
+             The existing <c>agc.wait_suspended</c> warning is deduplicated per label, so
+             a label that suspends every frame is reported once and then goes silent —
+             which makes the log useless for judging whether GPU waits cost frame time.
+             This counts every suspension and every resume, and reports how long the
+             queues actually sat blocked.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitProfile.RecordMonitorPoll(System.Boolean)">
+            <summary>
+            Called once per wake of the wait monitor. An empty poll means the monitor
+            burned a wakeup without resuming anything, which is the cost of the
+            backoff loop rather than of the wait itself.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.GpuWaitRegistry">
+             <summary>
+             Holds DCBs whose parsing was suspended on an unsatisfied WAIT_REG_MEM
+             condition. AgcExports re-checks every waiter against guest memory on each
+             submit and resumes the ones whose condition became true (labels are advanced
+             by ReleaseMem / WriteData / DmaData packets, or by direct CPU writes).
+            
+             This preserves cross-submit ordering: the work that follows a wait inside a
+             DCB is only queued once the awaited completion label is genuinely written,
+             instead of being force-satisfied at parse time and running ahead of the
+             compute/graphics work it depends on (which produced a black composite).
+             </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Agc.GpuWaitRegistry.WatchedLabelSnapshot">
+            <summary>
+            A label address currently watched by one or more suspended DCBs.
+            Is64Bit is true when at least one matching waiter consumes eight bytes.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.WatchedLabelSnapshot.#ctor(System.UInt64,System.Boolean,System.Int32)">
+            <summary>
+            A label address currently watched by one or more suspended DCBs.
+            Is64Bit is true when at least one matching waiter consumes eight bytes.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.SnapshotOutstanding(System.Object)">
+            <summary>
+            Diagnostics snapshot of suspended WAIT_REG_MEM / dims waiters.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.CollectSatisfied(System.Object,System.Func{System.UInt64,System.Boolean,System.Nullable{System.UInt64}})">
+            <summary>
+            Re-evaluates every registered waiter. <paramref name="readValue"/>
+            receives (address, is64Bit) and returns null when the memory is
+            unreadable; such waiters are kept registered. Returns the waiters whose
+            condition is now satisfied (removed from the registry), or null.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.CollectUnreportedStale(System.Object,System.Int64,System.Int64)">
+            <summary>
+            Returns waiters that have remained unsatisfied longer than
+            <paramref name="maxAgeTicks"/> exactly once, without removing them or
+            changing their labels. Missing GPU work must fail closed: advancing a
+            command buffer without its real producer corrupts cross-queue ordering.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.SnapshotInRange(System.Object,System.UInt64,System.UInt64)">
+            <summary>
+            Returns watched labels overlapped by a newly discovered producer. Used
+            only for diagnostics; producer completion still wakes through the
+            normal CollectSatisfied path after the ordered memory write executes.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.SnapshotWatchedLabelsInRange(System.Object,System.UInt64,System.UInt64)">
+            <summary>
+            Returns watched labels overlapped by a producer range, including the
+            widest access required at each address. This is used after DMA/WRITE_DATA
+            completes so the exact value written to every relevant label can be
+            recorded without scanning or reading the entire producer range.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.LatchSatisfiedByValue(System.Object,System.UInt64,System.UInt64)">
+            <summary>
+            Records satisfaction for every waiter at <paramref name="address"/> whose
+            condition is met by <paramref name="value"/> — the value a producer just
+            wrote to that label. Called from the ordered producer side effect so a
+            same-frame label reset cannot lose the wakeup. The waiters stay registered
+            (latched) and are drained by the next CollectSatisfied. Returns true when
+            at least one waiter latched, so the caller can trigger a wake pass.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.CollectExpiredRetries(System.Object,System.Int64)">
+            <summary>
+            Removes and returns waiters carrying a <see cref="F:SharpEmu.Libs.Agc.GpuWaitRegistry.WaitingDcb.RetryDeadlineTicks"/>
+            that has elapsed. Used for indirect-dispatch dimension retries: the caller
+            resumes them so a genuinely empty dispatch (dims that never become non-zero)
+            is dropped after a bounded wait instead of stalling the queue forever.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.UpdateRetryDeadline(System.Object,System.UInt64,System.UInt64,System.Int64)">
+            <summary>
+            Updates the bounded retry deadline for a specific suspended packet.
+            Indirect-dispatch waits use this after an ordered GPU-visibility probe:
+            the initial deadline protects against a renderer that never reaches the
+            probe, while a short post-visibility grace period handles genuinely empty
+            dispatches without racing first-use shader compilation.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.PruneUnwatchedProducedLocked">
+            <summary>
+            Drops produced-label values that no registered waiter is watching. Called
+            under <see cref="F:SharpEmu.Libs.Agc.GpuWaitRegistry._gate"/> when the table reaches its soft bound. A value
+            still watched by a waiter is the only thing that can release that waiter
+            once the guest recycles its label, so those are always retained even if
+            the table has to grow past the bound.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.PruneOrphanedWaitersLocked(System.Int32)">
+            <summary>Drops the oldest waiters until at most <paramref name="keepAtMost"/> remain, preferring producerless orphans.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.TryGetLastProduced(System.Object,System.UInt64,System.UInt64@)">
+            <summary>Records the value a label producer wrote, for the deadlock
+            breaker. Also latches any already-waiting waiter it satisfies.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.RecordProduced(System.Object,System.UInt64,System.UInt64)">
+            <summary>Records the value a label producer wrote, for the deadlock
+            breaker. Also latches any already-waiting waiter it satisfies.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Agc.GpuWaitRegistry.CollectProducedSatisfiedAfterRegistration(System.Object)">
+            <summary>
+            Legacy age-gated fallback retained for safety. V55 normally consumes
+            post-registration produced evidence through
+            CollectProducedSatisfiedAfterRegistration before this method is reached.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.AmprFileRegistry.ClearForTests">
+            <summary>Test hook: wipe registry state between cases.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.AmprFileRegistry.RegisterApp0RelativeForTests(System.String,System.String)">
+            <summary>Test hook for the allocation-free alias publisher.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.AmprFileRegistry.BeginApp0IndexPreload(System.String)">
+            <summary>
+            Kick off <see cref="M:SharpEmu.Libs.Ampr.AmprFileRegistry.EnsureApp0Indexed(System.String)"/> on a background thread as soon as
+            the host knows app0. otherwise pays the full tree walk on the
+            first cooked-id APR miss mid-boot (~8s under Rosetta for DeS).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.AmprFileRegistry.EnsureApp0Indexed(System.String)">
+            <summary>
+            Indexes every file under app0 under both <c>$/</c> and <c>/app0/</c> FNV
+            ids. Cooked asset tables ship precomputed ids; without this walk, a title
+            that never resolves those paths through APR leaves ReadFile permanently
+            NOT_FOUND.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.AmprFileRegistry.RegisterApp0Relative(System.String,System.String)">
+            <summary>
+            Registers the four Insomniac path aliases for one app0-relative file
+            without allocating intermediate guest-path strings.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.AmprFileRegistry.GetParamJsonWriteTicks(System.String)">
+            <summary>
+            Cheap dump fingerprint. Full-tree walks are too expensive for cache
+            validation; param.json changes with title updates. Force a rebuild with
+            SHARPEMU_AMPR_REINDEX=1 after manual dump edits.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Ampr.PakDirectoryTracker">
+            <summary>
+            sceAmprAprCommandBufferReadFile carries -1 instead of an absolute offset whenever the guest
+            wants "the next sequential chunk" of a file. For an id Software PACK archive that sequence is
+            always header -> directory table -> individual archived files, and the guest never tells us
+            which archived file it wants next - only the byte count it expects, taken from the very
+            directory entry it already parsed on its side. This tracks a per-fileId read cursor, and once
+            the directory table has streamed past, parses it so later reads can be matched back to their
+            real absolute offset by the size the guest asks for.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.PakDirectoryTracker.ResolveSequentialOffset(System.UInt32,System.UInt64)">
+            <summary>
+            Resolves what "read the next sequential chunk of size <paramref name="requestedSize"/>"
+            really means for this fileId: an unconsumed directory entry whose length matches, if the
+            directory has already been parsed, otherwise the tracked linear cursor.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Ampr.PakDirectoryTracker.OnReadCompleted(SharpEmu.HLE.CpuContext,System.UInt32,System.UInt64,System.UInt64,System.UInt64)">
+            <summary>
+            Feeds back a completed read so the tracker can advance its cursor, recognize a PACK
+            header and jump straight to its directory table, or parse the directory table itself
+            once it streams past.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Audio.AjmExports.AjmInstanceState.MaxChannels">
+            <summary>Channel ceiling from the instance flags; the decoded stream's
+            own config decides the actual PCM layout.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AjmExports.AjmBatchJobDecode(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Enqueues a decode job on a batch. GTA V Enhanced streams menu music
+            through AJM MP3 (codec 0); we decode eagerly here so BatchStart/Wait
+            stay synchronous no-ops.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AjmExports.AjmBatchJobRun(SharpEmu.HLE.CpuContext)">
+            <summary>
+            The flag-driven decode entry point. Titles built on the modern AJM API
+            drive ATRAC9 playback exclusively through Run/RunSplit —
+            <see cref="M:SharpEmu.Libs.Audio.AjmExports.AjmBatchJobDecode(SharpEmu.HLE.CpuContext)"/> is never called — so leaving these
+            unresolved silences every streamed voice.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AjmExports.AjmBatchJobSetGaplessDecode(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Records the gapless-decode window for a looping voice. SharpEmu decodes
+            whole superframes and does not trim lead-in/lead-out samples yet, so this
+            only has to acknowledge the job instead of failing the batch.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AjmExports.DecodeMp3(SharpEmu.HLE.CpuContext,SharpEmu.Libs.Audio.AjmExports.AjmInstanceState,System.UInt64,System.UInt64,System.UInt64,System.UInt64)">
+            <summary>
+            Decodes one MP3 job into the guest's output buffer. Reported through the
+            same result shape as ATRAC9 so the sideband writer stays codec-agnostic.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AjmExports.AjmBatchStart(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Submits a built batch. Hot path after BatchJobDecode; unresolved WARNs
+            dominate the log. Instant-complete: publish a batch id and clear any
+            error out. Decode sidebands were already filled at job-enqueue time.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AjmExports.AjmBatchJobRunCore(SharpEmu.HLE.CpuContext,System.Boolean)">
+            <summary>
+            Shared body of sceAjmBatchJobRun / sceAjmBatchJobRunSplit. The split form
+            passes arrays of AjmBuffer descriptors instead of one pointer/size pair;
+            the descriptors are a single logical stream, so they are gathered on the
+            way in and scattered on the way out.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Audio.AjmMp3Decoder">
+            <summary>
+            Stateful AJM MP3 (codec 0) decoder. GTA menu music arrives as ~960-byte
+            packets that NLayer must decode with a persistent bit-reservoir.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Audio.AudioOut2Exports.PortState.PortType">
+            <summary>Full Prospero port type (low byte = MAIN/BGM/…, 0x0100 = object).</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Audio.AudioPcmConversion">
+            <summary>
+            Converts guest AudioOut submissions (mono/stereo/7.1, s16 or float32) into the
+            interleaved stereo 16-bit PCM that host audio streams accept. Platform-neutral —
+            device specifics live behind IHostAudioStream.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Audio.AudioPcmConversion.OutputFrameSize">
+            <summary>Bytes per output frame: two 16-bit channels.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Audio.AudioPcmConversion.CopyWithVolume(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.Boolean,System.Single)">
+            <summary>
+            Copies interleaved PCM without changing its channel layout. SDL can convert
+            this directly to the physical device, which preserves surround mixes that
+            would otherwise be truncated to the first two guest channels.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Codec.CodecExports">
+            <summary>
+            libSceVideodec / libSceAudiodec compatibility exports.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.CommonDialog.ErrorDialogExports">
+            <summary>
+            libSceErrorDialog. There is no host error dialog, so an opened dialog
+            immediately reports finished — this keeps guests that block on the dialog
+            status (a common fatal-error path) from spinning forever.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Diagnostics.LoadProgressDiagnostics">
+            <summary>
+            Rate-limited progress probes armed when GTA's 'North Audio Update' thread
+            starts. Used to classify North Yankton freezes (flip vs present vs GPU wait)
+            without enabling full AGC/VideoOut trace.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.DiscMap.DiscMapExports">
+            <summary>
+            HLE implementation of libSceDiscMap, ported from Kyty's LibDiscMap.cpp
+            (https://github.com/InoriRus/Kyty, MIT). Titles installed to internal
+            storage query these entry points on nearly every file access to decide
+            whether a read must be redirected to the Blu-ray drive. Reporting every
+            request as already resident on HDD lets the regular file system path
+            service the read.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestDataPool">
+            <summary>
+            The pool backing AGC-to-presenter ownership transfers, shared by every backend
+            (the AGC layer rents, the presenter returns, so both sides must use one pool).
+            Guest draw snapshots churn through a small set of 128 KiB-16 MiB size classes
+            thousands of times per second; the process-wide shared pool trims and
+            repartitions those large arrays aggressively under GC load, causing hundreds of
+            MiB/s of replacement byte[] allocations, so this pool is bounded and non-shared.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestGpu">
+            <summary>
+            Process-wide access point for the guest-GPU backend, mirroring HostPlatform for the
+            host seam: static HLE export classes resolve the renderer through <see cref="P:SharpEmu.Libs.Gpu.GuestGpu.Current"/>.
+            Vulkan is the default everywhere; SHARPEMU_GPU_BACKEND=metal opts into the Metal
+            backend (macOS only) while it is being brought up. macOS flips to Metal by default
+            once the presenter reaches parity.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestDrawTexture">
+            <summary>A guest texture referenced by a draw or dispatch. Format/NumberType/
+            TileMode/DstSelect/Type are raw guest descriptor codes. Depth is the
+            normalized volume depth (one for non-3D resources).</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestDrawTexture.#ctor(System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.Byte[],System.Boolean,System.Boolean,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,SharpEmu.Libs.Gpu.GuestSampler,System.Int64,System.Boolean,System.UInt32,System.UInt32,System.UInt32,System.Byte[],System.Nullable{SharpEmu.Libs.Agc.DetileParams},System.UInt64,System.UInt32,System.UInt32,System.Boolean)">
+            <summary>A guest texture referenced by a draw or dispatch. Format/NumberType/
+            TileMode/DstSelect/Type are raw guest descriptor codes. Depth is the
+            normalized volume depth (one for non-3D resources).</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestSampler">
+            <summary>Raw guest sampler descriptor dwords, copied verbatim from guest memory.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestSampler.#ctor(System.UInt32,System.UInt32,System.UInt32,System.UInt32)">
+            <summary>Raw guest sampler descriptor dwords, copied verbatim from guest memory.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.TextureContentIdentity">
+            <summary>Identity of a texture's content in a backend texture cache, keyed
+            entirely on raw guest descriptor values; the AGC layer uses it to skip texel
+            copies for content the backend already holds.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.TextureContentIdentity.#ctor(System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,SharpEmu.Libs.Gpu.GuestSampler,System.Boolean,System.UInt32,System.UInt32,System.UInt32,System.UInt64,System.UInt32,System.UInt32,System.Boolean)">
+            <summary>Identity of a texture's content in a backend texture cache, keyed
+            entirely on raw guest descriptor values; the AGC layer uses it to skip texel
+            copies for content the backend already holds.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestVertexBuffer">
+            <summary>DataFormat/NumberFormat are raw guest vertex-attribute codes.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestVertexBuffer.#ctor(System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt64,System.UInt32,System.UInt32,System.Byte[],System.Int32,System.Boolean,System.Boolean)">
+            <summary>DataFormat/NumberFormat are raw guest vertex-attribute codes.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestBlendState">
+            <summary>Factors/funcs are raw guest CB_BLEND*_CONTROL register bitfields; the
+            defaults (1/0) are the guest ONE/ZERO codes.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestBlendState.#ctor(System.Boolean,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.Boolean,System.UInt32)">
+            <summary>Factors/funcs are raw guest CB_BLEND*_CONTROL register bitfields; the
+            defaults (1/0) are the guest ONE/ZERO codes.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestBlendConstant">
+            <summary>CB_BLEND_RED..ALPHA: the constant color referenced by the
+            CONSTANT_COLOR / CONSTANT_ALPHA blend factors. One constant serves every
+            render target of a draw; the hardware reset value is transparent black.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestBlendConstant.#ctor(System.Single,System.Single,System.Single,System.Single)">
+            <summary>CB_BLEND_RED..ALPHA: the constant color referenced by the
+            CONSTANT_COLOR / CONSTANT_ALPHA blend factors. One constant serves every
+            render target of a draw; the hardware reset value is transparent black.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestRenderTarget">
+            <summary>Format/NumberType are raw guest render-target register codes.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestRenderTarget.#ctor(System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt32)">
+            <summary>Format/NumberType are raw guest render-target register codes.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.GuestDepthTarget">
+            <summary>Guest DB surface bound alongside a color render target.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.GuestDepthTarget.#ctor(System.UInt64,System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.Single,System.Boolean)">
+            <summary>Guest DB surface bound alongside a color render target.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.IGuestCompiledShader">
+            <summary>
+            A guest shader compiled by a backend, opaque to the export layers: only the backend
+            that produced it can submit it. <see cref="P:SharpEmu.Libs.Gpu.IGuestCompiledShader.Payload"/> is the backend-defined compiled
+            bytes (SPIR-V words for Vulkan; MSL/DXIL for future backends), exposed solely for
+            diagnostics dumps and size traces — callers must never interpret it.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Gpu.IGuestCompiledShader.PayloadFileExtension">
+            <summary>File extension for diagnostics dumps of <see cref="P:SharpEmu.Libs.Gpu.IGuestCompiledShader.Payload"/> ("spv",
+            "msl", ...), so dumps stay honestly labeled whatever the backend.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.IGuestGpuBackend">
+             <summary>
+             The guest-GPU backend seam: everything the AGC/VideoOut export layers need from a
+             host renderer, expressed in guest-domain terms so Vulkan, Metal, and DX12 backends
+             can each translate to their native API. Two rules keep it that way: no host-API
+             value (formats, blend enums, barrier or pass concepts) may cross this interface,
+             and submission is coarse-grained — synchronization is a backend-internal concern.
+            
+             Shader compilation also lives behind the seam: the backend owns its codegen and
+             returns opaque <see cref="T:SharpEmu.Libs.Gpu.IGuestCompiledShader"/> handles that only it can submit.
+             </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Gpu.IGuestGpuBackend.BackendName">
+            <summary>Human-readable name of this backend ("Metal", "Vulkan"), shown in
+            the window title on macOS where either backend can run.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.EnsureStarted(System.UInt32,System.UInt32)">
+            <summary>Starts the presenter (window + device) once; safe to call repeatedly.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.GetDepthOnlyFragmentShader">
+            <summary>Returns the backend's no-color-output fragment shader.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.Submit(System.Byte[],System.UInt32,System.UInt32)">
+            <summary>Presents one CPU-produced BGRA frame.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.SubmitGuestDraw(SharpEmu.ShaderCompiler.GuestDrawKind,System.UInt32,System.UInt32)">
+            <summary>Presents a recognized fixed-function guest draw (see GuestDrawKind).</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.RegisterKnownDisplayBuffer(System.UInt64,System.UInt32)">
+            <summary>Registers a display buffer with its guest texture format tag.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.IsGpuGuestImageAvailable(System.UInt64,System.UInt32,System.UInt32)">
+            <summary>Format/numberType are raw guest texture descriptor codes.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.TryGetRenderTargetOutputKind(System.UInt32,System.UInt32,SharpEmu.ShaderCompiler.Gen5PixelOutputKind@)">
+            <summary>
+            Whether the backend supports the guest render-target format, and how its pixel
+            outputs are typed. Deliberately does not expose the backend's native format —
+            the guest codes cross the seam and each backend maps them internally.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.EnterGuestQueue(System.String,System.UInt64)">
+            <summary>Scopes subsequent submissions on this thread to a named guest queue.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.SubmitOrderedGuestAction(System.Action,System.String)">
+            <summary>Enqueues an action at its exact position in the current guest queue;
+            returns its work sequence, or 0 when nothing could be enqueued.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.SubmitGlobalOrderedGuestAction(System.Action,System.String)">
+            <summary>Enqueues a CPU-visible action after all earlier guest-work sequences.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.SubmitOrderedGuestFlipWait(System.Int32,System.Int32)">
+            <summary>Preserves sceAgcDcbWaitUntilSafeForRendering in queue order.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.WaitForGuestWork(System.Int64,System.Int32)">
+            <summary>Blocks until the given work sequence completes; false on timeout,
+            close, or a non-positive sequence.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.SynchronizeGuestMemoryForCpu(System.Int32)">
+            <summary>
+            Makes guest-buffer writes from all previously queued GPU work CPU-visible.
+            Backends that cannot provide this synchronization may return false.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Gpu.IGuestGpuBackend.CurrentGuestWorkSequenceForDiagnostics">
+            <summary>Sequence currently executing on the guest-work consumer; diagnostics only.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.IsGuestImageUploadKnown(System.UInt64,System.UInt32,System.UInt32)">
+            <summary>Whether the image exists on the backend or an already-queued upload
+            owns its initialization (a pending image may skip a duplicate upload but is
+            not yet a valid flip source).</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.GuestImageWantsInitialData(System.UInt64)">
+            <summary>True when the first draw into this address must seed the backend
+            image from guest memory (PS5 render targets alias guest memory, so
+            CPU-prefilled pixels are visible before the first draw).</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.SubmitGuestImageWrite(System.UInt64,System.Byte[],System.UInt32)">
+            <summary>
+            Uploads guest-authored pixels into a live guest image. <paramref name="rowOffset"/>
+            is the first image row the buffer covers, so a caller that knows only part
+            of the surface changed can send that band instead of the whole thing; the
+            untouched rows on the host already hold the same bytes.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Gpu.IGuestGpuBackend.SupportsPartialImageWrite">
+            <summary>
+            Whether a non-zero <c>rowOffset</c> is honoured. Backends that cannot
+            upload a sub-range must report false so callers keep sending the whole
+            surface: a dropped band would leave the host copy stale, which is worse
+            than an oversized upload.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.RequestCpuWrittenGuestImageSync(System.UInt64,System.UInt64)">
+            <summary>
+            Asks the presenter to refresh CPU-dirty guest images on its render/present
+            drain. Must not enqueue retained plane copies on the producer path.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.IsTextureContentCached(SharpEmu.Libs.Gpu.TextureContentIdentity@)">
+            <summary>Whether the backend's texture cache already holds this content; lets
+            the AGC layer skip copying texels out of guest memory on every draw.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.AttachGuestMemory(SharpEmu.HLE.ICpuMemory)">
+            <summary>Guest memory handle for backend self-healing (cache misses re-read
+            texels directly instead of showing a fallback pattern).</summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Gpu.IGuestGpuBackend.GuestStorageBufferOffsetAlignment">
+            <summary>Alignment the AGC layer must apply to storage-buffer offsets before
+            they cross the seam.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.CountShaderCompilation">
+            <summary>Counts a guest shader translation for the perf overlay.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.IGuestGpuBackend.RequestClose">
+            <summary>Asks a running presenter to close its window.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalCompiledGuestShader">
+            <summary>
+            The Metal backend's compiled shader: MSL source plus the reflection data
+            (<see cref="T:SharpEmu.ShaderCompiler.Metal.Gen5MslShader"/>) the presenter needs to create and bind pipeline
+            states. The diagnostics payload is the source text — Metal has no portable
+            binary form until an MTLBinaryArchive is introduced.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalCompiledGuestShader.#ctor(SharpEmu.ShaderCompiler.Metal.Gen5MslShader)">
+            <summary>
+            The Metal backend's compiled shader: MSL source plus the reflection data
+            (<see cref="T:SharpEmu.ShaderCompiler.Metal.Gen5MslShader"/>) the presenter needs to create and bind pipeline
+            states. The diagnostics payload is the source text — Metal has no portable
+            binary form until an MTLBinaryArchive is introduced.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalCompiledGuestShader.CachedLibrary">
+            <summary>MTLLibrary handle cached by the presenter after the first
+            runtime compile; the render loop is its only reader and writer.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalDetilePass">
+             <summary>
+             Metal twin of <c>VulkanDetilePass</c>: runs the ExactXor detile equation from
+             <see cref="M:SharpEmu.Libs.Agc.GnmTiling.GetDetileParams(System.UInt32,System.Int32,System.Int32,System.Int32)"/> as a Metal compute kernel
+             (<see cref="M:SharpEmu.ShaderCompiler.Metal.MslFixedShaders.CreateDetileCompute"/>), writing a linear buffer
+             and blitting it into the sampled texture.
+            
+             <see cref="M:SharpEmu.Libs.Gpu.Metal.MetalDetilePass.RecordDetile(System.IntPtr,System.IntPtr,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@,System.IntPtr[]@)"/> records the compute dispatch + blit onto a caller's
+             command buffer and returns its transient buffers for the caller to release
+             once that command buffer completes — the async, non-blocking shape (Metal
+             hazard-tracks the compute-write → blit-read → sample dependency automatically,
+             so no manual barriers are needed).
+            
+             Only ExactXor 4-bytes/element surfaces are handled. NOTE: authored on Windows;
+             the MSL and every Metal call here are <b>Mac-untested</b> — mirrors the
+             verified Vulkan logic and the existing Metal message-send conventions, but
+             must be validated on a real Metal device.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalDetilePass.RecordDetile(System.IntPtr,System.IntPtr,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@,System.IntPtr[]@)">
+            <summary>
+            Records the deswizzle of <paramref name="tiled"/> into
+            <paramref name="texture"/> (<paramref name="texelWidth"/> x
+            <paramref name="texelHeight"/> texels x <paramref name="layers"/> slices)
+            onto <paramref name="commandBuffer"/>. The kernel iterates the element grid
+            from <paramref name="parameters"/> (for block-compressed formats a 4x4 block
+            is one element). Does not commit; the caller releases
+            <paramref name="transientBuffers"/> when the command buffer completes.
+            Returns false (empty transients) when unsupported or the pipeline could not
+            be built.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MtlPixelFormat">
+            <summary>
+            MTLPixelFormat raw values — only the formats the backend maps. Declared here
+            rather than pulled from a binding package: the Metal backend talks to the OS
+            exclusively through objc_msgSend, so ABI constants are owned locally.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalTextureFormat">
+            <summary>A sampled-texture format: the Metal pixel format plus the byte
+            layout the upload path needs. <see cref="P:SharpEmu.Libs.Gpu.Metal.MetalTextureFormat.BlockBytes"/> is nonzero for
+            block-compressed formats (bytes per 4x4 block); otherwise
+            <see cref="P:SharpEmu.Libs.Gpu.Metal.MetalTextureFormat.BytesPerPixel"/> applies.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalTextureFormat.#ctor(SharpEmu.Libs.Gpu.Metal.MtlPixelFormat,System.UInt32,System.UInt32)">
+            <summary>A sampled-texture format: the Metal pixel format plus the byte
+            layout the upload path needs. <see cref="P:SharpEmu.Libs.Gpu.Metal.MetalTextureFormat.BlockBytes"/> is nonzero for
+            block-compressed formats (bytes per 4x4 block); otherwise
+            <see cref="P:SharpEmu.Libs.Gpu.Metal.MetalTextureFormat.BytesPerPixel"/> applies.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalGuestFormats">
+            <summary>
+            Guest texture-descriptor codes to Metal formats, mirroring the Vulkan
+            backend's table case for case so both backends accept the same guest
+            formats. Guest format 9 (2:10:10:10) maps to BGR10A2 — the bit layout that
+            matches Vulkan's A2R10G10B10 pack.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalGuestFormats.DecodeTextureFormat(System.UInt32,System.UInt32)">
+            <summary>Guest sampled-texture format to Metal, mirroring the Vulkan
+            backend's GetTextureFormat case for case (including its RGBA8 fallback
+            for unmapped codes, so unknown formats render something rather than
+            nothing). BC formats upload raw blocks — Mac-family GPUs decode them
+            natively.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalGuestFormats.GetTextureByteCount(SharpEmu.Libs.Gpu.Metal.MetalTextureFormat@,System.UInt32,System.UInt32)">
+            <summary>Source byte footprint of a sampled texture, block-aware —
+            the same math the AGC layer uses to size the texel copy it ships.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalGuestGpuBackend">
+            <summary>
+            Metal backend for the guest-GPU seam: MSL codegen via
+            SharpEmu.ShaderCompiler.Metal, rendering via the Metal presenter — the full
+            surface (presentation, guest images, ordered flips, translated draws, and
+            compute) with no Vulkan, MoltenVK, or windowing-library dependency.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MtlTextureSwizzleChannels">
+            <summary>MTLTextureSwizzleChannels: one MTLTextureSwizzle byte per output
+            channel (Zero=0, One=1, Red=2, Green=3, Blue=4, Alpha=5).</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalNative">
+            <summary>
+            Objective-C runtime access for the Metal presenter: QuartzCore and Metal
+            through objc_msgSend, with one LibraryImport overload per distinct native
+            signature. Dependency-free by design — this plus the OS frameworks is the entire
+            Metal path, which is what keeps it NativeAOT-clean.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.EnsureFrameworksLoaded">
+            <summary>
+            Makes QuartzCore classes visible to objc_getClass; Metal is
+            pulled in by its own LibraryImport. Call once before any Class() lookup.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.SendGpuResourceId(System.IntPtr,System.IntPtr)">
+            <summary>objc_msgSend for -gpuResourceID. MTLResourceID is a one-field
+            8-byte struct, returned in a register on the x86-64 ABI, so it maps to a
+            ulong return — the value written into a Tier 2 argument buffer slot.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.SendBool(System.IntPtr,System.IntPtr,System.IntPtr)">
+            <summary>One-argument BOOL sends, e.g. respondsToSelector:.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.SendVoid(System.IntPtr,System.IntPtr,System.IntPtr,System.IntPtr)">
+            <summary>Two-object-argument void sends, e.g. setObject:forKey:.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.SendVoidSwizzle(System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.Metal.MtlTextureSwizzleChannels)">
+            <summary>setSwizzle: on MTLTextureDescriptor. Four one-byte
+            MTLTextureSwizzle values, passed packed like the framework expects.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.NsString(System.String)">
+            <summary>Autoreleased NSString — only valid inside an autorelease pool
+            unless the caller retains it.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalNative.ReadNsString(System.IntPtr)">
+            <summary>Reads an NSString's UTF-8 contents, or null if the handle is nil.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter">
+            <summary>
+            The Metal presenter uses SDL for its host window, events and input, then renders
+            into the CAMetalLayer owned by SDL's Metal view. Windowing and input therefore
+            share the Vulkan path while all Metal command encoding remains native.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.BeginBatchedGuestCommands(System.IntPtr)">
+            <summary>Returns the open batch command buffer, opening one on first
+            use. Render thread only, like the drain it serves.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.FlushBatchedGuestCommands">
+            <summary>Commits the open batch (if any), tagging the upload pages and
+            snapshot resources it consumed. Returns the committed command buffer so
+            write-back sites can wait on it, or 0 when nothing was open.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.EnsureStorageImage(System.IntPtr,SharpEmu.Libs.Gpu.GuestDrawTexture)">
+            <summary>The live, shared storage image for a guest address: dispatches,
+            draws, blits, and flips of the same address all see one texture.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.RequestClose">
+            <summary>Asks a running presenter loop to close its window and return.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ToggleMetalPerformanceHud">
+            <summary>
+            Cmd+F1: Apple's Metal Performance HUD on the CAMetalLayer (plain F1 keeps
+            the built-in CPU-rasterized perf overlay). Configured per Apple's
+            "Customizing Metal Performance HUD": developerHUDProperties takes
+            mode=default|disabled and logging=default, plus any MTL_HUD_* environment
+            keys directly in the dictionary — all three HUD flags (enabled, per-frame
+            logging, shader-compile logging) ride in one property set. Runs on the
+            SDL host thread, the same thread as the render loop.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ScheduleGuestWorkDrain">
+            <summary>The SDL host loop drains guest work continuously. The method
+            remains as the enqueue-side hook used by guest image synchronization.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.EncodeOverlay(System.IntPtr)">
+            <summary>Draws the CPU-rasterized perf panel over the frame's top-left
+            corner, reusing the present pipeline with a panel-sized viewport.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.SyncDrawableSizeToLayer">
+            <summary>Keeps the SDL-owned CAMetalLayer drawable in host pixels as the
+            window resizes or moves between displays with different scale factors.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.MaxVertexStageBufferIndex">
+            <summary>Metal's vertex stage exposes buffer indices 0..30; setting a
+            vertex-descriptor attribute to 31 is a framework assertion that aborts
+            the process.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TryAssignVertexBufferSlots(SharpEmu.Libs.Gpu.GuestVertexBuffer[],System.Span{System.UIntPtr})">
+            <summary>Assigns each vertex stream a Metal buffer slot, sharing one
+            slot between attributes that read the same guest buffer — interleaved
+            vertices arrive from AGC as one <see cref="T:SharpEmu.Libs.Gpu.GuestVertexBuffer"/> per
+            attribute, so without sharing a handful of attributes exhausts the
+            vertex-stage buffer range. Deterministic over the draw's buffer array;
+            the pipeline descriptor and the bind path both derive from it. Returns
+            false when the unique streams still overflow Metal's last slot.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ExecutePresentationDraw(System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.Presentation)">
+            <summary>Renders a presentation-carried draw (onscreen translated draw or a
+            recognized fixed-function draw) into the reusable onscreen target.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.BindSamplerArgumentBuffer(System.IntPtr,System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.Metal.MetalCompiledGuestShader,SharpEmu.Libs.Gpu.GuestDrawTexture[])">
+            <summary>Builds and binds a stage's sampler argument buffer: one 8-byte
+            Tier 2 resource ID per sampled image, written into an arena slice and
+            bound at the shader's SamplerArgBufferIndex. The stage's images are
+            draw.Textures[ImageBindingBase + j] for its j-th image, matching how the
+            translator numbered SamplerSlots. No-op for stages that sample nothing.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ResolveDrawTextures(System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.GuestDrawTexture[],System.Span{System.IntPtr},System.Span{System.Boolean})">
+            <summary>Resolves every texture a draw samples, encoding any snapshot
+            blits into <paramref name="blitCommandBuffer"/>; must run before the
+            consuming encoder opens on that command buffer.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.EncodeDrawBindings(System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.OffscreenGuestDraw,System.ReadOnlySpan{System.IntPtr},System.ReadOnlySpan{System.Boolean},System.Collections.Generic.List{System.ValueTuple{System.IntPtr,SharpEmu.Libs.Gpu.GuestMemoryBuffer}}@)">
+            <summary>Binds everything the translation contract names: global buffers
+            and SharpEmuUniforms to both stages, the pre-resolved textures/samplers
+            to both stages, vertex streams at the high slots. Collects the writable
+            buffers for guest write-back.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.CreateDrawTexture(System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.GuestDrawTexture,System.Boolean@)">
+            <summary>Resolves one draw texture. Snapshot copies for feedback reads
+            are encoded into <paramref name="blitCommandBuffer"/>, so this must be
+            called before the consuming render or compute encoder opens on that
+            same command buffer — encoder order is what keeps the snapshot after
+            earlier batched passes that render to the source image.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ReplaceDrawTextureContents(System.IntPtr,SharpEmu.Libs.Gpu.GuestDrawTexture,System.UInt32,SharpEmu.Libs.Gpu.Metal.MetalTextureFormat@)">
+            <summary>Uploads a draw texture's source texels: linear formats reuse the
+            row-clamping helper; block-compressed formats upload whole 4x4 block rows
+            with the block-row stride replaceRegion expects.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ToMetalSwizzle(System.UInt32)">
+            <summary>Guest DST_SEL (3 bits per channel: 0=zero, 1=one, 4..7=RGBA) to
+            Metal swizzle bytes, mirroring the Vulkan view's component mapping.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ResolveGuestImageAlias(SharpEmu.Libs.Gpu.GuestDrawTexture)">
+            <summary>Resolves a live guest texture to the current image or a retired
+            same-address variant, scored by descriptor match like the Vulkan
+            presenter's guest-image variants: exact extent outranks format, format
+            outranks initialization, and the active image breaks ties.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TryCreateDepthSampleTexture(System.IntPtr,System.IntPtr,SharpEmu.Libs.Gpu.GuestDrawTexture,System.IntPtr@)">
+            <summary>Snapshots a guest depth image for sampling when the texture
+            descriptor names a depth target's write or read address. Depth32Float
+            cannot blit to a color format, so the copy round-trips through a
+            buffer into an R32Float texture the translated shader can sample.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.WaitForCommittedCommandBuffer(System.IntPtr)">
+            <summary>
+            Blocks until a committed command buffer finishes. Skips the ObjC wait
+            when status is already Completed (common for tiny label/writeback
+            batches), avoiding redundant waitUntilCompleted round-trips on the
+            ordered queue.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.GuestImage">
+            <summary>A guest-addressed Metal texture (or an immutable captured version).</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.GuestImage.GpuWritten">
+            <summary>True once GPU work (draw, blit, dispatch) or an explicit
+            guest write produced this content; false while it only holds a
+            speculative guest-memory seed. Flips prefer produced content.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.GuestImage.ContentVersion">
+            <summary>Bumped whenever anything changes this image's content;
+            feedback-read snapshots are reused until it moves. Games that
+            composite by sampling their render target otherwise force a
+            full-texture blit on every draw.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.GuestImage.SnapshotTexture">
+            <summary>Cached feedback-read snapshot (one retain held here) and
+            the content version it captured. Command buffers that sampled it
+            retain it through completion, so replacing releases immediately.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TrySubmitGuestImageBlit(System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32,System.UInt64,System.UInt32,System.UInt32,System.UInt32,System.UInt32)">
+            <summary>Same-extent, same-format image copies only; anything else returns
+            false and the caller keeps its CPU fallback.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.DrainGuestWork(System.IntPtr,System.IntPtr)">
+            <summary>Drains queued guest work on the render loop, bounded by count and a
+            wall-clock budget so a backlog cannot starve the event pump or the present.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.FindGuestImageForFlipLocked(System.UInt64,System.UInt32,System.UInt32)">
+            <summary>Resolves a flip to produced content: the exact-address image when
+            GPU work wrote it, else the nearest same-extent produced image within the
+            display buffer's plausible metadata window above the start address (games
+            render into the pixel surface past the buffer's metadata block), else the
+            exact-address image even if it only holds a speculative seed.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.EnsureGuestImage(System.IntPtr,System.UInt64,System.UInt32,System.UInt32,System.UInt32)">
+            <summary>Returns the mutable image for a guest address, creating and seeding
+            it (pending initial data first, guest memory second) on first use.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TryTakePresentation(System.Int64,SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.Presentation@)">
+            <summary>Picks the newest ready queued guest presentation (retiring the ones
+            it supersedes), falling back to the latest CPU frame or splash.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ReplaceTextureContents(System.IntPtr,System.UInt32,System.UInt32,System.Byte[],System.UInt32,System.UInt32)">
+            <summary>Uploads pixel rows sized by the texture's real texel width. The
+            row count is clamped to what <paramref name="pixels"/> actually holds, so
+            replaceRegion can never read past the managed buffer.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.ClearTexture(System.IntPtr,System.IntPtr,System.UInt32)">
+            <summary>Clears via a render pass (GPU-side, hazard-tracked against in-flight
+            sampling) using the raw 32-bit guest fill pattern interpreted as RGBA8.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.EncodeCopyTexture(System.IntPtr,System.IntPtr,System.IntPtr)">
+            <summary>Encodes a full-texture copy into an existing command buffer;
+            used by the batched draw path, where the copy must be ordered after the
+            batch's earlier passes rather than committed ahead of them.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.PooledSnapshotResource.Format">
+            <summary>Texture identity (unused for buffers).</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.PooledSnapshotResource.Capacity">
+            <summary>Buffer capacity in bytes (unused for textures).</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.PooledSnapshotResource.LastCommandBuffer">
+            <summary>Retained handle of the command buffer that samples this
+            snapshot; the resource is reusable once it completes.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.RecycleCompletedSnapshotResources">
+            <summary>Returns completed snapshot resources to the free list; called
+            once per render-loop drain, next to the upload-page recycler.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.AcquireSnapshotTexture(System.IntPtr,SharpEmu.Libs.Gpu.Metal.MtlPixelFormat,System.UInt32,System.UInt32,System.IntPtr)">
+            <summary>Pops a pooled snapshot texture matching the exact identity, or
+            creates one. The returned handle is owned by the pool — callers must not
+            release it, and it must be tagged at the next commit.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.AcquireSnapshotBuffer(System.IntPtr,System.UIntPtr)">
+            <summary>Pops a pooled private-storage staging buffer of at least
+            <paramref name="minimumBytes"/>, or creates one. Pool-owned like
+            <see cref="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.AcquireSnapshotTexture(System.IntPtr,SharpEmu.Libs.Gpu.Metal.MtlPixelFormat,System.UInt32,System.UInt32,System.IntPtr)"/>.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TagSnapshotResources(System.IntPtr)">
+            <summary>Marks every snapshot resource acquired since the previous tag
+            as owing its lifetime to <paramref name="commandBuffer"/>. Called at the
+            same commit sites as <see cref="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TagUploadPages(System.IntPtr)"/>; a resource acquired
+            for a draw that never committed is tagged by the next commit, which is
+            conservative but safe.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter._drawTextureCache">
+            <summary>Render-thread-only cache of decoded draw textures; each value
+            holds one retain. Committed command buffers retain the textures they
+            reference, so eviction releases immediately without a GPU drain.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter._cachedDrawTextureIdentities">
+            <summary>Identities the AGC submit thread may skip texel copies for.
+            Read from the submit thread, written by the render thread.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.GetDrawTextureIdentity(SharpEmu.Libs.Gpu.GuestDrawTexture)">
+            <summary>Builds the same identity the AGC layer checks before skipping
+            a texel copy; the two must agree field-for-field or skips and cache
+            entries would never line up.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.IsCacheableDrawTexture(SharpEmu.Libs.Gpu.GuestDrawTexture)">
+            <summary>Storage textures are shader-writable on the GPU, so their
+            content identity is not stable. CPU rewrites of protected/CPU-backed
+            images still evict via DrainGuestImageCpuSync when those addresses
+            are dirty.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.DrainGuestImageCpuSync(System.IntPtr)">
+            <summary>
+            Single dirty consumer per drain: re-upload CPU-written guest images,
+            evict matching draw-texture cache entries, then re-arm once per address.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TryReadGuestDrawTexturePixels(SharpEmu.Libs.Gpu.GuestDrawTexture)">
+            <summary>Self-heal for the skip/eviction race: the submit thread saw a
+            cached identity and skipped the copy, but the entry was evicted before
+            this draw executed. Read the texels directly rather than rendering a
+            fallback texture for the frame, sized with the same block-aware math
+            the draw path expects.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.UploadPage.LastCommandBuffer">
+            <summary>Retained handle of the last command buffer that consumed
+            data from this page; the page is reusable once it completes.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.UploadPage.TouchStamp">
+            <summary>Stamp of the last TagUploadPages call that saw this page,
+            so a commit only re-tags pages it actually touched.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.RecycleCompletedUploadPages">
+            <summary>Returns completed pages to the free stack. Called once per
+            render-loop drain; completion is polled (command buffer status) rather
+            than block-based so the ObjC interop stays block-free.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.AllocateUpload(System.IntPtr,System.Int32,System.IntPtr@,System.Int32@)">
+            <summary>Bump-allocates an aligned slice for CPU-written upload data.
+            The returned span is the slice's shared-storage memory; bind the
+            buffer at the returned offset.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Metal.MetalVideoPresenter.TagUploadPages(System.IntPtr)">
+            <summary>Marks every page touched since the previous tag as owing its
+            lifetime to <paramref name="commandBuffer"/>. Called after each commit
+            that consumed arena data.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Vulkan.VulkanCompiledGuestShader">
+            <summary>The Vulkan backend's compiled shader: raw SPIR-V words.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Gpu.Vulkan.VulkanCompiledGuestShader.#ctor(System.Byte[])">
+            <summary>The Vulkan backend's compiled shader: raw SPIR-V words.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Gpu.Vulkan.VulkanGuestGpuBackend">
+            <summary>
+            Vulkan backend for the guest-GPU seam: SPIR-V codegen via
+            SharpEmu.ShaderCompiler.Vulkan, rendering via a thin adapter over the existing
+            VulkanVideoPresenter statics (folding the presenter into an instance type is
+            follow-up work, not a seam concern).
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.HostFsPath">
+            <summary>
+            Key equivalence for caches and comparisons over <em>host</em> filesystem
+            paths. Windows resolves names case-insensitively, but Linux hosts are
+            case-sensitive and the guest filesystem is too, so a dump can legitimately
+            contain "DATA.BIN" alongside "Data.bin". An ignore-case cache aliases those
+            distinct files into one entry there, which silently serves the wrong bytes
+            or drops one of them entirely.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.HostFsPath.EncodeHostPathSegment(System.String)">
+            <summary>
+            Maps a guest path segment onto a Windows-safe host segment. FreeBSD-style
+            guest names may contain characters that Windows rejects or truncates
+            (notably ':'), which previously cut save files short and broke reloads.
+            Percent-encoding is invertible and collision-free, unlike replacing with '_'.
+            No-op on non-Windows hosts where those characters are legal.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.HostFsPath.DecodeHostPathSegment(System.String)">
+            <summary>
+            Inverse of <see cref="M:SharpEmu.Libs.HostFsPath.EncodeHostPathSegment(System.String)"/> for directory listings
+            returned to the guest. Harmless on already-decoded names.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.HostFsPath.EncodeInvalidFileNameChars(System.String)">
+            <summary>
+            Percent-encodes characters that are illegal in a host filename on the
+            current OS. Used for SharpEmu-owned save-slot names so ':' and similar
+            stay round-trippable without colliding with '_' replacements.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.HostTiming">
+            <summary>
+            High-resolution host sleeps for guest pacing. <see cref="M:System.Threading.Thread.Sleep(System.Int32)"/>
+            routinely overshoots by a scheduler quantum, which turns per-frame waits
+            (flip pacing, usleep-based game loops) into a hard frame-rate cap; these
+            helpers sleep coarsely for the bulk of the interval and yield-spin the
+            remainder so wakeups land within tens of microseconds of the target.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.HostTiming.SleepUntil(System.Int64)">
+            <summary>
+            Blocks until <see cref="M:System.Diagnostics.Stopwatch.GetTimestamp"/> reaches
+            <paramref name="targetTimestamp"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.HostTiming.SleepMicroseconds(System.Int64)">
+            <summary>Blocks for the given number of microseconds.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelEventQueueCompatExports.CaptureRegisteredEvents(SharpEmu.HLE.ICpuMemory,System.UInt64,System.Int16)">
+            <summary>
+            Captures the exact lifetime of every matching registration owned by one
+            guest runtime. A later delete/re-add of the same tuple receives a new
+            generation and therefore cannot consume an interrupt that was already
+            bound to this snapshot.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelEventQueueCompatExports.TriggerCapturedEvents(SharpEmu.Libs.Kernel.KernelEventQueueCompatExports.KernelEventRegistrationSnapshot,System.UInt64)">
+            <summary>
+            Delivers a previously captured interrupt only to registrations whose
+            runtime, queue handle, and generation are still live.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelEventQueueCompatExports.TriggerRegisteredEventsByFilter(System.Int16,System.UInt64)">
+            <summary>
+            Triggers every registered event on every queue that matches <paramref name="filter"/>
+            regardless of the registration's <c>ident</c>. This is a workaround for PS5 AGC command
+            buffers, where <c>IT_EVENT_WRITE</c> carries a hardware <c>EVENT_TYPE</c> that does not
+            match the <c>eventId</c> the guest registered with <c>sceAgcDriverAddEqEvent</c>.
+            See issue #173.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelEventQueueCompatExports.TriggerRegisteredEventsDistinct(System.Int16)">
+            <summary>
+            Queues one event for every registration using <paramref name="filter"/>.
+            Unlike <see cref="M:SharpEmu.Libs.Kernel.KernelEventQueueCompatExports.TriggerRegisteredEvents(System.UInt64,System.Int16,System.UInt64)"/>, this preserves distinct
+            event identifiers registered on the same queue. AGC driver completion
+            queues use this form because the driver, rather than a packet-provided
+            identifier, announces that the whole submission reached end-of-pipe.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Kernel.KernelGraphicsResourceIoV55Exports">
+            <summary>
+            Positioned resource/file reading required by asset and streaming paths.
+            Uses the existing SharpEmu file-descriptor read/lseek implementation and
+            restores the descriptor position after the read.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.UnregisterGuestPathMount(System.String)">
+            <summary>Removes a guest mount registered by <see cref="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.RegisterGuestPathMount(System.String,System.String)"/>.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.RunThreadDtors(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Invokes the registered runtime thread-destructor callback (set via
+            <c>_sceKernelSetThreadDtors</c>) on the exiting guest thread. C++
+            runtimes register this to flush per-thread cleanup that would
+            otherwise leak.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.PosixMprotect(SharpEmu.HLE.CpuContext)">
+            <summary>
+            POSIX alias of <see cref="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.KernelMprotect(SharpEmu.HLE.CpuContext)"/>; identical (addr, len, prot)
+            argument order. Imported by libcohtml, whose embedded V8 changes page
+            permissions through this name when moving JIT pages between writable and
+            executable.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.PosixMunmap(SharpEmu.HLE.CpuContext)">
+            <summary>
+            POSIX alias of <see cref="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.KernelMunmap(SharpEmu.HLE.CpuContext)"/>; identical (addr, len) argument
+            order.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.PosixGetPageSize(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Reports the 16 KiB page granularity this backend maps and aligns against
+            (<see cref="F:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.OrbisPageSize"/>), not the host's 4 KiB. An allocator that
+            rounded to the host value would hand back sub-page offsets that every
+            mapping call here then rejects for misalignment.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelMemoryCompatExports.ReplaceMappedRegionRangeLocked(SharpEmu.Libs.Kernel.KernelMemoryCompatExports.MappedRegion)">
+             <summary>
+             Inserts <paramref name="replacement"/> into the tracked-region table,
+             carving it out of any regions it overlaps and preserving the parts of
+             those regions that fall outside it.
+             </summary>
+             <remarks>
+             The table is a SortedList keyed by start address, so assigning directly
+             destroys any existing entry that happens to share a start address. That
+             silently discarded enclosing reservations: a title reserves a large range
+             and then commits a small mapping at the same base, and the record of
+             everything past the small mapping disappears — leaving sceKernelVirtualQuery
+             unable to find memory the guest legitimately owns.
+            
+             Carving also keeps the table non-overlapping. Previously a new region
+             starting inside an existing one produced two overlapping entries, which
+             the ordered scan in TryFindVirtualQueryRegionLocked is not written to
+             expect.
+             </remarks>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelModuleRegistry.TryBeginModuleStart(System.Int32,SharpEmu.Libs.Kernel.KernelModuleRegistry.ModuleEntry@)">
+            <summary>
+            Atomically claims a module initializer sequence. A module can be observed
+            while it is starting (for recursive loader calls), but DT_INIT plus any
+            DT_INIT_ARRAY constructors are executed at most once after a successful start.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadCompatExports.AbandonMutexesOwnedByThread(System.UInt64,System.String)">
+            <summary>
+            Force-release mutexes still owned by a guest thread that is being torn
+            down without a clean unlock (TBB worker_abort, abrupt exit). Otherwise
+            waiters can spin forever and block splash→first GPU submit.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadCompatExports.PthreadOncePOSIX(SharpEmu.HLE.CpuContext)">
+            <summary>
+            The POSIX-named alias of <see cref="M:SharpEmu.Libs.Kernel.KernelPthreadCompatExports.PthreadOnce(SharpEmu.HLE.CpuContext)"/>. libKernel exports the
+            same routine under two NIDs, and shipped middleware links the plain name:
+            DOOM's libcohtml, PlayFab and party modules all import this one rather
+            than scePthreadOnce.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadCompatExports.PthreadRenameNpPOSIX(SharpEmu.HLE.CpuContext)">
+            <summary>
+            The POSIX-named alias of <see cref="M:SharpEmu.Libs.Kernel.KernelPthreadCompatExports.PthreadRename(SharpEmu.HLE.CpuContext)"/>, following the same
+            two-NID pattern as <see cref="M:SharpEmu.Libs.Kernel.KernelPthreadCompatExports.PthreadOncePOSIX(SharpEmu.HLE.CpuContext)"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadExtendedCompatExports.PthreadAttrSetsolosched(SharpEmu.HLE.CpuContext)">
+            <summary>Stores the observable solo-scheduling pthread attribute. SharpEmu does not reserve a host core.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadExtendedCompatExports.PthreadAttrGetschedparamPOSIX(SharpEmu.HLE.CpuContext)">
+            <summary>
+            The POSIX-named alias of <see cref="M:SharpEmu.Libs.Kernel.KernelPthreadExtendedCompatExports.PthreadAttrGetschedparam(SharpEmu.HLE.CpuContext)"/>. libKernel
+            exports the same routine under two NIDs; middleware compiled against the
+            plain POSIX headers links this one rather than scePthreadAttrGetschedparam.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadExtendedCompatExports.PthreadRwlockTryLockCore(SharpEmu.HLE.CpuContext,System.UInt64,System.Boolean)">
+            <summary>
+            Non-blocking counterpart of <see cref="M:SharpEmu.Libs.Kernel.KernelPthreadExtendedCompatExports.PthreadRwlockLockCore(SharpEmu.HLE.CpuContext,System.UInt64,System.Boolean)"/>: acquires
+            only if the lock is free right now, otherwise reports BUSY.
+            </summary>
+            <remarks>
+            Deliberately not routed through TryAcquireBlockedRwlock. That helper exists
+            for the scheduler resume path and decrements WaitingWriters on success,
+            which is correct only for a thread that previously incremented it. A fresh
+            try never did, so reusing it would silently consume another thread's
+            waiter count and let a queued writer be skipped.
+            </remarks>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelPthreadExtendedCompatExports.RunThreadLocalDestructors(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Runs the current thread's pthread TLS-key destructors, as POSIX
+            requires on thread exit. Each key holding a non-null value with a
+            registered destructor has its value cleared first and the destructor
+            then invoked with the previous value; this repeats up to
+            PTHREAD_DESTRUCTOR_ITERATIONS times so destructors that set new
+            thread-local values are themselves cleaned up. Called on the exiting
+            guest thread while it is still executable.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Kernel.KernelPthreadLibcStartupExports">
+             <summary>
+             Compatibility type retained for source compatibility.
+            
+             The complete POSIX and scePthread mutex/condition export family, including
+             the libc startup aliases, is implemented by
+             <see cref="T:SharpEmu.Libs.Kernel.KernelPthreadCompatExports"/>. Keeping this type empty prevents
+             duplicate SysAbiExport registrations while allowing older source references
+             to continue compiling.
+             </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Kernel.KernelSyncTraceFormatter">
+            <summary>
+            Shared formatting for opt-in kernel synchronization diagnostics.
+            Callers must gate this behind their trace flag so normal synchronization
+            paths do not allocate strings or walk guest frame chains.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Kernel.KernelVirtualRangeAllocator.TryResolveAddressSpace(SharpEmu.HLE.ICpuMemory,SharpEmu.HLE.IGuestAddressSpace@)">
+            <summary>
+            Finds the <see cref="T:SharpEmu.HLE.IGuestAddressSpace"/> behind <paramref name="rootMemory"/>,
+            unwrapping decorators (bounded, like the reflection walker this replaced).
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.LibcCompat.LibcMathCompilerRuntimeExports">
+             <summary>
+             V34 deterministic libc/libm/compiler-runtime compatibility exports.
+            
+             These handlers implement ABI-stable scalar operations only. They deliberately
+             do not fabricate locale databases, host callbacks, PS5 services, errno side
+             effects, or floating-point exception flags that are not represented by CpuContext.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.LibcCompat.LibcMemoryStringExports.TryBuildCStringByteSet(SharpEmu.HLE.CpuContext,System.UInt64,System.Span{System.Byte})">
+            <summary>
+            Builds a 256-entry membership table from a guest C string.  The span
+            functions use this instead of repeatedly rescanning the delimiter set
+            for every source byte.  This keeps strcspn/strspn/strpbrk O(n + m) and
+            avoids multi-second HLE stalls on long parser buffers.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.LibcCompat.LibcRuntimeExpansionV46Exports">
+            <summary>
+            V46 evidence-backed runtime expansion.
+            Implements ABI-stable C atomics, compiler builtins, selected libm/libc
+            operations, and MSVC STL vector helper algorithms.
+            No placeholder success handlers are used.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.LibcCompat.RuntimePosixRemainingExportsV45">
+             <summary>
+             V45 deterministic runtime/POSIX/compiler-rt compatibility exports.
+            
+             Scope is intentionally restricted to ABI-stable scalar compiler helpers and
+             local libc/POSIX operations. C++ object layouts, RTTI data objects, exception
+             machinery, networking and proprietary service semantics are not guessed here.
+             </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.LibcCompat.RuntimePosixRemainingExportsV54">
+             <summary>
+             V54 current-state-filtered runtime/POSIX/compiler-rt compatibility exports.
+            
+             Scope is intentionally restricted to ABI-stable scalar compiler helpers and
+             local libc/POSIX operations. C++ object layouts, RTTI data objects, exception
+             machinery, networking and proprietary service semantics are not guessed here.
+             </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Media.BinkHostPlaybackAssist">
+             <summary>
+             V61.13.14 lightweight direct-movie audio/telemetry helper.
+            
+             Decoder continuity is fixed in NihavBink2Decoder itself, so the presenter
+             no longer needs V61.13.11 per-frame hashes or CPU R/B rewrites.
+             </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Media.BinkRuntimeBootstrapV6113166">
+            <summary>
+            V61.13.16.6: persistent defaults/runtime discovery for the Bink2 NIHAV path.
+            Environment variables remain overrides: this initializer only fills values
+            that the caller has not explicitly configured.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Media.FfmpegVideoDecoder">
+            <summary>
+            Decodes a .bk2 (or any FFmpeg-readable movie) directly via FFmpeg's C API
+            through FFmpeg.AutoGen P/Invoke bindings against the dynamically linked
+            libraries published by github.com/sharpemu/ffmpeg-core -- no native C
+            bridge of our own to build. See docs/bink2-bridge.md.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Media.HostMovieBridge">
+             <summary>
+             Host-side movie bridge for games that decode video inside their own
+             executable instead of going through an HLE decoder.
+            
+             Such a game never imports libSceVideodec or sceAvPlayer, so no HLE export
+             can see its movie frames. Kernel file opens identify the active movie and
+             the presenter requests BGRA frames from <see cref="T:SharpEmu.Libs.Media.FfmpegVideoDecoder"/> —
+             the same decoder sceAvPlayer uses, so every format is handled in one place.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Media.HostMovieBridge.ShouldSkipGuestMovie(System.String)">
+            <summary>
+            Returns true only when movie skipping was explicitly requested. Without
+            a host adapter the guest must be allowed to run the Bink implementation
+            statically linked into its executable.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Media.HostMovieBridge._naturalGuestMovieObservations">
+            <summary>
+            Starts or queues host decoding. Decoded frames are only exposed as a
+            sampled guest texture; presentation and UI composition remain guest-owned.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Media.HostMovieBridge.WaitForHostPlaybackToFinish(System.String)">
+             <summary>
+             Blocks the calling (guest I/O) thread until the host has actually
+             finished presenting <paramref name="hostPath"/> — either because it
+             played through, or because something else took over the timeline.
+            
+             The completion shim tells the guest's own Bink header parse "this
+             movie is one frame and already done" so its native decoder never
+             blocks the guest on real per-frame work. Without this wait, that lie
+             lands the instant the guest reads the header, so guest-side game
+             logic races far ahead of whatever the host is still showing on
+             screen: pressing a button lands on the (already-advanced) guest
+             state, but the video visibly keeps playing, and any real-time-gated
+             trigger later in the guest's own flow can fire against a clock that
+             no longer matches wall time. Gating the "done" read on real host
+             completion keeps guest pacing and on-screen playback in lockstep.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Media.HostMovieBridge.BinkGuestCompletionShim.Patch(System.Int64,System.Span{System.Byte})">
+            <summary>
+            Rewrites the frame-count/size fields the guest's own Bink header
+            parse reads, if this read covers them. Returns true when the
+            NumFrames field (the field that tells the guest "this movie is
+            done") was in range, so the caller can gate that specific read on
+            the host's real playback actually finishing first.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Media.MediaFramePlayback">
+            <summary>
+            Keeps blocking codec work away from the Vulkan presentation thread and
+            releases decoded frames according to the movie time base.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.Media.MediaFramePlayback.PlaybackProgress">
+            <summary>
+            Wall-clock seconds since the first frame was presented, and the index of
+            the last frame shown. Playback is on its own time base when these agree
+            with the movie's frame rate.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.Media.MediaFramePlayback._followGuestAudioClock">
+            <summary>
+            Time base for playback. A host-decoded movie runs on whatever clock it is
+            given, but the audio that belongs to it comes from the guest, which does
+            not advance at wall-clock rate on a slow frame. Following the audio keeps
+            the two together; SHARPEMU_MOVIE_CLOCK=wall restores the old behaviour.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Media.MediaFramePlayback.CurrentPlaybackSecondsLocked">
+            <summary>
+            Seconds of playback elapsed on the movie's time base. Falls back to wall
+            clock whenever guest audio is not flowing: a movie whose audio never
+            starts — or stops early — must still finish rather than hang on a clock
+            that will never advance again.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Media.MediaFramePlayback.TraceClockSkewLocked">
+            <summary>
+            Logs how far the movie's wall clock has drifted from the guest audio the
+            movie is supposed to be in step with. A skew that is flat across playback
+            is a late audio start; one that grows is a rate mismatch, and the two need
+            different fixes. Caller holds <see cref="F:SharpEmu.Libs.Media.MediaFramePlayback._gate"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Media.MediaFramePlayback.CurrentTargetFrameIndexLocked">
+            <summary>
+            The frame the movie's own time base says should be on screen right now.
+            Returns -1 until the first frame is presented, so the queue prefills
+            instead of instantly declaring everything late.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Media.NihavBink2Decoder">
+             <summary>
+             Bink2/KB2 host decoder backed by the external NihAV decoder tool.
+            
+             NihAV is intentionally not linked into SharpEmu and is not redistributed by
+             this source file. The optional executable is discovered under
+             <c>plugins\bink2\nihav-tool.exe</c> or via SHARPEMU_NIHAV_TOOL. Keeping the
+             codec in a child process gives us natural backpressure and isolates malformed
+             movie data from the emulator process.
+            
+             The tool writes PPM for RGB or PGMYUV for YUV frames. This adapter decodes
+             short time slices, consumes those images, converts them to BGRA and deletes
+             each slice before moving to the next one. Slice decoding bounds temporary
+             disk usage instead of allowing a whole 4K movie to be dumped at once.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Network.NetExports.PosixSetsockopt(SharpEmu.HLE.CpuContext)">
+            <summary>
+            POSIX alias of <see cref="M:SharpEmu.Libs.Network.NetExports.NetSetsockopt(SharpEmu.HLE.CpuContext)"/>; identical
+            (fd, level, option, value, length) argument order.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Network.NetExports.PosixGetsockopt(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Reads back the socket options this backend actually tracks: SO_NBIO,
+            SO_REUSEADDR and SO_ERROR.
+            </summary>
+            <remarks>
+            Anything else returns EINVAL rather than a zero-filled buffer. A caller
+            that receives success for an option nobody stored would treat whatever
+            happens to be in its output buffer as the real setting, which is a harder
+            failure to trace than an explicit rejection.
+            </remarks>
+        </member>
+        <member name="M:SharpEmu.Libs.Network.NetExports.PosixInetNtop(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Formats a binary address as text. Pure conversion with no socket state,
+            so it behaves identically to the console version for AF_INET/AF_INET6.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Np.NpManagerExports.NpRegisterNpReachabilityStateCallback(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Accepts the reachability callback and never invokes it. Reachability
+            transitions only ever fire on a real PSN connection, which an offline
+            session does not have, so registering successfully and staying silent is
+            the accurate emulation of a signed-out console rather than a stub.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Np.NpManagerExports.NpRegisterPremiumEventCallback(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Accepts the premium-event callback and never invokes it. Offline sessions
+            have no PS Plus / premium transitions to deliver, and leaving this NID
+            unresolved returns NOT_FOUND which soft-locks titles that register it
+            during settings / store probes (GTA V Enhanced).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Np.NpTrophy2Exports.NpTrophy2GetTrophyInfo(SharpEmu.HLE.CpuContext)">
+            <summary>
+            Gen5 ABI: context, handle, trophy id, then SceNpTrophy2Details and
+            SceNpTrophy2Data output pointers.
+            </summary>
+            <remarks>
+            Reports "no such trophy" rather than succeeding. Succeeding would require
+            filling both output structures, and their exact layouts are not confirmed
+            here — a title that trusted zeroed details would read an empty name and a
+            grade of zero as real data. NOT_FOUND is a documented outcome that callers
+            must already handle, so it degrades along a path the game tests.
+            </remarks>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.HostWindowInput">
+            <summary>Cross-platform input state supplied by the SDL game window.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.KeyboardPadBinding">
+            <summary>One primary and one optional secondary host key for a pad action.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.KeyboardPadActionDefinition">
+            <summary>Metadata used by the launcher to render keyboard mapping rows.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Pad.KeyboardPadActionDefinition.#ctor(System.String,System.String,System.String,System.Int32,System.Int32)">
+            <summary>Metadata used by the launcher to render keyboard mapping rows.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.KeyboardPadMapping">
+            <summary>
+            Shared keyboard-to-pad profile used by the launcher and scePad runtime.
+            Virtual-key values deliberately match the SDL window's host-key seam.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Pad.PadExports.ToOrbisButtons(SharpEmu.HLE.Host.HostGamepadButtons)">
+            <summary>Maps the host seam's neutral button flags onto SCE_PAD_BUTTON bits.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.PadState">
+            <summary>
+            Snapshot of a physical controller's state, already translated to ORBIS
+            pad conventions (SCE_PAD_BUTTON bits; sticks 0..255 with 128 centered
+            and Y growing downward; triggers 0..255).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.Pad.PadState.#ctor(System.Boolean,System.UInt32,System.Byte,System.Byte,System.Byte,System.Byte,System.Byte,System.Byte,SharpEmu.HLE.Host.HostGamepadType,SharpEmu.HLE.Host.HostGamepadConnection,SharpEmu.HLE.Host.HostMotionState,SharpEmu.HLE.Host.HostTouchState)">
+            <summary>
+            Snapshot of a physical controller's state, already translated to ORBIS
+            pad conventions (SCE_PAD_BUTTON bits; sticks 0..255 with 128 centered
+            and Y growing downward; triggers 0..255).
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.OrbisPadButton">
+            <summary>SCE_PAD_BUTTON bit values.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.Pad.SdlLauncherGamepad">
+            <summary>Cross-platform SDL gamepad polling for launcher navigation.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.SaveData.SaveDataStorage">
+            <summary>
+            Host-side layout and metadata for PS5 save data. Saves live under
+            <c>user/savedata/&lt;titleId&gt;/&lt;dirName&gt;/</c> next to the executable (overridable via
+            <c>SHARPEMU_SAVEDATA_DIR</c>); the game's files are written directly inside a
+            slot through the mounted <c>/savedata0</c> filesystem, and the PS5 UI
+            metadata (title/subtitle/detail/userParam) plus icon live under
+            <c>&lt;slot&gt;/sce_sys/</c>. This type is pure filesystem logic with no guest
+            interop so the path and metadata handling can be unit-tested.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.Root(System.String)">
+            <summary>Root of all saves: the env override, else the portable <c>user/savedata</c> directory.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.MigrateLegacyLayout(System.String,System.String)">
+            <summary>
+            Imports saves written by the short-lived profile layout and by the old
+            numeric-user layout. Newer destination files are never overwritten.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.TitleRoot(System.String,System.String)">
+            <summary>Per-title directory: <c>&lt;root&gt;/&lt;titleId&gt;</c>.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.SlotDir(System.String,System.String)">
+            <summary>A single save slot: <c>&lt;titleRoot&gt;/&lt;dirName&gt;</c>.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.MemoryPath(System.String)">
+            <summary>The SaveDataMemory blob shared by a title.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.Sanitize(System.String)">
+            <summary>
+            Percent-encodes characters that are invalid in a host path segment so
+            guest names round-trip on Windows without truncating at ':' or colliding
+            when invalid characters would otherwise be replaced with '_'. Empty or
+            all-invalid input collapses to "default" so a bad guest name can never
+            escape the save root or produce an empty segment.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.ReadMetadata(System.String)">
+            <summary>Reads a slot's metadata, or defaults if none has been written.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataStorage.WriteMetadata(System.String,SharpEmu.Libs.SaveData.SaveDataMetadata)">
+            <summary>Writes a slot's metadata, creating <c>sce_sys/</c> as needed.</summary>
+        </member>
+        <member name="T:SharpEmu.Libs.SaveData.SaveDataMetadata">
+            <summary>PS5 save-slot metadata surfaced by sceSaveDataGetParam / the save UI.</summary>
+        </member>
+        <member name="P:SharpEmu.Libs.SaveData.SaveDataMetadataContext.SaveDataMetadata">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.SaveData.SaveDataMetadataContext.String">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.SaveData.SaveDataMetadataContext.UInt32">
+            <summary>
+            Defines the source generated JSON serialization contract metadata for a given type.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.SaveData.SaveDataMetadataContext.Default">
+            <summary>
+            The default <see cref="T:System.Text.Json.Serialization.JsonSerializerContext"/> associated with a default <see cref="T:System.Text.Json.JsonSerializerOptions"/> instance.
+            </summary>
+        </member>
+        <member name="P:SharpEmu.Libs.SaveData.SaveDataMetadataContext.GeneratedSerializerOptions">
+            <summary>
+            The source-generated options associated with this context.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataMetadataContext.#ctor">
+            <inheritdoc/>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataMetadataContext.#ctor(System.Text.Json.JsonSerializerOptions)">
+            <inheritdoc/>
+        </member>
+        <member name="M:SharpEmu.Libs.SaveData.SaveDataMetadataContext.GetTypeInfo(System.Type)">
+            <inheritdoc/>
+        </member>
+        <member name="T:SharpEmu.Libs.Stubs.GameServiceStubs">
+            <summary>
+            Success stubs for trophy, character-encoding and telemetry ABI calls that
+            Void Terrarium (and other titles) invoke during startup. They were
+            previously unresolved and returned NOT_FOUND, and a title that gates its
+            UI/text initialization on these succeeding then skips ahead and never draws
+            its content (a black screen with only a clear pass). These return success
+            (and a non-zero handle where an out pointer is expected) so init proceeds.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.VideoOut.PerfOverlay">
+            <summary>
+            In-window performance HUD. The panel is rasterized on the CPU into a
+            small BGRA buffer each frame (embedded 5x7 font, no assets) and the
+            presenter blits it onto the swapchain image, so it needs no pipelines,
+            descriptors or blending state. Toggled with F1; SHARPEMU_OVERLAY=0
+            starts it hidden.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.PerfOverlay.RecordPresent">
+            <summary>Called by the presenter after each successful host present.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.PerfOverlay.RecordSubmit">
+            <summary>Called on every guest flip submission.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.PerfOverlay.RecordDraw">
+            <summary>Called per translated draw/dispatch executed.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.PerfOverlay.Fill(System.Span{System.Byte},System.Int32,System.Int32)">
+            <summary>
+            Rasterizes the panel into a BGRA byte span of PanelWidth x PanelHeight.
+            Runs on the render thread.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.VideoOut.RenderPhaseProfile">
+             <summary>
+             Self-time accounting for the render thread, enabled with
+             SHARPEMU_PROFILE_RENDER=1. The existing videoout counters report how much
+             work was done (draws, pipelines, SPIR-V) but not where the render thread's
+             second went, which is the number that decides whether a low frame rate is
+             the emulator recording commands, the GPU executing them, or neither.
+            
+             Scopes nest: entering a phase suspends the enclosing one and resumes it on
+             dispose, so a <see cref="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.QueueSubmit"/> inside
+             <see cref="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Flush"/> is never counted twice.
+             </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Unattributed">
+            <summary>Outside any measured phase — loop overhead.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Idle">
+            <summary>Parked because no guest work and no newer flip exist.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.FrameSlotWait">
+            <summary>Blocked on the frame slot's fence: the GPU is behind.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Collect">
+            <summary>Reaping completed guest submissions (fence polls).</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.TakeWork">
+            <summary>Dequeuing the next guest work item.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Describe">
+            <summary>Building the diagnostic label for a work item.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.CompleteWork">
+            <summary>Publishing a work item's completion to its waiters.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.TakePresentation">
+            <summary>Selecting the presentation to show this iteration.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Flush">
+            <summary>Closing and submitting the batched guest command buffer.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.QueueSubmit">
+            <summary>vkQueueSubmit itself.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Acquire">
+            <summary>vkAcquireNextImageKHR.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.Present">
+            <summary>Recording + submitting the presentation command buffer.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase.QueuePresent">
+            <summary>vkQueuePresentKHR.</summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.RenderPhaseProfile.OrderedActionDetailsEnabled">
+            <summary>
+            Breaks down the CPU-visible actions which are deliberately serialized
+            behind guest GPU work. This stays opt-in because it is diagnostic data,
+            not a normal render-thread cost.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.RenderPhaseProfile.Charge(SharpEmu.Libs.VideoOut.RenderPhaseProfile.Phase)">
+            <summary>
+            Closes out the running phase and switches to <paramref name="next"/>,
+            returning the phase that was running.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.RenderPhaseProfile.RecordFrame">
+            <summary>Called once per presented frame; also drives the report.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VideoOutExports.StartVblankThreadOnce">
+            <summary>
+            Starts the emulated vblank tick once a guest registers interest in vblank
+            events. The tick fires the registered vblank events on their event queues
+            at the display refresh cadence so guests that park their main/render loop
+            on a vblank equeue keep advancing.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VideoOutExports.PaceFlip(System.Int32)">
+            <summary>
+            Emulates the display vblank cadence: hardware completes flips at the
+            requested rate, which is what paces the game's main loop. Without this
+            the guest runs as fast as the GPU pipeline drains, so frame delivery
+            is bursty and animation judders. When the emulator runs slower than
+            the target rate the sleep never engages.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.VideoOut.VulkanDetilePass">
+             <summary>
+             Self-contained GPU deswizzle pass: runs the ExactXor detile equation from
+             <see cref="M:SharpEmu.Libs.Agc.GnmTiling.GetDetileParams(System.UInt32,System.Int32,System.Int32,System.Int32)"/> as a Vulkan compute shader
+             (<see cref="M:SharpEmu.ShaderCompiler.Vulkan.SpirvFixedShaders.CreateDetileCompute"/>), writing a linear buffer
+             and copying it into a sampled image — the GPU equivalent of the CPU
+             <c>GnmTiling.TryDetile</c> + staging upload.
+            
+             Two entry points share the same (verified) recording:
+             <see cref="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.DetileIntoImage(Silk.NET.Vulkan.Image,Silk.NET.Vulkan.ImageLayout,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@)"/> is a self-contained one-shot (submit + wait) used
+             by the isolation self-test; <see cref="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.RecordDetile(Silk.NET.Vulkan.CommandBuffer,Silk.NET.Vulkan.Image,Silk.NET.Vulkan.ImageLayout,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@,SharpEmu.Libs.VideoOut.VulkanDetilePass.Transients@)"/> records into a caller's
+             command buffer and hands back its transient buffers + descriptor pool for the
+             caller to retire with that command buffer's fence — the render-path variant,
+             which must never block the render thread.
+            
+             Only ExactXor 4-bytes/element surfaces are handled; <see cref="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.Supports(SharpEmu.Libs.Agc.DetileParams@)"/> lets
+             the caller fall back to the CPU path for everything else.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.Supports(SharpEmu.Libs.Agc.DetileParams@)">
+            <summary>
+            The kernel handles the exact-XOR and block-table modes at 4/8/16
+            bytes-per-element (one, two, or four 32-bit words per element). 1/2 bpp are
+            sub-word and stay on the CPU.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.VideoOut.VulkanDetilePass.Transients">
+            <summary>Opaque handle to the pooled resources one recorded detile is using.
+            The caller hands it back to <see cref="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.Retire(SharpEmu.Libs.VideoOut.VulkanDetilePass.Transients)"/> once the command buffer they
+            were recorded into has completed; nothing is destroyed, the buffers and the
+            descriptor set return to this pass's free lists for the next texture.</summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.RecordDetile(Silk.NET.Vulkan.CommandBuffer,Silk.NET.Vulkan.Image,Silk.NET.Vulkan.ImageLayout,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@,SharpEmu.Libs.VideoOut.VulkanDetilePass.Transients@)">
+            <summary>
+            Records the deswizzle of <paramref name="tiled"/> into <paramref name="image"/>
+            (<paramref name="texelWidth"/> x <paramref name="texelHeight"/> texels x
+            <paramref name="layers"/> array slices, currently in
+            <paramref name="currentLayout"/>) onto <paramref name="commandBuffer"/>,
+            leaving the image <see cref="F:Silk.NET.Vulkan.ImageLayout.ShaderReadOnlyOptimal"/>. The kernel
+            iterates the element grid from <paramref name="parameters"/> (for
+            block-compressed formats a 4x4 block is one element, so the element grid is
+            smaller than the texel grid). The tiled buffer holds the array slices packed
+            contiguously (each an independently tiled 2D surface). Does not submit; the
+            caller retires <paramref name="transients"/> with the command buffer's fence.
+            Returns false (with empty transients) when unsupported.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.DetileIntoImage(Silk.NET.Vulkan.Image,Silk.NET.Vulkan.ImageLayout,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@)">
+            <summary>
+            One-shot variant used by the isolation self-test: records the detile onto a
+            private command buffer, submits, waits, and frees every transient. Never
+            call this on the render thread — its blocking wait would deadlock the
+            present pipeline; use <see cref="M:SharpEmu.Libs.VideoOut.VulkanDetilePass.RecordDetile(Silk.NET.Vulkan.CommandBuffer,Silk.NET.Vulkan.Image,Silk.NET.Vulkan.ImageLayout,System.UInt32,System.UInt32,System.UInt32,System.ReadOnlySpan{System.Byte},SharpEmu.Libs.Agc.DetileParams@,SharpEmu.Libs.VideoOut.VulkanDetilePass.Transients@)"/> there.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.VideoOut.VulkanDetileSelfTest">
+            <summary>
+            Opt-in GPU equivalence check for <see cref="T:SharpEmu.Libs.VideoOut.VulkanDetilePass"/>. When
+            SHARPEMU_DETILE_SELFTEST=1 it builds a known tiled surface, deswizzles it on
+            the GPU into a real image, reads the image back, and compares against the CPU
+            <see cref="M:SharpEmu.Libs.Agc.GnmTiling.TryDetile(System.ReadOnlySpan{System.Byte},System.Span{System.Byte},System.UInt32,System.Int32,System.Int32,System.Int32)"/> — the same equivalence the unit test proves
+            for the params, now end-to-end through the actual Vulkan pass. It logs
+            [DETILE-SELFTEST] PASS/FAIL and never throws into startup (any failure is
+            caught and logged), so it is safe to leave wired.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Libs.VideoOut.VulkanDeviceBufferPool">
+            <summary>
+            Fence-retired cache for DEVICE_LOCAL Vulkan buffers. Unlike
+            <see cref="T:SharpEmu.Libs.VideoOut.VulkanHostBufferPool"/>, these allocations are never mapped and
+            consume the device-local heap on discrete GPUs.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.TryGetGuestImageExtent(System.UInt64,System.UInt32@,System.UInt32@,System.UInt64@)">
+            <summary>
+            Reports the extent of a live guest image so DMA writes to its backing
+            memory can be mirrored into the Vulkan image (PS5 render targets alias
+            guest memory, so CP DMA fills/copies are visible to later GPU reads).
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.RequestGuestColorClear(System.UInt64)">
+             <summary>
+             Clear a guest colour target to zero at its next render pass.
+            
+             Deliberately not <see cref="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SubmitOffscreenColorClear(System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Gpu.GuestRenderTarget},System.Single,System.Single,System.Single,System.Single,System.UInt64)"/>: that enqueues
+             a CmdClearColorImage which lands outside the render pass that follows
+             it, so a target cleared this way was still observed reading back its
+             previous contents. Dropping <c>Initialized</c> makes the render pass
+             itself clear via <see cref="F:Silk.NET.Vulkan.AttachmentLoadOp.Clear"/>.
+             </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SubmitOffscreenColorClear(System.Collections.Generic.IReadOnlyList{SharpEmu.Libs.Gpu.GuestRenderTarget},System.Single,System.Single,System.Single,System.Single,System.UInt64)">
+            <summary>
+            Apply a solid color clear to offscreen guest render targets without a
+            graphics pipeline. Used for empty-SRT procedural clear draws that
+            otherwise lose the device on QueueSubmit with Address-0 descriptors.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SubmitOrderedGuestAction(System.Action,System.String)">
+            <summary>
+            Enqueues a CPU-visible PM4 side effect behind all GPU work submitted
+            before it. The render thread flushes its open batch and waits for the
+            corresponding guest fences before invoking the action.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SubmitGlobalOrderedGuestAction(System.Action,System.String)">
+            <summary>
+            Enqueues a global CPU-visibility barrier behind every earlier guest-work sequence.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SubmitOrderedGuestActionWithVisibility(System.Action,System.String,System.Boolean)">
+            <summary>
+            V28.0.3 overload used by actions whose ordering direction is known.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SynchronizeGuestMemoryForCpu(System.Int32)">
+            <summary>
+            Sequence currently being executed by the single guest-work consumer.
+            Intended only for address-filtered lifetime diagnostics emitted from a
+            guest-work callback before <see cref="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.CompleteGuestWork(SharpEmu.Libs.VideoOut.VulkanVideoPresenter.PendingGuestWork@)"/> advances it.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.TrySubmitOrderedGuestImageFlip(System.Int32,System.Int32,System.UInt64,System.UInt32,System.UInt32,System.UInt32)">
+            <summary>
+            Enqueues an AGC flip at its exact position in the logical guest queue.
+            The presenter captures the named image into an immutable Vulkan image
+            before it executes later work from the same queue. Presentation then
+            consumes that captured generation rather than the mutable render target.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.SubmitOrderedGuestFlipWait(System.Int32,System.Int32)">
+            <summary>
+            Preserves sceAgcDcbWaitUntilSafeForRendering in queue order. Because an
+            ordered flip first copies the mutable render target into an immutable
+            generation on the same Vulkan queue, reaching this marker proves later
+            rendering cannot change the frame selected by that flip. No CPU wait or
+            event-loop stall is required.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.GuestImageWantsInitialData(System.UInt64)">
+            <summary>
+            On PS5 a render target aliases guest memory, so CPU-prefilled pixels are
+            visible before the first draw. Our Vulkan images start undefined, so the
+            first draw into a new address must seed the image from guest memory.
+            </summary>
+        </member>
+        <member name="F:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.MaxTrackedGuestImageBytes">
+            <summary>
+            Upper bound on the backing extent that guest CPU-write tracking is
+            armed over. Deliberately equal to the presenter-side re-upload budget
+            used by the AGC flip/acquire sync path: arming a range larger than the
+            sync path is willing to read back would fault and dirty forever without
+            ever producing a re-upload, so it is pure cost.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.ShouldTrackGuestImageWrites(System.UInt64)">
+            <summary>
+            Decides whether a guest surface is eligible for CPU-write tracking.
+            The predicate is byte-based on purpose: the cost that actually scales
+            with surface size is the dirty re-upload (one allocation plus a guest
+            memory read of the whole extent per dirty flip), not the arming itself
+            (one mprotect and, per write burst, one fault for the whole range).
+            A resolution cap was the wrong proxy — it ignored bytes-per-texel and
+            volume depth while excluding the 4K UI sheets that most need
+            invalidation.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.ShouldRefreshGuestImageFromCpu(System.Boolean,System.Int64,System.Boolean,System.Int64)">
+            <summary>
+            Decides whether a sampled guest image whose backing memory the parse
+            thread just re-read should be re-uploaded from those bytes.
+            <para>
+            <paramref name="isCpuBacked"/> is a latch that flips false the first
+            time an address is used as a render target and never flips back, so it
+            cannot be the sole gate: a font atlas or UI sheet that was also
+            rendered into is permanently frozen at its first upload afterwards.
+            The write tracker answers the real question. A parse-time generation
+            above zero means a guest CPU store was observed on the backing range,
+            and a generation the last upload does not already cover means those
+            bytes are newer than the host image.
+            </para>
+            <para>
+            Requiring a positive generation keeps the pure GPU-feedback case
+            (render into an image, then sample it) safe: such a surface is tracked
+            but never CPU-written, so its generation stays zero and the live image
+            is preserved instead of being overwritten with guest memory.
+            </para>
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.IsGuestImageUploadKnown(System.UInt64,System.UInt32,System.UInt32)">
+            <summary>
+            Returns whether a storage image already exists on the presenter or an
+            earlier queued dispatch owns its one-time guest-memory initialization.
+            This is intentionally separate from <see cref="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.IsGuestImageAvailable(System.UInt64,System.UInt32,System.UInt32)"/>:
+            a pending image may skip a duplicate upload but is not yet safe for a
+            flip/presentation lookup.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.RequestClose">
+            <summary>
+            Asks a running presenter to close its window; used at emulator
+            shutdown so a main-thread-hosted window loop returns to the pump.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.Presenter.ReturnPooledGuestData(SharpEmu.Libs.VideoOut.VulkanTranslatedGuestDraw)">
+            <summary>
+            Returns a skipped draw's pooled data arrays: draws dropped before
+            resource creation would otherwise strand their rented buffers.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.Presenter.GetOrCreateCachedTextureResource(SharpEmu.Libs.Gpu.GuestDrawTexture)">
+            <summary>
+            Guest textures are static assets in the common case, but every draw
+            used to restage and reupload them (a fresh image, device memory and
+            staging buffer per draw). Cache the uploaded resource per descriptor
+            identity and invalidate through the CPU write tracker, so animated
+            or streamed texture memory still refreshes.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.Presenter.DrainGuestImageCpuSync">
+            <summary>
+            Single dirty consumer per drain: re-upload CPU-written guest images
+            from guest memory, evict matching texture-cache entries, then
+            re-arm each address once. Must not enqueue <see cref="T:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.VulkanGuestImageWrite"/>.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.Presenter.CreateRenderTargetFeedbackSnapshot(SharpEmu.Libs.Gpu.GuestDrawTexture,SharpEmu.Libs.VideoOut.VulkanVideoPresenter.Presenter.GuestImageResource)">
+            <summary>
+            Creates a draw-local sampled image containing the render target's
+            value immediately before the draw. RDNA permits a pixel shader to
+            read an attachment while producing its replacement value, whereas
+            core Vulkan does not permit the same subresource to be both a
+            sampled image and a color attachment. Keeping the two images
+            distinct preserves the guest's read-before-write behavior without
+            a queue idle or an undefined Vulkan feedback loop.
+            </summary>
+            <summary>
+            Creates a draw-local image containing the render target's value
+            immediately before the draw. Sampled and storage descriptors can
+            alias a color attachment on the guest GPU; core Vulkan cannot bind
+            the same subresource as a color attachment and shader image at once.
+            The snapshot preserves the guest read-before-write value while the
+            real target remains the color attachment.
+            </summary>
+        </member>
+        <member name="M:SharpEmu.Libs.VideoOut.VulkanVideoPresenter.Presenter.NarrowVkVertexFormat(Silk.NET.Vulkan.Format,System.UInt32)">
+            <summary>
+            Narrow a sharp's full VkFormat to the component count the VS fetch
+            actually consumes.
+            </summary>
+        </member>
+        <member name="T:SharpEmu.Generated.SysAbiExportRegistry">
+            <summary>Compile-time SysAbi export registry for SharpEmu.Libs.</summary>
+        </member>
+        <member name="M:SharpEmu.Generated.SysAbiExportRegistry.CreateExports(SharpEmu.HLE.Generation)">
+            <summary>
+            Exports effective for the given registration generation, with the same
+            semantics as the reflection scan: an attribute Target of None inherits the
+            registration generation, and exports outside it are skipped.
+            </summary>
+        </member>
+    </members>
+</doc>

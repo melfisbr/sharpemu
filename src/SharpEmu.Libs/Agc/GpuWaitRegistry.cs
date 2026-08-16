@@ -45,6 +45,9 @@ internal static class GpuWaitRegistry
         // guest memory at wake time can miss the transient satisfied window.
         // Latching records satisfaction at the moment of the write instead.
         public bool Latched;
+        // V54: production sequence already present when this logical wait was
+        // first registered. Older history belongs to a recycled-label generation.
+        public long ProducedSequenceAtRegistration;
         // Non-zero for indirect-dispatch dimension retries: a bounded deadline
         // (Stopwatch ticks) after which the waiter is resumed even if unsatisfied,
         // so a legitimately empty indirect dispatch can never stall forever.
@@ -53,12 +56,31 @@ internal static class GpuWaitRegistry
 
     private static readonly object _gate = new();
     private static readonly Dictionary<ulong, List<WaitingDcb>> _waiters = new();
+    // Soft bound on suspended waiters. Producerless waits never expire through the
+    // normal drain paths, so long boot storms must not grow this table without bound.
+    private const int MaxRegisteredWaiters = 4096;
     // The last value each label producer wrote. Used only by the deadlock
     // breaker: our serial submission parser cannot model two GPU queues running
     // concurrently, so a label written -> reset -> re-waited across queues can
     // cycle forever even though a real producer did signal it. Keyed by (memory,
     // address) so distinct guest processes never alias.
-    private static readonly Dictionary<(object, ulong), ulong> _lastProduced = new();
+    private readonly record struct ProducedLabelValue(ulong Value, long Sequence);
+    private static readonly Dictionary<(object, ulong), ProducedLabelValue> _lastProduced = new();
+    private static long _producedSequence;
+    private static int _waiterCount;
+
+    // Per-thread CPU-memory decorators can wrap the same guest address space.
+    // Synchronization registries must key by the shared root, otherwise a wait
+    // registered on one native worker is invisible to a producer on another.
+    private static object? Canonicalize(object? memory)
+    {
+        while (memory is SharpEmu.HLE.ICpuMemoryWrapper wrapper)
+        {
+            memory = wrapper.Inner;
+        }
+
+        return memory;
+    }
 
     public static int Count
     {
@@ -66,19 +88,14 @@ internal static class GpuWaitRegistry
         {
             lock (_gate)
             {
-                var total = 0;
-                foreach (var (_, list) in _waiters)
-                {
-                    total += list.Count;
-                }
-
-                return total;
+                return _waiterCount;
             }
         }
     }
 
     public static int CountForMemory(object memory)
     {
+        memory = Canonicalize(memory)!;
         lock (_gate)
         {
             var total = 0;
@@ -116,6 +133,7 @@ internal static class GpuWaitRegistry
     /// </summary>
     public static OutstandingSnapshot SnapshotOutstanding(object? memory = null)
     {
+        memory = Canonicalize(memory);
         lock (_gate)
         {
             var outstanding = 0;
@@ -162,18 +180,54 @@ internal static class GpuWaitRegistry
         }
     }
 
+    // V23: canonical wait-registry identity and exact compare semantics.
+    // V54: generation-aware registration for recycled GPU labels.
     public static void Register(ulong address, WaitingDcb waiter)
     {
         waiter.WaitAddress = address;
+        waiter.Memory = Canonicalize(waiter.Memory);
         lock (_gate)
         {
+            // V61.23.5: V61.23.1 eager epoch deletion removed; preserve producer history until a real producer updates it.
             if (!_waiters.TryGetValue(address, out var list))
             {
                 list = new List<WaitingDcb>();
                 _waiters.Add(address, list);
             }
 
+            for (var i = list.Count - 1; i >= 0; i--)
+            {
+                var existing = list[i];
+                if (ReferenceEquals(existing.Memory, waiter.Memory) &&
+                    ReferenceEquals(existing.State, waiter.State) &&
+                    existing.SubmissionId == waiter.SubmissionId &&
+                    existing.ResumeAddress == waiter.ResumeAddress &&
+                    existing.ResumeOffset == waiter.ResumeOffset &&
+                    string.Equals(existing.QueueName, waiter.QueueName, StringComparison.Ordinal))
+                {
+                    waiter.ProducedSequenceAtRegistration = existing.ProducedSequenceAtRegistration;
+                    waiter.Latched |= existing.Latched;
+                    waiter.StaleReported |= existing.StaleReported;
+                    if (existing.RegisteredTicks != 0)
+                    {
+                        waiter.RegisteredTicks = existing.RegisteredTicks;
+                    }
+                    list[i] = waiter;
+                    return;
+                }
+            }
+
+            waiter.ProducedSequenceAtRegistration =
+                _lastProduced.TryGetValue((waiter.Memory!, address), out var producedAtRegistration)
+                    ? producedAtRegistration.Sequence
+                    : _producedSequence;
+
             list.Add(waiter);
+            _waiterCount++;
+            if (_waiterCount > MaxRegisteredWaiters)
+            {
+                PruneOrphanedWaitersLocked(MaxRegisteredWaiters);
+            }
         }
     }
 
@@ -187,6 +241,7 @@ internal static class GpuWaitRegistry
         object memory,
         Func<ulong, bool, ulong?> readValue)
     {
+        memory = Canonicalize(memory)!;
         List<WaitingDcb>? woken = null;
         lock (_gate)
         {
@@ -214,7 +269,7 @@ internal static class GpuWaitRegistry
 
                     woken ??= new List<WaitingDcb>();
                     woken.Add(list[i]);
-                    list.RemoveAt(i);
+                    RemoveWaiterAtLocked(list, i);
                 }
 
                 if (list.Count == 0)
@@ -247,6 +302,7 @@ internal static class GpuWaitRegistry
         long nowTicks,
         long maxAgeTicks)
     {
+        memory = Canonicalize(memory)!;
         List<WaitingDcb>? stale = null;
         lock (_gate)
         {
@@ -283,6 +339,7 @@ internal static class GpuWaitRegistry
         ulong start,
         ulong length)
     {
+        memory = Canonicalize(memory)!;
         var matches = new List<(ulong Address, int Count)>();
         if (length == 0)
         {
@@ -339,6 +396,7 @@ internal static class GpuWaitRegistry
         ulong start,
         ulong length)
     {
+        memory = Canonicalize(memory)!;
         var matches = new List<WatchedLabelSnapshot>();
         if (length == 0)
         {
@@ -401,6 +459,7 @@ internal static class GpuWaitRegistry
     /// </summary>
     public static bool LatchSatisfiedByValue(object memory, ulong address, ulong value)
     {
+        memory = Canonicalize(memory)!;
         lock (_gate)
         {
             return LatchSatisfiedByValueLocked(memory, address, value);
@@ -444,6 +503,7 @@ internal static class GpuWaitRegistry
     /// </summary>
     public static List<WaitingDcb>? CollectExpiredRetries(object memory, long nowTicks)
     {
+        memory = Canonicalize(memory)!;
         List<WaitingDcb>? expired = null;
         lock (_gate)
         {
@@ -462,7 +522,7 @@ internal static class GpuWaitRegistry
 
                     expired ??= new List<WaitingDcb>();
                     expired.Add(waiter);
-                    list.RemoveAt(i);
+                    RemoveWaiterAtLocked(list, i);
                 }
 
                 if (list.Count == 0)
@@ -484,8 +544,50 @@ internal static class GpuWaitRegistry
         return expired;
     }
 
+    /// <summary>
+    /// Updates the bounded retry deadline for a specific suspended packet.
+    /// Indirect-dispatch waits use this after an ordered GPU-visibility probe:
+    /// the initial deadline protects against a renderer that never reaches the
+    /// probe, while a short post-visibility grace period handles genuinely empty
+    /// dispatches without racing first-use shader compilation.
+    /// </summary>
+    public static bool UpdateRetryDeadline(
+        object memory,
+        ulong waitAddress,
+        ulong resumeAddress,
+        long retryDeadlineTicks)
+    {
+        memory = Canonicalize(memory)!;
+        lock (_gate)
+        {
+            if (!_waiters.TryGetValue(waitAddress, out var list))
+            {
+                return false;
+            }
+
+            var updated = false;
+            for (var index = 0; index < list.Count; index++)
+            {
+                var waiter = list[index];
+                if (waiter.RetryDeadlineTicks == 0 ||
+                    !ReferenceEquals(waiter.Memory, memory) ||
+                    waiter.ResumeAddress != resumeAddress)
+                {
+                    continue;
+                }
+
+                waiter.RetryDeadlineTicks = retryDeadlineTicks;
+                list[index] = waiter;
+                updated = true;
+            }
+
+            return updated;
+        }
+    }
+
     public static List<WaitingDcb>? CollectAllForMemory(object memory)
     {
+        memory = Canonicalize(memory)!;
         List<WaitingDcb>? collected = null;
         lock (_gate)
         {
@@ -501,7 +603,7 @@ internal static class GpuWaitRegistry
 
                     collected ??= new List<WaitingDcb>();
                     collected.Add(list[index]);
-                    list.RemoveAt(index);
+                    RemoveWaiterAtLocked(list, index);
                 }
 
                 if (list.Count == 0)
@@ -567,10 +669,117 @@ internal static class GpuWaitRegistry
         }
     }
 
+    /// <summary>Drops the oldest waiters until at most <paramref name="keepAtMost"/> remain, preferring producerless orphans.</summary>
+    private static void PruneOrphanedWaitersLocked(int keepAtMost)
+    {
+        if (_waiterCount <= keepAtMost)
+        {
+            return;
+        }
+
+        DropOldestWaitersLocked(keepAtMost, orphansOnly: true);
+        if (_waiterCount > keepAtMost)
+        {
+            DropOldestWaitersLocked(keepAtMost, orphansOnly: false);
+        }
+    }
+
+    private static void DropOldestWaitersLocked(int keepAtMost, bool orphansOnly)
+    {
+        if (_waiterCount <= keepAtMost)
+        {
+            return;
+        }
+
+        var candidates = new List<(ulong Address, int Index, long RegisteredTicks)>(_waiterCount);
+        foreach (var (address, list) in _waiters)
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                var waiter = list[i];
+                if (orphansOnly &&
+                    (waiter.Latched ||
+                     waiter.RetryDeadlineTicks != 0 ||
+                     (waiter.Memory is not null && _lastProduced.ContainsKey((waiter.Memory, address)))))
+                {
+                    continue;
+                }
+                candidates.Add((address, i, waiter.RegisteredTicks));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        candidates.Sort(static (left, right) => left.RegisteredTicks.CompareTo(right.RegisteredTicks));
+        var toDrop = Math.Min(candidates.Count, _waiterCount - keepAtMost);
+        var dropSet = candidates.GetRange(0, toDrop);
+        dropSet.Sort(static (left, right) =>
+        {
+            var addressCompare = left.Address.CompareTo(right.Address);
+            return addressCompare != 0 ? addressCompare : right.Index.CompareTo(left.Index);
+        });
+
+        List<ulong>? emptied = null;
+        foreach (var (address, index, _) in dropSet)
+        {
+            if (!_waiters.TryGetValue(address, out var list) || index < 0 || index >= list.Count)
+            {
+                continue;
+            }
+            RemoveWaiterAtLocked(list, index);
+            if (list.Count == 0)
+            {
+                emptied ??= new List<ulong>();
+                emptied.Add(address);
+            }
+        }
+
+        if (emptied is not null)
+        {
+            foreach (var address in emptied)
+            {
+                _waiters.Remove(address);
+            }
+        }
+    }
+
+    private static void RemoveWaiterAtLocked(List<WaitingDcb> list, int index)
+    {
+        list.RemoveAt(index);
+        if (_waiterCount > 0)
+        {
+            _waiterCount--;
+        }
+    }
+
+    /// <summary>Records the value a label producer wrote, for the deadlock
+    /// breaker. Also latches any already-waiting waiter it satisfies.</summary>
+    public static bool TryGetLastProduced(
+        object memory,
+        ulong address,
+        out ulong value)
+    {
+        memory = Canonicalize(memory)!;
+        lock (_gate)
+        {
+            if (_lastProduced.TryGetValue((memory, address), out var produced))
+            {
+                value = produced.Value;
+                return true;
+            }
+            value = 0;
+            return false;
+        }
+    }
+
     /// <summary>Records the value a label producer wrote, for the deadlock
     /// breaker. Also latches any already-waiting waiter it satisfies.</summary>
     public static bool RecordProduced(object memory, ulong address, ulong value)
     {
+        memory = Canonicalize(memory)!;
         lock (_gate)
         {
             if (_lastProduced.Count >= 8192)
@@ -585,7 +794,9 @@ internal static class GpuWaitRegistry
                 PruneUnwatchedProducedLocked();
             }
 
-            _lastProduced[(memory, address)] = value;
+            var sequence = ++_producedSequence;
+            _lastProduced[(memory, address)] =
+                new ProducedLabelValue(value, sequence);
 
             // Updating the producer history and latching waiters must be one
             // atomic operation. Previously Register() could insert a new waiter
@@ -596,18 +807,68 @@ internal static class GpuWaitRegistry
     }
 
     /// <summary>
-    /// Breaks cross-queue GPU deadlocks the serial parser cannot avoid: returns
-    /// (and removes) waiters that have been stuck longer than
-    /// <paramref name="minAgeTicks"/> and whose condition is satisfied by the
-    /// last value a real producer wrote to their label — even though guest
-    /// memory has since been reset. Never fabricates a value: a waiter is only
-    /// released when an actual producer signalled it at least once.
+    /// Legacy age-gated fallback retained for safety. V55 normally consumes
+    /// post-registration produced evidence through
+    /// CollectProducedSatisfiedAfterRegistration before this method is reached.
     /// </summary>
+    // V54: V53 queue-cycle shortcut removed. The V53 capture showed
+    // 113/113 detected cycles were cycle_length=1 self-queue cases.
+
+    // V55: normal generation-aware produced wake.
+    // A producer value written after the waiter was registered is not a
+    // deadlock heuristic; it is direct synchronization evidence. Collect it
+    // immediately even when guest memory has already recycled the label.
+    public static List<WaitingDcb>? CollectProducedSatisfiedAfterRegistration(
+        object memory)
+    {
+        memory = Canonicalize(memory)!;
+        List<WaitingDcb>? satisfied = null;
+        lock (_gate)
+        {
+            List<ulong>? emptied = null;
+            foreach (var (address, list) in _waiters)
+            {
+                for (var index = list.Count - 1; index >= 0; index--)
+                {
+                    var waiter = list[index];
+                    if (!ReferenceEquals(waiter.Memory, memory) ||
+                        !_lastProduced.TryGetValue((memory, address), out var produced) ||
+                        produced.Sequence <= waiter.ProducedSequenceAtRegistration ||
+                        !Compare(waiter, produced.Value))
+                    {
+                        continue;
+                    }
+
+                    satisfied ??= new List<WaitingDcb>();
+                    satisfied.Add(waiter);
+                    RemoveWaiterAtLocked(list, index);
+                }
+
+                if (list.Count == 0)
+                {
+                    emptied ??= new List<ulong>();
+                    emptied.Add(address);
+                }
+            }
+
+            if (emptied is not null)
+            {
+                foreach (var address in emptied)
+                {
+                    _waiters.Remove(address);
+                }
+            }
+        }
+
+        return satisfied;
+    }
+
     public static List<WaitingDcb>? CollectDeadlockBroken(
         object memory,
         long nowTicks,
         long minAgeTicks)
     {
+        memory = Canonicalize(memory)!;
         List<WaitingDcb>? broken = null;
         lock (_gate)
         {
@@ -620,14 +881,15 @@ internal static class GpuWaitRegistry
                     if (!ReferenceEquals(waiter.Memory, memory) ||
                         nowTicks - waiter.RegisteredTicks < minAgeTicks ||
                         !_lastProduced.TryGetValue((memory, address), out var produced) ||
-                        !Compare(waiter, produced))
+                        produced.Sequence <= waiter.ProducedSequenceAtRegistration ||
+                        !Compare(waiter, produced.Value))
                     {
                         continue;
                     }
 
                     broken ??= new List<WaitingDcb>();
                     broken.Add(waiter);
-                    list.RemoveAt(i);
+                    RemoveWaiterAtLocked(list, i);
                 }
 
                 if (list.Count == 0)
@@ -662,8 +924,6 @@ internal static class GpuWaitRegistry
             4 => masked != reference,
             5 => masked >= reference,
             6 => masked > reference,
-            // 7 is reserved; treating it as satisfied keeps a malformed packet
-            // from suspending forever.
             _ => true,
         };
     }
@@ -674,6 +934,8 @@ internal static class GpuWaitRegistry
         {
             _waiters.Clear();
             _lastProduced.Clear();
+            _producedSequence = 0;
+            _waiterCount = 0;
         }
     }
 }
