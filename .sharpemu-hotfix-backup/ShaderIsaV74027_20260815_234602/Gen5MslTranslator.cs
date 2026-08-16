@@ -1575,26 +1575,6 @@ public static partial class Gen5MslTranslator
                         $"sharpemu_lds[{LdsIndex(address, control.Offset0)}]");
                     return true;
                 }
-                // SHARPEMU_V74_0_27_DS_READ64_MSL
-                case "DsReadB64":
-                {
-                    if (instruction.Destinations.Count < 2)
-                    {
-                        error = "missing LDS read64 operand";
-                        return false;
-                    }
-
-                    var address = Temp("uint", RawSource(instruction, 0));
-                    var offset = control.Offset0 | (control.Offset1 << 8);
-                    for (var dword = 0; dword < 2; dword++)
-                    {
-                        StoreVector(
-                            instruction.Destinations[dword].Value,
-                            $"sharpemu_lds[{LdsIndex(address, offset + (uint)(dword * sizeof(uint)))}]");
-                    }
-
-                    return true;
-                }
                 case "DsReadB96":
                 case "DsReadB128":
                 {
@@ -1611,30 +1591,6 @@ public static partial class Gen5MslTranslator
                         StoreVector(
                             instruction.Destinations[dword].Value,
                             $"sharpemu_lds[{LdsIndex(address, control.Offset0 + (uint)(dword * sizeof(uint)))}]");
-                    }
-
-                    return true;
-                }
-                case "DsRead2B64":
-                case "DsRead2St64B64":
-                {
-                    if (instruction.Destinations.Count < 4)
-                    {
-                        error = "missing LDS read2-b64 operand";
-                        return false;
-                    }
-
-                    var st64 = instruction.Opcode == "DsRead2St64B64";
-                    var address = Temp("uint", RawSource(instruction, 0));
-                    var firstOffset = EffectiveDsPair64OffsetBytes(control.Offset0, st64);
-                    var secondOffset = EffectiveDsPair64OffsetBytes(control.Offset1, st64);
-                    for (var dword = 0; dword < 2; dword++)
-                    {
-                        var byteDelta = (uint)(dword * sizeof(uint));
-                        StoreVector(instruction.Destinations[dword].Value,
-                            $"sharpemu_lds[{LdsIndex(address, firstOffset + byteDelta)}]");
-                        StoreVector(instruction.Destinations[dword + 2].Value,
-                            $"sharpemu_lds[{LdsIndex(address, secondOffset + byteDelta)}]");
                     }
 
                     return true;
@@ -1666,9 +1622,6 @@ public static partial class Gen5MslTranslator
 
         private static uint EffectiveDsPairOffsetBytes(uint offset, bool st64) =>
             offset * (st64 ? 256u : sizeof(uint));
-
-        private static uint EffectiveDsPair64OffsetBytes(uint offset, bool st64) =>
-            offset * (st64 ? 512u : 2u * sizeof(uint));
 
         private bool TryEmitResolvedMemoryAccess(
             string opcode,

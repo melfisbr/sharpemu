@@ -539,44 +539,6 @@ public static partial class Gen5SpirvTranslator
                 case "VMulLoI32":
                     result = EmitIntegerBinary(instruction, SpirvOp.IMul);
                     break;
-                // SHARPEMU_V74_0_27_VOP2_I24_SPIRV
-                case "VMulI32I24":
-                {
-                    var left = ShiftRightArithmetic(
-                        ShiftLeftLogical(GetRawSource(instruction, 0), UInt(8)),
-                        UInt(8));
-                    var right = ShiftRightArithmetic(
-                        ShiftLeftLogical(GetRawSource(instruction, 1), UInt(8)),
-                        UInt(8));
-                    result = _module.AddInstruction(SpirvOp.IMul, _uintType, left, right);
-                    break;
-                }
-                case "VMulHiI32I24":
-                {
-                    var left32 = ShiftRightArithmetic(
-                        ShiftLeftLogical(GetRawSource(instruction, 0), UInt(8)),
-                        UInt(8));
-                    var right32 = ShiftRightArithmetic(
-                        ShiftLeftLogical(GetRawSource(instruction, 1), UInt(8)),
-                        UInt(8));
-                    var wideLeft = _module.AddInstruction(
-                        SpirvOp.SConvert, _longType, Bitcast(_intType, left32));
-                    var wideRight = _module.AddInstruction(
-                        SpirvOp.SConvert, _longType, Bitcast(_intType, right32));
-                    var product = _module.AddInstruction(
-                        SpirvOp.IMul, _longType, wideLeft, wideRight);
-                    result = Bitcast(
-                        _uintType,
-                        _module.AddInstruction(
-                            SpirvOp.SConvert,
-                            _intType,
-                            _module.AddInstruction(
-                                SpirvOp.ShiftRightArithmetic,
-                                _longType,
-                                product,
-                                _module.Constant64(_longType, 32))));
-                    break;
-                }
                 case "VMulU32U24":
                 {
                     // V_MUL_U32_U24 multiplies only the low unsigned 24 bits.

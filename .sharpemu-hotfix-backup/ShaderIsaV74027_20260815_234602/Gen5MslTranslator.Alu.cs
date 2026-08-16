@@ -273,11 +273,6 @@ public static partial class Gen5MslTranslator
                 // multiply (only the Hi/Mad forms mask); mirror it exactly.
                 "VMulLoU32" or "VMulLoI32" or "VMulU32U24" =>
                     $"(({RawSource(instruction, 0)}) * ({RawSource(instruction, 1)}))",
-                // SHARPEMU_V74_0_27_VOP2_I24_MSL
-                "VMulI32I24" =>
-                    $"((uint)(as_type<int>(({RawSource(instruction, 0)}) << 8u) >> 8) * (uint)(as_type<int>(({RawSource(instruction, 1)}) << 8u) >> 8))",
-                "VMulHiI32I24" =>
-                    AsUInt($"mulhi((as_type<int>(({RawSource(instruction, 0)}) << 8u) >> 8), (as_type<int>(({RawSource(instruction, 1)}) << 8u) >> 8))"),
                 "VMulHiU32" =>
                     $"mulhi({RawSource(instruction, 0)}, {RawSource(instruction, 1)})",
                 "VMulHiU32U24" =>

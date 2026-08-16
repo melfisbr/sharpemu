@@ -1003,10 +1003,6 @@ public static class Gen5ShaderTranslator
             0x04 => "VSubF32",
             0x05 => "VSubrevF32",
             0x08 => "VMulF32",
-            // SHARPEMU_V74_0_27_RDNA2_SHADER_ISA
-            // LLVM AMDGPU GFX10 encodes signed 24-bit VOP2 multiplies at 0x09/0x0A.
-            0x09 => "VMulI32I24",
-            0x0A => "VMulHiI32I24",
             0x0B => "VMulU32U24",
             0x0C => "VMulHiU32U24",
             0x0F => "VMinF32",
@@ -1340,10 +1336,6 @@ public static class Gen5ShaderTranslator
             0x37 => "DsRead2B32",
             0x38 => "DsRead2St64B32",
             0x4D => "DsWriteB64",
-            // GFX10/RDNA2 64-bit LDS read family.
-            0x76 => "DsReadB64",
-            0x77 => "DsRead2B64",
-            0x78 => "DsRead2St64B64",
             // RDNA2: DS_STORE_ADDTID_B32 (M0 + TID*4 + 16-bit inst offset).
             0xB0 => "DsStoreAddtidB32",
             // GFX10/RDNA2 paired ADDTID LDS load.
@@ -2187,19 +2179,9 @@ public static class Gen5ShaderTranslator
                     "DsReadB32" or "DsReadAddtidB32" or "DsSwizzleB32" => [
                         Gen5Operand.Vector(vectorDestination),
                     ],
-                    "DsReadB64" => [
-                        Gen5Operand.Vector(vectorDestination),
-                        Gen5Operand.Vector(vectorDestination + 1),
-                    ],
                     "DsRead2B32" or "DsRead2St64B32" => [
                         Gen5Operand.Vector(vectorDestination),
                         Gen5Operand.Vector(vectorDestination + 1),
-                    ],
-                    "DsRead2B64" or "DsRead2St64B64" => [
-                        Gen5Operand.Vector(vectorDestination),
-                        Gen5Operand.Vector(vectorDestination + 1),
-                        Gen5Operand.Vector(vectorDestination + 2),
-                        Gen5Operand.Vector(vectorDestination + 3),
                     ],
                     "DsReadB96" => [
                         Gen5Operand.Vector(vectorDestination),

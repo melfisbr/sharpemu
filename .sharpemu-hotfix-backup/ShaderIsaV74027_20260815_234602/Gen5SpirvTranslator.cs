@@ -2355,27 +2355,6 @@ public static partial class Gen5SpirvTranslator
                     StoreV(instruction.Destinations[0].Value, value);
                     return true;
                 }
-                // SHARPEMU_V74_0_27_DS_READ64_SPIRV
-                case "DsReadB64":
-                {
-                    if (instruction.Destinations.Count < 2 || instruction.Sources.Count < 1)
-                    {
-                        error = "missing LDS read64 operand";
-                        return false;
-                    }
-
-                    var address = GetRawSource(instruction, 0);
-                    var offset = control.Offset0 | (control.Offset1 << 8);
-                    for (var dword = 0; dword < 2; dword++)
-                    {
-                        var value = Load(
-                            _uintType,
-                            LdsPointer(address, offset + (uint)(dword * sizeof(uint))));
-                        StoreV(instruction.Destinations[dword].Value, value);
-                    }
-
-                    return true;
-                }
                 case "DsReadB96":
                 case "DsReadB128":
                 {
@@ -2397,30 +2376,6 @@ public static partial class Gen5SpirvTranslator
                             _uintType,
                             LdsPointer(address, offset + (uint)(dword * sizeof(uint))));
                         StoreV(instruction.Destinations[dword].Value, value);
-                    }
-
-                    return true;
-                }
-                case "DsRead2B64":
-                case "DsRead2St64B64":
-                {
-                    if (instruction.Destinations.Count < 4 || instruction.Sources.Count < 1)
-                    {
-                        error = "missing LDS read2-b64 operand";
-                        return false;
-                    }
-
-                    var st64 = instruction.Opcode == "DsRead2St64B64";
-                    var address = GetRawSource(instruction, 0);
-                    var firstOffset = EffectiveDsPair64OffsetBytes(control.Offset0, st64);
-                    var secondOffset = EffectiveDsPair64OffsetBytes(control.Offset1, st64);
-                    for (var dword = 0; dword < 2; dword++)
-                    {
-                        var byteDelta = (uint)(dword * sizeof(uint));
-                        var first = Load(_uintType, LdsPointer(address, firstOffset + byteDelta));
-                        var second = Load(_uintType, LdsPointer(address, secondOffset + byteDelta));
-                        StoreV(instruction.Destinations[dword].Value, first);
-                        StoreV(instruction.Destinations[dword + 2].Value, second);
                     }
 
                     return true;
@@ -2464,10 +2419,6 @@ public static partial class Gen5SpirvTranslator
 
         private static uint EffectiveDsPairOffsetBytes(uint offset, bool st64 = false) =>
             offset * (st64 ? 256u : sizeof(uint));
-
-        // 64-bit pair offsets use 8-byte elements; ST64 strides 64 such elements.
-        private static uint EffectiveDsPair64OffsetBytes(uint offset, bool st64) =>
-            offset * (st64 ? 512u : 2u * sizeof(uint));
 
         private uint LdsPointer(uint address, uint offsetBytes)
         {
