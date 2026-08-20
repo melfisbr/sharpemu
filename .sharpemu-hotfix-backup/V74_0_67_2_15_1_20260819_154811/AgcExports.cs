@@ -1,0 +1,23374 @@
+// Copyright (C) 2026 SharpEmu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+using System.Collections.Concurrent;
+using SharpEmu.HLE;
+using SharpEmu.Libs.Media;
+using SharpEmu.Libs.Gpu;
+using SharpEmu.ShaderCompiler;
+using SharpEmu.Libs.Kernel;
+using SharpEmu.Libs.VideoOut;
+using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+
+namespace SharpEmu.Libs.Agc;
+
+public static partial class AgcExports
+{
+    // V32_FORK_AGC_CONSTANTS: evidence-gated semantic strengthening.
+    private const int V32AgcDriverErrorInvalidArgument = unchecked((int)0x8A6DFFFF);
+    private const uint V32AgcDriverTfRingMaximumSize = 0x4000;
+    // The backend is a process-fixed singleton, so its offset-alignment
+    // requirement is snapshot once: several per-draw paths (shader-key
+    // hashing, buffer-offset alignment) read it in loops.
+    private static readonly ulong _storageBufferOffsetAlignment =
+        GuestGpu.Current.GuestStorageBufferOffsetAlignment;
+
+#if DEBUG
+    static AgcExports()
+    {
+        ValidateWriteDataControlDecoders();
+        ValidateDispatchInitiators();
+        ValidateSubmittedQueueAndReleaseMemDecoders();
+        ValidateAcquireMemAndQueueResetDecoders();
+        ValidateDepthTargetDecoder();
+    }
+#endif
+
+    private const uint ShaderFileHeader = 0x34333231;
+    private const uint ShaderVersion = 0x18;
+    private const uint ItNop = 0x10;
+    private const uint ItSetBase = 0x11;
+    private const uint ItIndexBufferSize = 0x13;
+    private const uint ItIndexBase = 0x26;
+    private const uint ItDrawIndirect = 0x24;
+    private const uint ItDrawIndexIndirect = 0x25;
+    private const uint ItDrawIndex2 = 0x27;
+    private const uint ItIndexType = 0x2A;
+    private const uint ItDrawIndexAuto = 0x2D;
+    private const uint ItNumInstances = 0x2F;
+    private const uint ItDrawIndexMultiAuto = 0x30;
+    private const uint ItDrawIndexOffset2 = 0x35;
+    private const uint ItDrawIndexIndirectMulti = 0x38;
+    private const uint DrawIndexedIndirectArgsSize = 20;
+    private const uint DrawIndexedIndirectMaxScan = 1024;
+    private const uint ItWriteData = 0x37;
+    private const uint ItDispatchDirect = 0x15;
+    private const uint ItDispatchIndirect = 0x16;
+    private const uint ItSetPredication = 0x20;
+    private const uint ItCondExec = 0x22;
+    private const uint ItWaitRegMem = 0x3C;
+    private const uint ItIndirectBuffer = 0x3F;
+    private const uint ItEventWrite = 0x46;
+    private const uint ItReleaseMem = 0x49;
+    private const uint ItDmaData = 0x50;
+    private const uint ItRewind = 0x59;
+    private const uint ItSetContextReg = 0x69;
+    private const uint ItSetShReg = 0x76;
+    private const uint ItSetUconfigReg = 0x79;
+    private const uint RewindValidBit = 1u << 31;
+    private const uint RewindOffloadEnableBit = 1u << 24;
+    private const uint ItGetLodStats = 0x8E;
+    // V25: geometry draw pipeline audit and complete PM4 draw opcode identity.
+    private static readonly HashSet<uint> KnownPm4Opcodes =
+    [
+        ItNop, ItSetBase, ItIndexBufferSize, ItIndexBase, ItDrawIndirect,
+        ItDrawIndexIndirect, ItDrawIndex2, ItIndexType, ItDrawIndexAuto,
+        ItNumInstances, ItDrawIndexMultiAuto, ItDrawIndexOffset2,
+        ItDrawIndexIndirectMulti, ItWriteData, ItDispatchDirect, ItDispatchIndirect,
+        ItSetPredication, ItCondExec, ItWaitRegMem, ItIndirectBuffer, ItEventWrite,
+        ItReleaseMem, ItDmaData, ItSetContextReg, ItSetShReg,
+        ItSetUconfigReg, ItGetLodStats,
+    ];
+    private const uint RZero = 0x00;
+    private const uint RDrawIndexAuto = 0x04;
+    private const uint RDrawReset = 0x05;
+    private const uint RWaitFlipDone = 0x06;
+    private const uint RAcbReset = 0x09;
+    private const uint RWaitMem32 = 0x0A;
+    private const uint RPushMarker = 0x0B;
+    private const uint RPopMarker = 0x0C;
+    private const uint RShRegsIndirect = 0x11;
+    private const uint RCxRegsIndirect = 0x12;
+    private const uint RUcRegsIndirect = 0x13;
+    private const uint RAcquireMem = 0x14;
+    private const uint RWriteData = 0x15;
+    private const uint RWaitMem64 = 0x16;
+    private const uint RFlip = 0x17;
+    private const uint RReleaseMem = 0x18;
+    private const uint RDmaData = 0x19;
+    private const uint RIndexBase = 0x1B;
+    private const uint RIndexCount = 0x1C;
+    // Upstream 0.0.3: command rings advance through contiguous 64 KiB chunks.
+    private const uint RingChunkBytes = 0x10000;
+    // Parse window for a ring resuming at appended commands.
+    private const uint RingResumeWindowDwords = 0x8000;
+    private const uint SpiShaderPgmLoPs = 0x8;
+    private const uint SpiShaderPgmHiPs = 0x9;
+    private const uint SpiShaderPgmLoVs = 0x48;
+    private const uint SpiShaderPgmHiVs = 0x49;
+    private const uint SpiShaderPgmLoEs = 0xC8;
+    private const uint SpiShaderPgmHiEs = 0xC9;
+    private const uint SpiShaderPgmLoHs = 0x108;
+    private const uint SpiShaderPgmHiHs = 0x109;
+    private const uint SpiShaderPgmRsrc1Hs = 0x10A;
+    private const uint SpiShaderPgmLoLs = 0x148;
+    private const uint SpiShaderPgmHiLs = 0x149;
+    // Not 0x8A/0x8B - those are SPI_SHADER_PGM_RSRC1/RSRC2_GS, and reading them
+    // as an address yields a 58-bit value (observed live: 0x30004622C008300).
+    private const uint SpiShaderPgmLoGs = 0x88;
+    private const uint SpiShaderPgmHiGs = 0x89;
+    private const uint SpiShaderPgmRsrc1Gs = 0x8A;
+    private const uint SpiShaderPgmChksumGs = 0x80;
+    private const uint SpiPsInputEna = 0x1B3;
+    private const uint SpiPsInputAddr = 0x1B4;
+    private const uint ComputePgmLo = 0x20C;
+    private const uint ComputePgmHi = 0x20D;
+    private const uint ComputePgmRsrc2 = 0x213;
+    private const uint ComputeStartX = 0x204;
+    private const uint ComputeStartY = 0x205;
+    private const uint ComputeStartZ = 0x206;
+    private const uint ComputeNumThreadX = 0x207;
+    private const uint ComputeNumThreadY = 0x208;
+    private const uint ComputeNumThreadZ = 0x209;
+    private const uint SpiPsInputCntl0 = 0x191;
+    private const uint VgtPrimitiveType = 0x242;
+    private const uint VgtIndexType = 0x243;
+    // GE_INDX_OFFSET â€” base vertex for DrawIndexed / firstVertex for
+    // DrawIndexAuto. Glyph meshes and UI icon batches rely on this.
+    private const uint GeIndxOffset = 0x24A;
+    private const uint PaScScreenScissorTl = 0x0C;
+    private const uint PaScScreenScissorBr = 0x0D;
+    private const uint CbTargetMask = 0x8E;
+    private const uint PaScWindowOffset = 0x80;
+    private const uint PaScWindowScissorTl = 0x81;
+    private const uint PaScWindowScissorBr = 0x82;
+    private const uint PaScGenericScissorTl = 0x90;
+    private const uint PaScGenericScissorBr = 0x91;
+    private const uint PaScVportScissor0Tl = 0x94;
+    private const uint PaScVportScissor0Br = 0x95;
+    private const uint PaClVportXScale = 0x10F;
+    private const uint PaClVportXOffset = 0x110;
+    private const uint PaClVportYScale = 0x111;
+    private const uint PaClVportYOffset = 0x112;
+    private const uint PaScVportZMin0 = 0xB4;
+    private const uint PaScVportZMax0 = 0xB5;
+    private const uint CbColorControl = 0x202;
+    private const uint CbBlendRed = 0x105;
+    private const uint CbBlendGreen = 0x106;
+    private const uint CbBlendBlue = 0x107;
+    private const uint CbBlendAlpha = 0x108;
+    private const uint CbColor0Base = 0x318;
+    private const uint CbColorRegisterStride = 15;
+    private const uint CbColor0Info = 0x31C;
+    private const uint CbColor0ClearWord0 = 0x323;
+    private const uint CbColor0ClearWord1 = 0x324;
+    private const uint CbColor0BaseExt = 0x390;
+    private const uint CbColor0Attrib2 = 0x3B0;
+    private const uint CbColor0Attrib3 = 0x3B8;
+    // V24: decode GFX10 CB_COLORn_DCC_BASE for metadata-backed RT identity.
+    // AMD GFX10: DCC_BASE low registers live in the 15-register color-target
+    // stride; DCC_BASE_EXT is a packed per-slot array at 0x3A8..0x3AF.
+    private const uint CbColor0DccBase = 0x325;
+    private const uint CbColor0DccBaseExt = 0x3A8;
+    // CB_COLORn_INFO.DCC_ENABLE (gc_10_1_0_sh_mask.h). On GFX10 the legacy
+    // FAST_CLEAR and COMPRESSION bits stay clear because DCC, not CMASK,
+    // carries the compression.
+    private const uint CbColorInfoDccEnableMask = 1u << 28;
+    private const uint CbBlend0Control = 0x1E0;
+    private const uint PaScModeCntl0 = 0x292;
+    // GFX10 DB context registers (register byte address minus 0x28000, / 4).
+    private const uint DbRenderControl = 0x000;
+    private const uint DbDepthView = 0x002;
+    private const uint DbDepthSizeXy = 0x007;
+    private const uint DbDepthClear = 0x00B;
+    private const uint DbZInfo = 0x010;
+    private const uint DbZReadBase = 0x012;
+    private const uint DbZWriteBase = 0x014;
+    private const uint DbZReadBaseHi = 0x01A;
+    private const uint DbZWriteBaseHi = 0x01C;
+    private const int ColorTargetCount = 8;
+    private const uint PsTextureUserDataRegister = 0xC;
+    private const uint VsUserDataRegister = 0x4C;
+    private const uint GsUserDataRegister = 0x8C;
+    private const uint EsUserDataRegister = 0xCC;
+    private const uint ComputeUserDataRegister = 0x240;
+    private const uint NggUserDataScalarRegisterBase = 8;
+    private const uint Gen5TextureFormatR8G8B8A8Unorm = 10;
+    private const uint Gen5TextureFormatR16G16B16A16Float = 12;
+    private const uint Gen5TextureType1D = 8;
+    private const uint Gen5TextureType2D = 9;
+    private const uint Gen5TextureType3D = 10;
+    private const uint Gen5TextureTypeCube = 11;
+    private const uint Gen5TextureType1DArray = 12;
+    private const uint Gen5TextureType2DArray = 13;
+    private const ulong MaxPresentedTextureBytes = 128UL * 1024UL * 1024UL;
+    private const ulong VideoOutPixelFormatA8R8G8B8Srgb = 0x80000000;
+    private const ulong VideoOutPixelFormatA8B8G8R8Srgb = 0x80002200;
+    private const ulong VideoOutPixelFormat2R8G8B8A8Srgb = 0x8000000022000000;
+    private const ulong VideoOutPixelFormat2B8G8R8A8Srgb = 0x8000000000000000;
+    private const ulong VideoOutPixelFormat2R10G10B10A2 = 0x8100000622000000;
+    private const ulong VideoOutPixelFormat2B10G10R10A2 = 0x8100000600000000;
+    private const ulong VideoOutPixelFormat2R10G10B10A2Srgb = 0x8100000022000000;
+    private const ulong VideoOutPixelFormat2B10G10R10A2Srgb = 0x8100000000000000;
+    private const ulong VideoOutPixelFormat2R10G10B10A2Bt2100Pq = 0x8100070422000000;
+    private const ulong VideoOutPixelFormat2B10G10R10A2Bt2100Pq = 0x8100070400000000;
+    private const uint RegisterDefaultsVersion7 = 7;
+    private const uint RegisterDefaultsVersion8 = 8;
+    private const uint RegisterDefaultsVersion10 = 10;
+    // SHARPEMU_AGC_REGISTER_DEFAULTS_VERSION12_V1_8_6
+    private const uint RegisterDefaultsVersion12 = 12;
+    private const uint RegisterDefaultsVersion13 = 13;
+    private const int RegisterDefaultsSize = 0x40;
+    private const int RegisterDefaultBlockSize = 16 * 8;
+
+    private const ulong ShaderUserDataOffset = 0x08;
+    private const ulong ShaderCodeOffset = 0x10;
+    private const ulong ShaderCxRegistersOffset = 0x18;
+    private const ulong ShaderShRegistersOffset = 0x20;
+    private const ulong ShaderSpecialsOffset = 0x28;
+    private const ulong ShaderInputSemanticsOffset = 0x30;
+    private const ulong ShaderOutputSemanticsOffset = 0x38;
+    private const ulong ResourceRegistrationBytesPerResource = 0x118;
+    private const ulong ResourceRegistrationBytesPerOwner = 0x1E0;
+    private const int ResourceRegistrationMaxNameLength = 256;
+    private const ulong ShaderNumInputSemanticsOffset = 0x50;
+    private const ulong ShaderNumOutputSemanticsOffset = 0x56;
+    private const ulong ShaderTypeOffset = 0x5A;
+    private const ulong ShaderNumShRegistersOffset = 0x5C;
+    private const int ShaderStructBytes = 0x60;
+    private const ulong FusedShaderImageAlignment = 4;
+    private const byte ComputeShaderType = 0;
+    private const byte PsShaderType = 1;
+    private const byte GsShaderType = 2;
+    private const byte HsShaderType = 3;
+    private const byte GsFrontShaderType = 4;
+    private const byte HsFrontShaderType = 5;
+    private const byte GsBackShaderType = 6;
+    private const byte HsBackShaderType = 7;
+    private const ulong CommandBufferCursorUpOffset = 0x10;
+    private const ulong CommandBufferCursorDownOffset = 0x18;
+    private const ulong CommandBufferCallbackOffset = 0x20;
+    private const ulong CommandBufferUserDataOffset = 0x28;
+    private const ulong CommandBufferReservedDwOffset = 0x30;
+    private const ulong ShaderSpecialGeCntlOffset = 0x00;
+    private const ulong ShaderSpecialVgtShaderStagesEnOffset = 0x08;
+    private const uint VgtShaderStagesHsW32EnBit = 1u << 21;
+    private const uint VgtShaderStagesGsW32EnBit = 1u << 22;
+    private const ulong ShaderSpecialVgtGsOutPrimTypeOffset = 0x20;
+    private const ulong ShaderSpecialGeUserVgprEnOffset = 0x28;
+    private const uint CbSetShRegisterRangeMarker = 0x6875000D;
+    private static readonly object _submitTraceGate = new();
+    private static readonly HashSet<uint> _tracedDcbSizes = new();
+    private static readonly HashSet<(ulong Es, ulong Ps, GuestDrawKind Kind)> _tracedShaderTranslations = new();
+    private static readonly HashSet<(ulong Es, ulong Ps)> _tracedShaderDecodePairs = new();
+    private static readonly HashSet<(ulong Es, ulong Ps, ulong Target, ulong Texture, uint VertexCount)> _tracedShaderDraws = new();
+    private static readonly HashSet<(ulong Ps, string Error)> _tracedShaderFailures = new();
+    private static readonly HashSet<(int Handle, int Index, ulong Address, string Path)> _tracedDisplayBuffers = new();
+    private static readonly HashSet<ulong> _tracedComputeShaders = new();
+    private static readonly HashSet<ulong> _tracedEmptySrtDrawRejects = new();
+    private static readonly HashSet<(ulong Es, ulong Ps)> _tracedFixedFullscreenClears = new();
+    private static readonly HashSet<(ulong Address, uint X, uint Y, uint Z)>
+        _tracedDispatchArguments = new();
+    private static readonly HashSet<(ulong Address, uint Initiator, string Reason)>
+        _rejectedDispatchArguments = new();
+    private static readonly HashSet<uint> _tracedSubmittedDrawOpcodes = new();
+    // SHARPEMU_AGC_DCB_BUILDER_SUBMISSION_BRIDGE_V1_8_28
+    // Track DCB packets built through the public command-buffer helpers. Some
+    // titles use a small scratch DCB whose full callback copies packets into a
+    // second contiguous arena; the driver submission may then contain only the
+    // control/barrier DCB. Preserve CPU build semantics and bridge only complete
+    // draw-bearing contiguous segments at the next graphics submit.
+    private sealed class BuiltDcbTrackerV1828
+    {
+        public object Gate { get; } = new();
+        public List<BuiltDcbAllocationV1828> Allocations { get; } = [];
+    }
+
+    private readonly record struct BuiltDcbAllocationV1828(
+        ulong CommandBuffer,
+        ulong Address,
+        uint Dwords);
+
+    private readonly record struct BuiltDcbReplaySegmentV1828(
+        ulong CommandBuffer,
+        ulong Address,
+        uint Dwords,
+        int PacketCount);
+
+    private static readonly ConditionalWeakTable<object, BuiltDcbTrackerV1828>
+        _builtDcbTrackersV1828 = new();
+
+    private static readonly bool _builderReplayV1828 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_AGC_BUILDER_REPLAY"),
+        "1",
+        StringComparison.Ordinal);
+
+    private static long _builderReplayCandidateCountV1828;
+    private static long _builderReplayParsedCountV1828;
+    private static long _builderReplayRejectedCountV1828;
+
+    private static void RecordBuiltDcbAllocationV1828(
+        CpuContext ctx,
+        ulong commandBufferAddress,
+        ulong commandAddress,
+        uint dwords)
+    {
+        if (!_builderReplayV1828 ||
+            commandBufferAddress == 0 ||
+            commandAddress < 0x10000 ||
+            dwords == 0 ||
+            dwords > 4096)
+        {
+            return;
+        }
+
+        var tracker = _builtDcbTrackersV1828.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new BuiltDcbTrackerV1828());
+
+        lock (tracker.Gate)
+        {
+            if (tracker.Allocations.Count >= 16384)
+            {
+                tracker.Allocations.RemoveRange(0, 8192);
+            }
+
+            tracker.Allocations.Add(new BuiltDcbAllocationV1828(
+                commandBufferAddress,
+                commandAddress,
+                dwords));
+        }
+    }
+
+    // SHARPEMU_AGC_CALLBACK_EPOCH_SUBMISSION_BRIDGE_V1_8_29
+    // V1.8.28 tracked every successful packet allocation. That is too expensive
+    // on DBFZ's startup path. V1.8.29 only observes command-buffer refill
+    // boundaries and the current cursor at driver submit.
+    private sealed class BuiltDcbEpochStateV1829
+    {
+        public ulong Start;
+        public ulong Limit;
+        public List<BuiltDcbReplaySegmentV1828> Completed { get; } = [];
+    }
+
+    private sealed class BuiltDcbEpochTrackerV1829
+    {
+        public object Gate { get; } = new();
+        public Dictionary<ulong, BuiltDcbEpochStateV1829> Buffers { get; } = [];
+    }
+
+    private static readonly ConditionalWeakTable<object, BuiltDcbEpochTrackerV1829>
+        _builtDcbEpochTrackersV1829 = new();
+
+    private static long _epochReplayCandidateCountV1829;
+    private static long _epochReplayParsedCountV1829;
+    private static long _epochReplayRejectedCountV1829;
+    private static long _epochRefillBeginCountV1829;
+    private static long _epochRefillCompleteCountV1829;
+
+    private static bool IsBuilderReplayEnabledV1829() =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_AGC_BUILDER_REPLAY"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static bool TryClassifyBuiltDcbEpochV1829(
+        CpuContext ctx,
+        ulong commandBufferAddress,
+        ulong start,
+        ulong end,
+        out BuiltDcbReplaySegmentV1828 segment)
+    {
+        segment = default;
+        if (start < 0x10000 ||
+            end <= start ||
+            ((end - start) & 3UL) != 0)
+        {
+            return false;
+        }
+
+        var dwords64 = (end - start) / sizeof(uint);
+        if (dwords64 < 8 || dwords64 > 4096)
+        {
+            return false;
+        }
+
+        var dwords = (uint)dwords64;
+        var offset = 0u;
+        var packetCount = 0;
+        var hasDraw = false;
+        var unsafeSync = false;
+
+        while (offset < dwords)
+        {
+            var address = start + ((ulong)offset * sizeof(uint));
+            if (!TryReadUInt32(ctx, address, out var header))
+            {
+                return false;
+            }
+
+            var type = header >> 30;
+            uint length;
+            uint op = 0;
+            uint register = 0;
+
+            if (type == 2)
+            {
+                length = 1;
+            }
+            else if (type == 3)
+            {
+                length = Pm4Length(header);
+                if (length == 0 || offset + length > dwords)
+                {
+                    return false;
+                }
+
+                op = (header >> 8) & 0xFFu;
+                register = (header >> 2) & 0x3Fu;
+
+                if (op is
+                        ItDrawIndirect or
+                        ItDrawIndexIndirect or
+                        ItDrawIndexIndirectMulti or
+                        ItDrawIndex2 or
+                        ItDrawIndexAuto or
+                        ItDrawIndexMultiAuto or
+                        ItDrawIndexOffset2 ||
+                    (op == ItNop && register == RDrawIndexAuto))
+                {
+                    hasDraw = true;
+                }
+
+                if (op is ItWaitRegMem or ItIndirectBuffer or ItRewind ||
+                    (op == ItNop && register == RWaitFlipDone))
+                {
+                    unsafeSync = true;
+                }
+            }
+            else
+            {
+                return false;
+            }
+
+            packetCount++;
+            offset += length;
+        }
+
+        if (!hasDraw ||
+            unsafeSync ||
+            packetCount < 4)
+        {
+            return false;
+        }
+
+        segment = new BuiltDcbReplaySegmentV1828(
+            commandBufferAddress,
+            start,
+            dwords,
+            packetCount);
+        return true;
+    }
+
+    private static void CompleteBuiltDcbEpochBeforeRefillV1829(
+        CpuContext ctx,
+        ulong commandBufferAddress,
+        ulong currentCursor)
+    {
+        if (!IsBuilderReplayEnabledV1829())
+        {
+            return;
+        }
+
+        var tracker = _builtDcbEpochTrackersV1829.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new BuiltDcbEpochTrackerV1829());
+
+        ulong start = 0;
+        ulong limit = 0;
+
+        lock (tracker.Gate)
+        {
+            if (!tracker.Buffers.TryGetValue(commandBufferAddress, out var state) ||
+                state.Start == 0)
+            {
+                return;
+            }
+
+            start = state.Start;
+            limit = state.Limit;
+            state.Start = 0;
+            state.Limit = 0;
+        }
+
+        if (currentCursor <= start ||
+            (limit != 0 && currentCursor > limit))
+        {
+            return;
+        }
+
+        if (!TryClassifyBuiltDcbEpochV1829(
+                ctx,
+                commandBufferAddress,
+                start,
+                currentCursor,
+                out var segment))
+        {
+            return;
+        }
+
+        lock (tracker.Gate)
+        {
+            if (tracker.Buffers.TryGetValue(commandBufferAddress, out var state))
+            {
+                if (state.Completed.Count >= 64)
+                {
+                    state.Completed.RemoveRange(0, 32);
+                }
+                state.Completed.Add(segment);
+            }
+        }
+
+        var n = Interlocked.Increment(ref _epochRefillCompleteCountV1829);
+        TraceAgc(
+            $"agc.epoch_refill_complete n={n} buf=0x{commandBufferAddress:X16} " +
+            $"start=0x{start:X16} end=0x{currentCursor:X16} " +
+            $"dwords={segment.Dwords} packets={segment.PacketCount}");
+    }
+
+    private static void BeginBuiltDcbEpochAfterRefillV1829(
+        CpuContext ctx,
+        ulong commandBufferAddress,
+        ulong cursorUp,
+        ulong cursorDown)
+    {
+        if (!IsBuilderReplayEnabledV1829() ||
+            cursorUp < 0x10000 ||
+            cursorDown <= cursorUp)
+        {
+            return;
+        }
+
+        var tracker = _builtDcbEpochTrackersV1829.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new BuiltDcbEpochTrackerV1829());
+
+        lock (tracker.Gate)
+        {
+            if (!tracker.Buffers.TryGetValue(commandBufferAddress, out var state))
+            {
+                if (tracker.Buffers.Count >= 256)
+                {
+                    return;
+                }
+
+                state = new BuiltDcbEpochStateV1829();
+                tracker.Buffers.Add(commandBufferAddress, state);
+            }
+
+            state.Start = cursorUp;
+            state.Limit = cursorDown;
+        }
+
+        var n = Interlocked.Increment(ref _epochRefillBeginCountV1829);
+        TraceAgc(
+            $"agc.epoch_refill_begin n={n} buf=0x{commandBufferAddress:X16} " +
+            $"start=0x{cursorUp:X16} limit=0x{cursorDown:X16}");
+    }
+
+    // SHARPEMU_AGC_EXTERNAL_CURSOR_DRAW_STREAM_V1_8_30
+    // The title can update the DCB cursor directly between HLE builder calls,
+    // without going through the command-buffer-full callback. Track only the
+    // current contiguous allocation range in ThreadStatic state. No lock,
+    // ConditionalWeakTable lookup, or allocation occurs on the packet hot path.
+    [ThreadStatic]
+    private static ulong _drawStreamBufferV1830;
+    [ThreadStatic]
+    private static ulong _drawStreamStartV1830;
+    [ThreadStatic]
+    private static ulong _drawStreamEndV1830;
+
+    private sealed class CapturedDrawStreamTrackerV1830
+    {
+        public object Gate { get; } = new();
+        public List<BuiltDcbReplaySegmentV1828> Pending { get; } = [];
+    }
+
+    private static readonly ConditionalWeakTable<object, CapturedDrawStreamTrackerV1830>
+        _capturedDrawStreamTrackersV1830 = new();
+
+    private static readonly bool _externalCursorDrawStreamV1830Enabled =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_AGC_EXTERNAL_CURSOR_DRAW_STREAM"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _drawStreamDiscontinuityCountV1830;
+    private static long _drawStreamCaptureCountV1830;
+    private static long _drawStreamReplayCountV1830;
+
+    private static void NoteBuiltDcbAllocationV1830(
+        ulong commandBufferAddress,
+        ulong commandAddress,
+        uint dwords)
+    {
+        if (!_externalCursorDrawStreamV1830Enabled ||
+            commandBufferAddress == 0 ||
+            commandAddress < 0x10000 ||
+            dwords == 0)
+        {
+            return;
+        }
+
+        var end = commandAddress + ((ulong)dwords * sizeof(uint));
+        if (_drawStreamBufferV1830 != commandBufferAddress ||
+            _drawStreamEndV1830 != commandAddress)
+        {
+            var oldEnd = _drawStreamEndV1830;
+            _drawStreamBufferV1830 = commandBufferAddress;
+            _drawStreamStartV1830 = commandAddress;
+            _drawStreamEndV1830 = end;
+
+            var n = Interlocked.Increment(ref _drawStreamDiscontinuityCountV1830);
+            if (n <= 32)
+            {
+                TraceAgc(
+                    $"agc.draw_stream_discontinuity n={n} " +
+                    $"buf=0x{commandBufferAddress:X16} old_end=0x{oldEnd:X16} " +
+                    $"new_start=0x{commandAddress:X16}");
+            }
+            return;
+        }
+
+        _drawStreamEndV1830 = end;
+    }
+
+    private static void CaptureBuiltDrawStreamV1830(
+        CpuContext ctx,
+        ulong commandBufferAddress,
+        ulong drawCommandAddress,
+        uint drawDwords)
+    {
+        if (!_externalCursorDrawStreamV1830Enabled ||
+            _drawStreamBufferV1830 != commandBufferAddress)
+        {
+            return;
+        }
+
+        var drawEnd =
+            drawCommandAddress + ((ulong)drawDwords * sizeof(uint));
+
+        if (_drawStreamStartV1830 < 0x10000 ||
+            _drawStreamStartV1830 > drawCommandAddress ||
+            _drawStreamEndV1830 != drawEnd)
+        {
+            return;
+        }
+
+        if (!TryClassifyBuiltDcbEpochV1829(
+                ctx,
+                commandBufferAddress,
+                _drawStreamStartV1830,
+                drawEnd,
+                out var segment))
+        {
+            return;
+        }
+
+        var tracker = _capturedDrawStreamTrackersV1830.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new CapturedDrawStreamTrackerV1830());
+
+        lock (tracker.Gate)
+        {
+            if (tracker.Pending.Count >= 64)
+            {
+                tracker.Pending.RemoveRange(0, 32);
+            }
+
+            var duplicate =
+                tracker.Pending.Count != 0 &&
+                tracker.Pending[^1].Address == segment.Address &&
+                tracker.Pending[^1].Dwords == segment.Dwords;
+
+            if (!duplicate)
+            {
+                tracker.Pending.Add(segment);
+            }
+        }
+
+        var n = Interlocked.Increment(ref _drawStreamCaptureCountV1830);
+        TraceAgc(
+            $"agc.draw_stream_capture n={n} " +
+            $"buf=0x{commandBufferAddress:X16} " +
+            $"start=0x{segment.Address:X16} " +
+            $"draw=0x{drawCommandAddress:X16} " +
+            $"end=0x{drawEnd:X16} dwords={segment.Dwords} " +
+            $"packets={segment.PacketCount}");
+
+        // A later contiguous allocation belongs to a new post-draw stream.
+        _drawStreamStartV1830 = drawEnd;
+        _drawStreamEndV1830 = drawEnd;
+    }
+
+    private static BuiltDcbReplaySegmentV1828[] TakeCapturedDrawStreamsV1830(
+        CpuContext ctx,
+        ulong submittedAddress,
+        uint submittedDwords)
+    {
+        if (!_externalCursorDrawStreamV1830Enabled)
+        {
+            return [];
+        }
+
+        var tracker = _capturedDrawStreamTrackersV1830.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new CapturedDrawStreamTrackerV1830());
+
+        BuiltDcbReplaySegmentV1828[] pending;
+        lock (tracker.Gate)
+        {
+            if (tracker.Pending.Count == 0)
+            {
+                return [];
+            }
+
+            pending = tracker.Pending.ToArray();
+            tracker.Pending.Clear();
+        }
+
+        var submittedEnd =
+            submittedAddress + ((ulong)submittedDwords * sizeof(uint));
+
+        return pending
+            .Where(segment =>
+            {
+                var segmentEnd =
+                    segment.Address + ((ulong)segment.Dwords * sizeof(uint));
+                return segment.Address >= 0x10000 &&
+                    segmentEnd > segment.Address &&
+                    !(segment.Address < submittedEnd &&
+                      segmentEnd > submittedAddress);
+            })
+            .OrderBy(static segment => segment.Address)
+            .Take(16)
+            .ToArray();
+    }
+    private static BuiltDcbReplaySegmentV1828[] TakeBuiltDcbEpochSegmentsV1829(
+        CpuContext ctx,
+        ulong submittedAddress,
+        uint submittedDwords)
+    {
+        if (!IsBuilderReplayEnabledV1829())
+        {
+            return [];
+        }
+
+        var tracker = _builtDcbEpochTrackersV1829.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new BuiltDcbEpochTrackerV1829());
+
+        KeyValuePair<ulong, BuiltDcbEpochStateV1829>[] states;
+        lock (tracker.Gate)
+        {
+            states = tracker.Buffers.ToArray();
+        }
+
+        // Finalize each still-active epoch from the descriptor's current cursor.
+        foreach (var pair in states)
+        {
+            var commandBufferAddress = pair.Key;
+            ulong start;
+            ulong limit;
+
+            lock (tracker.Gate)
+            {
+                if (!tracker.Buffers.TryGetValue(commandBufferAddress, out var state) ||
+                    state.Start == 0)
+                {
+                    continue;
+                }
+
+                start = state.Start;
+                limit = state.Limit;
+            }
+
+            if (!TryReadUInt64(
+                    ctx,
+                    commandBufferAddress + CommandBufferCursorUpOffset,
+                    out var currentCursor) ||
+                currentCursor <= start ||
+                (limit != 0 && currentCursor > limit))
+            {
+                continue;
+            }
+
+            if (TryClassifyBuiltDcbEpochV1829(
+                    ctx,
+                    commandBufferAddress,
+                    start,
+                    currentCursor,
+                    out var segment))
+            {
+                lock (tracker.Gate)
+                {
+                    if (tracker.Buffers.TryGetValue(commandBufferAddress, out var state))
+                    {
+                        state.Completed.Add(segment);
+                        state.Start = currentCursor;
+                    }
+                }
+            }
+        }
+
+        var submittedEnd =
+            submittedAddress + ((ulong)submittedDwords * sizeof(uint));
+        var result = new List<BuiltDcbReplaySegmentV1828>();
+
+        lock (tracker.Gate)
+        {
+            foreach (var pair in tracker.Buffers)
+            {
+                var state = pair.Value;
+                foreach (var segment in state.Completed)
+                {
+                    var segmentEnd =
+                        segment.Address + ((ulong)segment.Dwords * sizeof(uint));
+                    var overlapsSubmitted =
+                        segment.Address < submittedEnd &&
+                        segmentEnd > submittedAddress;
+
+                    if (!overlapsSubmitted)
+                    {
+                        result.Add(segment);
+                    }
+                }
+                state.Completed.Clear();
+            }
+        }
+
+        return result
+            .OrderBy(static segment => segment.Address)
+            .Take(16)
+            .ToArray();
+    }
+    private static BuiltDcbReplaySegmentV1828[] TakeBuiltDcbReplaySegmentsV1828(
+        CpuContext ctx,
+        ulong submittedAddress,
+        uint submittedDwords)
+    {
+        if (!_builderReplayV1828)
+        {
+            return [];
+        }
+
+        var tracker = _builtDcbTrackersV1828.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new BuiltDcbTrackerV1828());
+
+        BuiltDcbAllocationV1828[] allocations;
+        lock (tracker.Gate)
+        {
+            allocations = tracker.Allocations.ToArray();
+            tracker.Allocations.Clear();
+        }
+
+        if (allocations.Length == 0)
+        {
+            return [];
+        }
+
+        var candidates = new List<BuiltDcbReplaySegmentV1828>();
+        var submittedEnd = submittedAddress + ((ulong)submittedDwords * sizeof(uint));
+
+        var segmentStart = 0UL;
+        var segmentEnd = 0UL;
+        var segmentBuffer = 0UL;
+        var segmentPackets = 0;
+        var segmentDwords = 0U;
+        var segmentHasDraw = false;
+        var segmentUnsafeSync = false;
+        var segmentReadable = true;
+
+        void FinishSegment()
+        {
+            if (segmentPackets == 0)
+            {
+                return;
+            }
+
+            var overlapsSubmitted =
+                segmentStart < submittedEnd &&
+                segmentEnd > submittedAddress;
+
+            if (segmentReadable &&
+                segmentHasDraw &&
+                !segmentUnsafeSync &&
+                !overlapsSubmitted &&
+                segmentPackets >= 4 &&
+                segmentDwords >= 8 &&
+                segmentDwords <= 4096)
+            {
+                candidates.Add(new BuiltDcbReplaySegmentV1828(
+                    segmentBuffer,
+                    segmentStart,
+                    segmentDwords,
+                    segmentPackets));
+            }
+
+            segmentStart = 0;
+            segmentEnd = 0;
+            segmentBuffer = 0;
+            segmentPackets = 0;
+            segmentDwords = 0;
+            segmentHasDraw = false;
+            segmentUnsafeSync = false;
+            segmentReadable = true;
+        }
+
+        foreach (var allocation in allocations)
+        {
+            var allocationEnd =
+                allocation.Address + ((ulong)allocation.Dwords * sizeof(uint));
+            var contiguous =
+                segmentPackets != 0 &&
+                allocation.CommandBuffer == segmentBuffer &&
+                allocation.Address == segmentEnd;
+
+            if (!contiguous)
+            {
+                FinishSegment();
+                segmentStart = allocation.Address;
+                segmentEnd = allocationEnd;
+                segmentBuffer = allocation.CommandBuffer;
+                segmentPackets = 0;
+                segmentDwords = 0;
+                segmentHasDraw = false;
+                segmentUnsafeSync = false;
+                segmentReadable = true;
+            }
+            else
+            {
+                segmentEnd = allocationEnd;
+            }
+
+            segmentPackets++;
+            segmentDwords += allocation.Dwords;
+
+            if (!TryGetPacketIdentity(
+                    ctx,
+                    allocation.Address,
+                    out var op,
+                    out var register))
+            {
+                segmentReadable = false;
+                continue;
+            }
+
+            if (op is
+                    ItDrawIndirect or
+                    ItDrawIndexIndirect or
+                    ItDrawIndexIndirectMulti or
+                    ItDrawIndex2 or
+                    ItDrawIndexAuto or
+                    ItDrawIndexMultiAuto or
+                    ItDrawIndexOffset2 ||
+                (op == ItNop && register == RDrawIndexAuto))
+            {
+                segmentHasDraw = true;
+            }
+
+            if (op is ItWaitRegMem or ItIndirectBuffer or ItRewind ||
+                (op == ItNop && register == RWaitFlipDone))
+            {
+                segmentUnsafeSync = true;
+            }
+        }
+
+        FinishSegment();
+
+        return candidates
+            .OrderBy(static segment => segment.Address)
+            .Take(16)
+            .ToArray();
+    }
+
+    private static void ReplayBuiltDcbSegmentsV1828(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong submittedAddress,
+        uint submittedDwords,
+        ulong submissionId)
+    {
+        var segments = TakeCapturedDrawStreamsV1830(
+            ctx,
+            submittedAddress,
+            submittedDwords);
+
+        if (segments.Length == 0)
+        {
+            return;
+        }
+
+        state.ActiveSubmissionId = submissionId;
+
+        foreach (var segment in segments)
+        {
+            var candidate = Interlocked.Increment(
+                ref _builderReplayCandidateCountV1828);
+            TraceAgc(
+                $"agc.draw_stream_replay_candidate n={candidate} " +
+                $"submission={submissionId} buf=0x{segment.CommandBuffer:X16} " +
+                $"addr=0x{segment.Address:X16} dwords={segment.Dwords} " +
+                $"packets={segment.PacketCount}");
+
+            PreindexSubmittedProducerIntents(
+                ctx,
+                state,
+                segment.Address,
+                segment.Dwords,
+                submissionId);
+
+            var suspended = ParseSubmittedDcb(
+                ctx,
+                gpuState,
+                state,
+                segment.Address,
+                segment.Dwords,
+                tracePackets: true);
+
+            var parsed = Interlocked.Increment(
+                ref _builderReplayParsedCountV1828);
+            TraceAgc(
+                $"agc.draw_stream_replay_parsed n={parsed} " +
+                $"submission={submissionId} addr=0x{segment.Address:X16} " +
+                $"dwords={segment.Dwords} suspended={(suspended ? 1 : 0)}");
+
+            // WAIT/REWIND/INDIRECT_BUFFER packets were excluded during candidate
+            // selection. A suspension here means the segment was not safe to
+            // synthesize; leave subsequent driver DCB processing intact and
+            // report it instead of manufacturing a wake.
+            if (suspended)
+            {
+                Interlocked.Increment(ref _builderReplayRejectedCountV1828);
+                state.IsSuspended = false;
+                break;
+            }
+        }
+    }
+    private static readonly HashSet<uint> _seenUnknownOpcodes = new();
+    // Concurrent so the per-draw/per-dispatch hit path is lock-free (and no longer
+    // shares _submitTraceGate with tracing).
+    private static readonly ConcurrentDictionary<
+        (ulong Es, ulong EsState, ulong Ps, ulong PsState, ulong OutputLayout,
+         uint OutputCount, uint Attributes, uint PsInputEna, uint PsInputAddr,
+         ulong PsInputCntl, ulong AliasAlignment),
+        (IGuestCompiledShader Vertex, IGuestCompiledShader Pixel)> _graphicsShaderCache = new();
+    private static readonly ConcurrentDictionary<
+        (ulong Cs, ulong State, uint LocalX, uint LocalY, uint LocalZ,
+         uint WaveLanes, ulong AliasAlignment),
+        IGuestCompiledShader> _computeShaderCache = new();
+    private static readonly ConcurrentDictionary<
+        (ulong Es, ulong State, ulong AliasAlignment),
+        IGuestCompiledShader> _depthOnlyVertexShaderCache = new();
+
+    // RootFix V18: compiled shader objects carry SPIR-V/MSL payloads and can
+    // otherwise remain rooted for the entire title lifetime. Once a working
+    // set is full, compile transient permutations on demand instead of growing
+    // the managed cache without bound.
+    private static readonly int _maxGraphicsShaderCacheEntries =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("SHARPEMU_GRAPHICS_SHADER_CACHE_MAX"),
+            out var graphicsShaderCacheMax) && graphicsShaderCacheMax > 0
+            ? graphicsShaderCacheMax
+            : 1024;
+    private static readonly int _maxComputeShaderCacheEntries =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("SHARPEMU_COMPUTE_SHADER_CACHE_MAX"),
+            out var computeShaderCacheMax) && computeShaderCacheMax > 0
+            ? computeShaderCacheMax
+            : 512;
+    private static readonly int _maxDepthShaderCacheEntries =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("SHARPEMU_DEPTH_SHADER_CACHE_MAX"),
+            out var depthShaderCacheMax) && depthShaderCacheMax > 0
+            ? depthShaderCacheMax
+            : 256;
+    private static readonly bool _renderCheckpointsEnabled =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_RENDER_CHECKPOINTS"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static readonly Dictionary<ulong, ulong> _shaderHeadersByCode = new();
+    private static readonly ConcurrentDictionary<ulong, byte> _arrayUploadUnsupported = new();
+    private static readonly bool _traceAgc = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_LOG_AGC"),
+        "1",
+        StringComparison.Ordinal);
+
+    // SHARPEMU_V74_0_25_WRITE_DATA_PACKET_POSITION
+    // Opt-in restoration of the pre-V73.5 WRITE_DATA scheduling contract.
+    // WRITE_DATA carries an immediate CPU-resident payload. When enabled, its
+    // side effect executes at its logical PM4 queue position after prior batched
+    // commands are flushed, rather than waiting for the host fence of every
+    // earlier shader dispatch in that queue. RELEASE_MEM/DMA/ACQUIRE visibility
+    // behavior is untouched. The default remains the accumulated V73.5 path.
+    private static readonly bool _writeDataPacketPositionV74025 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_WRITE_DATA_PACKET_POSITION"),
+        "1",
+        StringComparison.Ordinal);
+    private static long _v74025WriteDataPacketPositionTraceCount;
+    private static long _v74025WaitResumeTraceCount;
+
+    // SHARPEMU_V74_0_56_13_WATCHED_WRITE_PACKET_POSITION
+    // V56.12 proved FIFO queue selection is no longer the dominant delay:
+    // watched WRITE_DATA producers reach queue selection in tens of ms, yet
+    // WAIT_REG_MEM remains blocked for ~1.37 s median because
+    // RequiresQueueCompletionOnly waits for prior host GPU submissions.
+    // A plain WRITE_DATA is an immediate command-processor memory packet;
+    // RELEASE_MEM/EOP is the completion primitive. This opt-in promotes only
+    // WRITE_DATA ranges actively watched by WAIT_REG_MEM to the existing
+    // packet-position/no-readback path. Same-queue guest-work FIFO is retained.
+    private static readonly bool _watchedWritePacketPositionV7405613 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_WATCHED_WRITE_DATA_PACKET_POSITION"),
+            "1",
+            StringComparison.Ordinal);
+    private static long _v7405613WatchedWritePacketPositionCount;
+    // SHARPEMU_V74_0_27_SLOW_WAIT_PRODUCER_TRACE
+    // Low-volume diagnostic only: emits one line only when a real WAIT_REG_MEM
+    // resume took >= 1 second. It never changes label values or queue state.
+    private static long _v74027SlowWaitProducerTraceCount;
+    // SHARPEMU_V74_0_29_1_KYTY_ACCUMULATED_KNOWN_PRODUCER_VISIBILITY
+    // The V1.0.1 result proved the slow waits are not missing texture/shader
+    // descriptors: every >=1s wait had an explicit WRITE_DATA producer, while
+    // the ordered-action fence counter reached 1024. When a live explicit
+    // producer is already known, its real completion records the watched value
+    // and pulses the wait monitor; an extra GPU->CPU visibility action is only
+    // redundant queue serialization. Opt-in until the A/B result is verified.
+    // V74.0.62 / upstream-style hot path: once a real explicit producer is
+    // already indexed for a WAIT_REG_MEM label, its actual WRITE_DATA /
+    // RELEASE_MEM completion records the value and wakes the waiter. Do not
+    // enqueue an additional CPU-visibility action for that same known producer.
+    // Set SHARPEMU_SKIP_KNOWN_PRODUCER_WAIT_VISIBILITY=0 to restore the older
+    // diagnostic behavior.
+    private static readonly bool _skipKnownProducerWaitVisibilityV740291 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_SKIP_KNOWN_PRODUCER_WAIT_VISIBILITY"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _v740291KnownProducerVisibilityElidedCount;
+    // SHARPEMU_V74_0_30_KYTY_PM4_BLOCKED_SCHEDULER_INLINE_WRITE_DATA
+    // Senaxx/KytyPS5 keeps WAIT_REG_MEM as a blocked PM4 cursor and retries
+    // runnable queue fronts in round-robin order. Its command processor also
+    // applies immediate WRITE_DATA guest-memory payloads at PM4 position instead
+    // of moving them into a second host render-action queue. Keep both changes
+    // opt-in for the accumulated SharpEmu A/B. RELEASE_MEM/DMA/readback paths
+    // retain the existing ordered visibility machinery.
+    private static readonly bool _kytyPm4BlockedSchedulerV74030 = !string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_KYTY_PM4_BLOCKED_SCHEDULER"),
+        "0",
+        StringComparison.Ordinal);
+    private static readonly bool _kytyInlineWriteDataV74030 = !string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_KYTY_INLINE_WRITE_DATA"),
+        "0",
+        StringComparison.Ordinal);
+    private static long _v74030Pm4SchedulerTraceCount;
+    private static long _v74030InlineWriteDataTraceCount;
+    // SHARPEMU_V74_0_85_AGGRESSIVE_PM4_LOCAL_PAYLOAD_RELEASE_QUEUE
+    // Aggressive path: preserve real Vulkan queue completion, but avoid global
+    // GPU-buffer readback for RELEASE_MEM labels and duplicate multi-MB payloads
+    // inside one draw/dispatch. Every switch accepts env=0 for instant rollback.
+    private static readonly bool _releaseMemQueueCompletionOnlyV74085 =
+        !string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_RELEASE_MEM_QUEUE_COMPLETION_ONLY"), "0", StringComparison.Ordinal);
+    private static readonly bool _localTexturePayloadDedupV74085 =
+        !string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOCAL_TEXTURE_PAYLOAD_DEDUP"), "0", StringComparison.Ordinal);
+    private const long V74085LocalTexturePayloadDedupThresholdBytes = 1L * 1024L * 1024L;
+    private static long _v74085LocalTexturePayloadDedupCount;
+    private static long _v74085LocalTexturePayloadDedupBytes;
+    private static long _v74085ReleaseQueueOnlyTraceCount;
+    private readonly record struct V74085LocalTexturePayloadKey(
+        ulong Address, uint Width, uint Height, uint Format, uint NumberType,
+        uint TileMode, uint Type, uint BaseLevel, uint LastLevel, uint Pitch,
+        uint Depth, uint BaseArray, uint ArrayPitch, uint MaxMip, uint BcSwizzle,
+        ulong MetadataAddress, uint DescriptorFlags, bool HasExtendedDescriptor,
+        uint MipLevel, bool IsArrayed);
+    // SHARPEMU_V74_0_56_18_CROSS_QUEUE_WATCHED_INLINE_WRITE
+    // V56.17 reduced real GPU latency without changing UI FPS. 121/127 slow
+    // WAIT_REG_MEM records still saw their explicit producer complete, and
+    // 124/127 producers came from dcb.graphics WRITE_DATA packets.
+    //
+    // Do not enable the broad Kyty inline mode. Promote only an immediate,
+    // CPU-resident WRITE_DATA whose exact range is actively awaited by a
+    // *different* logical guest queue. Same-queue waits retain ordered PM4
+    // handling, and RELEASE_MEM/DMA/readback behavior is untouched.
+    // V74.0.63: runtime data on the cumulative V74.0.62.1 checkout showed
+    // 312/312 slow producer waits were WRITE_DATA, 302/312 were cross-queue,
+    // and 282/312 producers were already completed by the time the slow-wait
+    // diagnostic fired. The narrow V74.0.56.18 fast path existed but remained
+    // opt-in, so normal game launch never exercised it.
+    //
+    // Enable only this narrow path by default:
+    //   - immediate CPU-resident WRITE_DATA
+    //   - no GPU buffer readback
+    //   - no deferred completion
+    //   - exact range currently awaited
+    //   - waiter belongs to a different logical guest queue
+    //
+    // Same-queue ordering, RELEASE_MEM, DMA and readback paths remain unchanged.
+    // Set SHARPEMU_CROSS_QUEUE_WATCHED_INLINE_WRITE=0 for A/B rollback behavior.
+    private static readonly bool _crossQueueWatchedInlineWriteV7405618 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_CROSS_QUEUE_WATCHED_INLINE_WRITE"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _v7405618CrossQueueWatchedInlineWriteCount;
+    private static long _v74063CrossQueueDefaultTraceOnce;
+
+    // SHARPEMU_V74_0_41_TARGET45D_PRODUCER_PROVENANCE
+    // Diagnostic-only provenance for the full-resolution sampled surface that
+    // feeds the final Demon's Souls compositor. No guest/Vulkan state changes.
+    private static readonly bool _traceTarget45DProducerV74041 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_45D_PRODUCER"),
+            "1",
+            StringComparison.Ordinal);
+    private const ulong V74041Target45DAddress = 0x000000045D550000UL;
+    private const ulong V74041Target45DMetadata = 0x0000000486AF8000UL;
+    private const ulong V74041Target45DSpan = 0x03FC0000UL;
+    private static long _v74041Target45DProducerTraceCount;
+    // SHARPEMU_RUNTIMEDEBUG_TARGET45D_STATE_V1_3_4
+    // Diagnostic-only snapshot at the unresolved full-resolution DCC consumer.
+    private static readonly bool _runtimeDebugTrace45DStateV134 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_45D_STATE_SNAPSHOT"),
+            "1",
+            StringComparison.Ordinal);
+    private static long _runtimeDebug45DStateTraceCountV134;
+
+    private static bool IsTarget45DIdentityV74041(
+        ulong address,
+        ulong metadataAddress = 0) =>
+        address == V74041Target45DAddress ||
+        metadataAddress == V74041Target45DMetadata;
+
+    private static bool OverlapsTarget45DRangeV74041(
+        ulong address,
+        ulong byteCount)
+    {
+        if (address == 0 || byteCount == 0)
+        {
+            return false;
+        }
+
+        var end = address > ulong.MaxValue - byteCount
+            ? ulong.MaxValue
+            : address + byteCount;
+        var targetEnd = V74041Target45DAddress + V74041Target45DSpan;
+        return address < targetEnd && V74041Target45DAddress < end;
+    }
+
+    private static void TraceTarget45DProducerV74041(
+        string kind,
+        string detail)
+    {
+        if (!_traceTarget45DProducerV74041)
+        {
+            return;
+        }
+
+        var count = Interlocked.Increment(
+            ref _v74041Target45DProducerTraceCount);
+        if (count <= 4096 || (count & (count - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.41][45D_PRODUCER] count={count} kind={kind} {detail}");
+        }
+    }
+
+    // SHARPEMU_V74_0_31_2_KYTY_ZERO_INDIRECT_NOOP
+    // Current Kyty semantics do not create a synthetic waiter for a zero-sized
+    // DISPATCH_INDIRECT tuple. Keep this A/B opt-in and preserve the legacy path
+    // when the environment gate is disabled.
+    private static readonly bool _kytyZeroIndirectNoopV740312 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_KYTY_ZERO_INDIRECT_NOOP"),
+        "1",
+        StringComparison.Ordinal);
+    private static long _v740312IndirectZeroNoopTraceCount;
+
+    // SHARPEMU_V74_0_32_2_KYTY_NATIVE_WAIT_SUSPEND
+    // Kyty WAIT_REG_MEM suspends the PM4 cursor and lets real producers update
+    // memory; it does not force a GPU-wide CPU-visibility drain at registration.
+    // Keep this behavior opt-in while the A/B remains title-scoped.
+    private static readonly bool _kytyNativeWaitSuspendV74032 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_KYTY_NATIVE_WAIT_SUSPEND"),
+        "1",
+        StringComparison.Ordinal);
+    private static long _v74032NativeWaitSuspendTraceCount;
+    // V73.4: bounded, opt-in provenance tracing for real producerless WAIT_REG_MEM.
+    // This is diagnostic-only: it never changes a label, queue state or comparison.
+    private static readonly bool _traceLabelProvenanceV734 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_LABEL_PROVENANCE"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly object _labelProvenanceGateV734 = new();
+    private static readonly Dictionary<object, HashSet<ulong>> _labelProvenanceTargetsV734 =
+        new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+    private static long _labelProvenanceEventCountV734;
+    private static long _labelProvenanceComputeScanCountV734;
+    // Drop a draw on an undecodable texture descriptor instead of substituting
+    // a 1x1 fallback binding. Off by default so a garbage descriptor degrades
+    // the pass rather than dropping it (Demon's Souls composite feeders).
+    private static readonly bool _strictShaderDescriptors = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_STRICT_SHADER_DESCRIPTORS"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly bool _traceAgcShader =
+        _traceAgc ||
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_LOG_AGC_SHADER"),
+            "1",
+            StringComparison.Ordinal);
+    private static readonly ulong? _traceComputeShaderAddress = ParseOptionalHexAddress(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_COMPUTE_SHADER_ADDRESS"));
+    private static readonly ulong? _tracePixelShaderAddress = ParseOptionalHexAddress(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_PIXEL_SHADER_ADDRESS"));
+    private static readonly ulong? _traceRenderTargetAddress = ParseOptionalHexAddress(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_RENDER_TARGET_ADDRESS"));
+    private static readonly bool _traceDraws = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_DRAWS"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly bool _traceFramePackets = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_FRAME_PACKETS"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly bool _traceGeometryDraws = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_GEOMETRY_DRAWS"),
+        "1",
+        StringComparison.Ordinal);
+    // SHARPEMU_STARTMENU_PRIMITIVE_PIPELINE_PROVENANCE_V1_8_0
+    // Audit-only opt-in: records primitive/GS-NGG state provenance.
+    private static readonly bool _tracePrimitivePipelineV180 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_PRIMITIVE_PIPELINE"),
+        "1",
+        StringComparison.Ordinal);
+    private static int _primitivePipelineTraceCountV180;
+
+    // SHARPEMU_V74_0_56_27_TEXTURE_TYPE_TRACE
+    private static readonly bool _traceTextureTypesV7405627 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_TEXTURE_TYPES"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static readonly long[] _textureTypeCountsV7405627 =
+        new long[16];
+    private static int _primitiveStagesOffsetV180 = -1;
+    private static int _primitiveGsOutOffsetV180 = -1;
+    private static int _primitiveGeCntlOffsetV180 = -1;
+    private static int _primitiveGeUserVgprOffsetV180 = -1;
+    // SHARPEMU_STARTMENU_KRZ_CALLSITE_ABI_PROVENANCE_V1_9_0
+    // Audit-only opt-in: captures the guest caller and ABI state for -KRzWekV120.
+    private static readonly bool _traceKrzCallSiteV190 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_KRZ_CALLSITE"),
+        "1",
+        StringComparison.Ordinal);
+    // SHARPEMU_STARTMENU_EBOOT_KRZ_INDEX_TYPE_FIX_V2_0_1
+    // Eboot-proven compatibility path for libSceAgc import slot 0x361.
+    private static readonly bool _traceKrzEbootFixV201 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_KRZ_EBOOT_FIX"),
+        "1",
+        StringComparison.Ordinal);
+    // V26: deterministic provenance for GPU-driven indirect dispatch arguments.
+    private static readonly bool _traceIndirectArgsV26 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_INDIRECT_ARGS"),
+        "1",
+        StringComparison.Ordinal);    private static readonly bool _traceScanoutLineage = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_SCANOUT_LINEAGE"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly bool _aggressiveScanoutRecovery = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_SCANOUT_RECOVERY"),
+        "aggressive",
+        StringComparison.OrdinalIgnoreCase);
+    // SHARPEMU_STARTMENU_TARGETLESS_COMPOSITE_REPLAY_V1_6_0
+    // Opt-in diagnostic: V1.5 proved that replacing the scanout source
+    // does not reveal the menu. Preserve the default suppression policy
+    // unless the V1.6 diagnostic explicitly replays targetless composites.
+    private static readonly bool _replayTargetlessComposites = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_REPLAY_TARGETLESS_COMPOSITES"),
+        "1",
+        StringComparison.Ordinal);
+
+    // SHARPEMU_V74_0_56_28_DIRECT_SCANOUT_WRITER_POLICY
+    // RootFix V6 already documents that replaying targetless fallback draws
+    // after a valid direct scanout writer can overwrite the real frame with
+    // stale sampled state. PPSA01341 was historically exempted from that
+    // suppression. V56.27.1 proves the title now loads its real textures,
+    // geometry, materials and shaders, so allow the direct-writer policy to be
+    // explicitly enabled for Demon's Souls without affecting other titles.
+    private static readonly bool _demonsPreferDirectScanoutWriterV7405628 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DEMONS_DIRECT_SCANOUT_WRITER"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _v7405628DirectSuppressFrameCount;
+    private static long _v7405628DirectSuppressDrawCount;
+    private static long _v7405628ReplayAfterDirectFrameCount;
+
+    private static readonly bool _traceVertexRanges = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_VERTEX_RANGES"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly bool _compatibilitySubmitCompletionEvent = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_AGC_SUBMIT_COMPLETION_EVENT"),
+        "1",
+        StringComparison.Ordinal);
+    // Escape hatch for the cached-texture copy skip (per-draw texel copies
+    // are re-enabled unconditionally when set), for A/B-ing rendering issues.
+    private static readonly bool _textureCopySkipDisabled = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_NO_TEXTURE_SKIP"),
+        "1",
+        StringComparison.Ordinal);
+    // SHARPEMU_V74_0_74_SAMPLER_PRECOPY_SKIP
+    // Default ON. Explicit =0 restores V73 exact-key-only submit behavior.
+    private static readonly bool _samplerPrecopySkipV74074 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_SAMPLER_PRECOPY_SKIP"),
+            "0",
+            StringComparison.Ordinal) &&
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_SAMPLER_IMAGE_ALIAS"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _v74074SamplerPrecopySkipCount;
+    private static long _v74074SamplerPrecopySkipBytes;
+    private static readonly bool _traceDccAlias = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_DCC_ALIAS"),
+        "1",
+        StringComparison.Ordinal);
+    // SHARPEMU_V74_0_56_34_RDNA2_DCC_COMPRESSION_ENABLE
+    // Diagnostic for the actual 256-bit image-SRD DCC enable bit. A metadata
+    // pointer alone does not declare that the main image surface is DCC.
+    private static readonly bool _traceRdna2SrdCompressionV7405634 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_RDNA2_SRD_COMPRESSION"),
+            "1",
+            StringComparison.Ordinal);
+    private static long _v7405634CompressionOnTraceCount;
+    private static long _v7405634CompressionOffTraceCount;
+
+    // SHARPEMU_V74_0_56_35_DCC_FASTCLEAR_IMMEDIATE_MATERIALIZATION
+    // IsDccFastClearDraw is already restricted to a covering 4-vertex quad,
+    // DCC-enable set, and CLEAR_WORD0/CLEAR_WORD1 exactly zero. The legacy
+    // path only queued RequestGuestColorClear(), which requires a later render
+    // pass before a host image is necessarily materialized. A DCC target that
+    // is sampled directly after the fast-clear can therefore have writer
+    // provenance but no GuestImageResource for the sampler to resolve.
+    //
+    // This opt-in adds an ordered zero clear immediately while retaining the
+    // pending-clear request below. The latter keeps the existing LoadOp.Clear
+    // behavior when another render pass does follow.
+    private static readonly bool _dccFastClearImmediateMaterializeV7405635 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DCC_FASTCLEAR_IMMEDIATE_MATERIALIZE"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _v7405635FastClearMaterializeCount;
+    private static long _v7405635FastClearTargetCount;
+
+    // SHARPEMU_V74_0_1_TEXTURE_PRODUCER_CONTRACT_TRACE
+    private static readonly bool _traceDemonTextureContract = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_DEMONS_TEXTURE_CONTRACT"),
+        "1",
+        StringComparison.Ordinal);
+
+    // GPU deswizzle: ship raw tiled bytes + params to the backend instead of
+    // detiling on the CPU. On by default; SHARPEMU_GPU_DETILE=0 forces the CPU
+    // path. Backend-agnostic here (only inspects DetileParams); the Vulkan/Metal
+    // backends detile on the GPU, others fall back to the CPU path.
+    private static readonly bool _gpuDetileEnabled = !string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_GPU_DETILE"),
+        "0",
+        StringComparison.Ordinal);
+
+    // Diagnostics (SHARPEMU_LOG_GPU_DETILE=1): one line per distinct texture tile
+    // mode and per-gate decision, so we can see which swizzle modes/formats a
+    // title uses and whether each takes the GPU or CPU path.
+    private static readonly bool _gpuDetileLog = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_LOG_GPU_DETILE"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly HashSet<uint> _seenTextureTileModes = new();
+    private static readonly HashSet<uint> _gpuDetileGateDiag = new();
+    private static long _dcbWriteDataTraceCount;
+    private static int _tracedVertexRangeCount;
+    private static long _dcbWaitRegMemTraceCount;
+    private static long _createShaderTraceCount;
+    private static long _duplicateTargetTraceCount;
+    private static long _cbMetadataSkipTraceCount;
+    private static long _packetPayloadTraceCount;
+    private static bool _tracedMissingPixelShaderBindings;
+    private static long _unsatisfiedWaitTraceCount;
+    private static long _labelProducerSequence;
+    private static readonly object _labelProducerGate = new();
+    private static readonly List<LabelProducerTrace> _labelProducers = [];
+    private const int LabelProducerSoftBound = 4096;
+    // Raised when a compaction pass frees nothing because every record is still
+    // active, so registration does not rescan the whole list on every add while
+    // a queue is suspended. Reset once compaction can make progress again.
+    private static int _labelProducerCompactionBound = LabelProducerSoftBound;
+    private static readonly HashSet<(object Memory, ulong Address)>
+        _tracedProducerlessWaits = new();
+    private static long _shaderTranslationMissTraceCount;
+    private static long _translatedDrawTraceCount;
+    private static long _standardDmaTraceCount;
+    private static long _packetParseFailureTraceCount;
+    private static long _v25GeometryDrawTraceCount;
+    private const int V26IndirectTupleProbeCount = 65;
+    private static long _v26IndirectTraceCount;
+    private static readonly object _v26IndirectTraceGate = new();
+    private static readonly HashSet<(string Queue, ulong Submission, ulong Base)> _v26IndirectBaseSnapshots = new();
+    private static readonly Dictionary<(string Queue, ulong Submission, ulong Address), (uint X, uint Y, uint Z)> _v26IndirectBaseline = new();
+    private static int _textureFallbackTraceCount;
+    private static int _dccAliasTraceCount;
+
+    // SHARPEMU_V74_0_16_DCC_RESIDENT_ALIAS_HISTORY
+    // Seed history only after the ordinary resolver proves metadata/shape/format
+    // and a live GPU guest image. History can then bridge a short provenance gap
+    // between command buffers without ever CPU-decoding compressed DCC bytes.
+    private readonly record struct V74016DccAliasHistoryKey(
+        ulong MetadataAddress,
+        uint Width,
+        uint Height,
+        uint Format,
+        uint NumberType);
+
+    private readonly record struct V74016DccAliasHistoryEntry(
+        RenderTargetDescriptor Alias,
+        ulong WriterSequence,
+        long Tick);
+
+    private static readonly ConcurrentDictionary<
+        V74016DccAliasHistoryKey,
+        V74016DccAliasHistoryEntry> _v74016DccAliasHistory = new();
+
+    private static readonly long _v74016DccAliasHistoryTtlMs =
+        long.TryParse(
+            Environment.GetEnvironmentVariable("SHARPEMU_DCC_ALIAS_HISTORY_MS"),
+            out var v74016DccAliasHistoryMs) && v74016DccAliasHistoryMs > 0
+            ? Math.Min(v74016DccAliasHistoryMs, 10000L)
+            : 0L;
+
+    private static int _v74016DccAliasHistorySeedTraceCount;
+    private static int _v74016DccAliasHistoryHitTraceCount;
+
+    // SHARPEMU_V74_0_56_25_DCC_TYPED_ALIAS_HISTORY
+    // V56.24 reaches ingame but repeatedly replaces large metadata-backed DCC
+    // surfaces with fallback textures. A sampled SRD can legally reinterpret
+    // the same colour allocation with a different NUMBER_TYPE while keeping the
+    // same DCC metadata VA, data format and dimensions. The Vulkan presenter
+    // remains the final authority for view-format compatibility.
+    private static int _v7405625TypedAliasTraceCount;
+
+    // SHARPEMU_V74_0_56_26_DCC_PRODUCER_HISTORY
+    // V56.25 proved that NUMBER_TYPE was not the missing identity:
+    // typed_alias=0, history_hit=0 and DCC suppression still reached 1024.
+    // Several unresolved sampled DCC addresses are real compute/storage
+    // outputs, but TryResolveDccMetadataAlias only sees KnownRenderTargets.
+    //
+    // Preserve producer descriptors at WRITE time, keyed by DCC allocation
+    // identity rather than transient command-buffer state. This also survives
+    // an address-keyed KnownRenderTargets entry being replaced by a later view.
+    private readonly record struct V7405626DccProducerKey(
+        ulong MetadataAddress,
+        uint Width,
+        uint Height,
+        uint Format);
+
+    private readonly record struct V7405626DccProducerEntry(
+        RenderTargetDescriptor Alias,
+        ulong WriterSequence,
+        long Tick,
+        string Kind);
+
+    private static readonly ConcurrentDictionary<
+        V7405626DccProducerKey,
+        V7405626DccProducerEntry> _v7405626DccProducerHistory = new();
+
+    private static readonly long _v7405626DccProducerHistoryTtlMs =
+        long.TryParse(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DCC_PRODUCER_HISTORY_MS"),
+            out var v7405626ProducerHistoryMs) &&
+        v7405626ProducerHistoryMs > 0
+            ? Math.Min(v7405626ProducerHistoryMs, 30000L)
+            : 0L;
+
+    private const int V7405626DccProducerHistoryMaxEntries = 512;
+
+    private static long _v7405626GraphicsProducerSeedCount;
+    private static long _v7405626ComputeProducerSeedCount;
+    private static long _v7405626GraphicsProducerHitCount;
+    private static long _v7405626ComputeProducerHitCount;
+    private static long _v7405626ProducerSkipCount;
+
+    private static int _v7401TextureContractTraceCount;
+    private static int _v7317MaskedRtIdentityTraceCount;
+    private static int _v7317ZeroDccSuppressionTraceCount;
+    // SHARPEMU_V74_0_4_DCC_SNAPSHOT_PRESSURE_GUARD
+    private static long _v7404DccSnapshotSuppressedBytes;
+    private static int _v7404LargeTextureSnapshotTraceCount;
+
+    // SHARPEMU_V74_0_5_LARGE_TEXTURE_SNAPSHOT_REUSE
+    private readonly record struct V7405LargeTextureSnapshotKey(
+        ulong Address,
+        uint Width,
+        uint Height,
+        uint Format,
+        uint NumberType,
+        uint TileMode,
+        uint Pitch,
+        ulong PhysicalBytes,
+        long WriteGeneration);
+
+    private static readonly ConcurrentDictionary<
+        V7405LargeTextureSnapshotKey,
+        (byte[] Data, long Tick)> _v7405LargeTextureSnapshotCache = new();
+
+    private static long _v7405LargeTextureSnapshotReuseBytes;
+    private static int _v7405LargeTextureSnapshotReuseTraceCount;
+
+    // V74.0.16.1: the V74.0.5 key includes guest write generation. Keep the
+    // cross-title default at 2s; this runner opts into 10s for the measured A/B.
+    private static readonly long _v74016LargeSnapshotReuseTtlMs =
+        long.TryParse(
+            Environment.GetEnvironmentVariable("SHARPEMU_LARGE_TEXTURE_SNAPSHOT_REUSE_MS"),
+            out var v74016SnapshotReuseMs) && v74016SnapshotReuseMs > 0
+            ? Math.Min(v74016SnapshotReuseMs, 30000L)
+            : 2000L;
+
+    // SHARPEMU_V74_0_15_LARGE_ARRAY_SINGLE_FLIGHT
+    // Large array uploads can be requested concurrently before the backend's
+    // texture cache becomes visible. Keep one exact immutable byte snapshot
+    // briefly so concurrent callers share the same 320MB-class payload instead
+    // of allocating/copying it repeatedly. This does not skip layers or alter
+    // texture contents.
+    private readonly record struct V74015LargeArraySnapshotKey(
+        ulong Address,
+        uint Width,
+        uint Height,
+        uint Format,
+        uint NumberType,
+        uint TileMode,
+        uint Pitch,
+        int SliceBytes,
+        uint ArrayLayers,
+        ulong ContentKey,
+        bool Tiled);
+
+    private const long V74015LargeArrayThresholdBytes = 64L * 1024L * 1024L;
+
+    // V74.0.64: V74.0.15 used one global 320 MiB-class snapshot slot and a
+    // fixed 500 ms TTL. Demon's Souls alternates at least two large array
+    // identities before the Vulkan texture cache becomes visible, causing the
+    // slot to thrash and the producer queue to retain/copy 320-642 MiB again.
+    //
+    // Retain a very small bounded set of exact keys. Two entries cover the
+    // measured 1024x1024x80 and 4096x4096x5 arrays while capping the bridge
+    // cache to roughly 640 MiB for that workload. The value can be reduced to
+    // 1 for A/B or raised only as far as 4.
+    private static readonly int _v74064LargeArraySnapshotCacheEntries =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_LARGE_ARRAY_SNAPSHOT_CACHE_ENTRIES"),
+                out var v74064LargeArrayCacheEntries) &&
+            v74064LargeArrayCacheEntries > 0
+                ? v74064LargeArrayCacheEntries
+                : 2,
+            1,
+            4);
+
+    // The downstream sampled-texture cache already treats an untracked cached
+    // identity as static when the CPU write tracker is disabled. This cache is
+    // only the producer->presenter bridge before that resource cache is
+    // visible, so use a longer bounded bridge interval instead of expiring in
+    // the middle of a multi-second UI frame.
+    private static readonly long _v74064LargeArraySnapshotTtlMs =
+        long.TryParse(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_LARGE_ARRAY_SNAPSHOT_REUSE_MS"),
+            out var v74064LargeArrayReuseMs) &&
+        v74064LargeArrayReuseMs > 0
+            ? Math.Min(v74064LargeArrayReuseMs, 30000L)
+            : 10000L;
+
+    private static readonly object _v74015LargeArraySnapshotGate = new();
+    private static readonly Dictionary<
+        V74015LargeArraySnapshotKey,
+        (byte[] Data, long Tick)> _v74064LargeArraySnapshotCache = new();
+
+    private static long _v74015LargeArraySnapshotReuseBytes;
+    private static int _v74015LargeArraySnapshotOwnerTraceCount;
+    private static int _v74015LargeArraySnapshotReuseTraceCount;
+
+    // V74.0.67.2.13 large-array sparse-content reuse key
+    private static long _v74067213LargeArrayProbeFailureNonce;
+    private const long V74067213MinimumArrayReuseTtlMs = 60000L;
+    private static int _v74064LargeArraySnapshotEvictionTraceCount;
+
+    // Caller holds _v74015LargeArraySnapshotGate.
+    private static bool TryGetLargeArraySnapshotV74064(
+        V74015LargeArraySnapshotKey key,
+        long expectedBytes,
+        long now,
+        out byte[] data)
+    {
+        if (_v74064LargeArraySnapshotCache.TryGetValue(key, out var cached))
+        {
+            var age = unchecked(now - cached.Tick);
+            if (age >= 0 &&
+                age <= _v74064LargeArraySnapshotTtlMs &&
+                cached.Data.LongLength == expectedBytes)
+            {
+                data = cached.Data;
+                return true;
+            }
+
+            _v74064LargeArraySnapshotCache.Remove(key);
+        }
+
+        data = Array.Empty<byte>();
+        return false;
+    }
+
+    // Caller holds _v74015LargeArraySnapshotGate.
+    private static void StoreLargeArraySnapshotV74064(
+        V74015LargeArraySnapshotKey key,
+        byte[] data,
+        long now)
+    {
+        if (!_v74064LargeArraySnapshotCache.ContainsKey(key) &&
+            _v74064LargeArraySnapshotCache.Count >=
+                _v74064LargeArraySnapshotCacheEntries)
+        {
+            var foundOldest = false;
+            var oldestKey = default(V74015LargeArraySnapshotKey);
+            var oldestTick = long.MaxValue;
+
+            foreach (var entry in _v74064LargeArraySnapshotCache)
+            {
+                if (!foundOldest || entry.Value.Tick < oldestTick)
+                {
+                    foundOldest = true;
+                    oldestKey = entry.Key;
+                    oldestTick = entry.Value.Tick;
+                }
+            }
+
+            if (foundOldest &&
+                _v74064LargeArraySnapshotCache.Remove(oldestKey))
+            {
+                var evictCount = Interlocked.Increment(
+                    ref _v74064LargeArraySnapshotEvictionTraceCount);
+                if (evictCount <= 32 || (evictCount & (evictCount - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.64][ARRAY_CACHE_EVICT] count={evictCount} " +
+                        $"addr=0x{oldestKey.Address:X16} " +
+                        $"entries={_v74064LargeArraySnapshotCache.Count}/" +
+                        $"{_v74064LargeArraySnapshotCacheEntries}");
+                }
+            }
+        }
+
+        _v74064LargeArraySnapshotCache[key] = (data, now);
+    }
+    private static readonly object _softwarePresenterGate = new();
+    private static readonly Dictionary<(ulong Source, ulong Destination), ulong> _softwarePresenterFingerprints = new();
+    private static readonly Dictionary<(ulong Shader, ulong Source, ulong Destination), ulong> _softwareComputeBlitFingerprints = new();
+    private static readonly object _registerDefaultsGate = new();
+    private static readonly ConditionalWeakTable<object, RegisterDefaultsAllocation> _registerDefaultsAllocations = new();
+    private static readonly ConditionalWeakTable<object, SubmittedGpuState> _submittedGpuStates = new();
+
+    // Native guest workers can expose different wrapper objects around the same
+    // address space. All AGC queue/wait/producers must share one root identity.
+    // V22: native workers can expose wrappers around the same guest address space.
+    // AGC queue state, producer traces and waiters must key on the shared root.
+    private static object CanonicalMemory(object memory)
+    {
+        while (memory is SharpEmu.HLE.ICpuMemoryWrapper wrapper)
+        {
+            memory = wrapper.Inner;
+        }
+
+        return memory;
+    }
+
+    private static bool ShouldEmitLabelProvenanceEventV734()
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return false;
+        }
+
+        var count = Interlocked.Increment(ref _labelProvenanceEventCountV734);
+        return count <= 256 || (count & (count - 1)) == 0;
+    }
+
+    private static void TraceLabelProvenanceV734(string message)
+    {
+        if (!ShouldEmitLabelProvenanceEventV734())
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[V73.4][LABEL] {message}");
+    }
+
+    private static void RegisterLabelProvenanceTargetV734(
+        object memory,
+        GpuWaitRegistry.WaitingDcb waiter,
+        ulong currentValue,
+        bool hasObservedProducer)
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return;
+        }
+
+        memory = CanonicalMemory(memory);
+        var added = false;
+        lock (_labelProvenanceGateV734)
+        {
+            if (!_labelProvenanceTargetsV734.TryGetValue(memory, out var labels))
+            {
+                labels = new HashSet<ulong>();
+                _labelProvenanceTargetsV734.Add(memory, labels);
+            }
+
+            // Keep this diagnostic bounded even if a malformed title creates
+            // thousands of distinct waits.
+            if (labels.Count < 64)
+            {
+                added = labels.Add(waiter.WaitAddress);
+            }
+        }
+
+        if (added)
+        {
+            TraceLabelProvenanceV734(
+                $"wait_target label=0x{waiter.WaitAddress:X16} " +
+                $"queue={waiter.QueueName} submission={waiter.SubmissionId} " +
+                $"current=0x{currentValue:X16} ref=0x{waiter.ReferenceValue:X16} " +
+                $"mask=0x{waiter.Mask:X16} cmp={waiter.CompareFunction} " +
+                $"observed_producer={(hasObservedProducer ? 1 : 0)}");
+        }
+    }
+
+    private static ulong[] SnapshotLabelProvenanceTargetsV734(object memory)
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return [];
+        }
+
+        memory = CanonicalMemory(memory);
+        lock (_labelProvenanceGateV734)
+        {
+            return _labelProvenanceTargetsV734.TryGetValue(memory, out var labels)
+                ? labels.ToArray()
+                : [];
+        }
+    }
+
+    private static bool RangeContainsLabelV734(
+        ulong start,
+        ulong length,
+        ulong label)
+    {
+        if (start == 0 || length == 0)
+        {
+            return false;
+        }
+
+        var end = start > ulong.MaxValue - length
+            ? ulong.MaxValue
+            : start + length;
+        return label >= start && label < end;
+    }
+
+    private static int TraceLabelProvenanceRangeV734(
+        object memory,
+        ulong start,
+        ulong length,
+        string source)
+    {
+        if (!_traceLabelProvenanceV734 || start == 0 || length == 0)
+        {
+            return 0;
+        }
+
+        var overlaps = 0;
+        foreach (var label in SnapshotLabelProvenanceTargetsV734(memory))
+        {
+            if (!RangeContainsLabelV734(start, length, label))
+            {
+                continue;
+            }
+
+            overlaps++;
+            TraceLabelProvenanceV734(
+                $"range_overlap label=0x{label:X16} " +
+                $"range=0x{start:X16}+0x{length:X} source={source}");
+        }
+
+        return overlaps;
+    }
+
+    private static void TraceComputeLabelCoverageV734(
+        object memory,
+        ulong shaderAddress,
+        string queueName,
+        ulong submissionId,
+        IReadOnlyList<GuestMemoryBuffer> buffers)
+    {
+        if (!_traceLabelProvenanceV734)
+        {
+            return;
+        }
+
+        var targets = SnapshotLabelProvenanceTargetsV734(memory);
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        var scan = Interlocked.Increment(ref _labelProvenanceComputeScanCountV734);
+        var overlaps = 0;
+        var nearestDistance = ulong.MaxValue;
+        ulong nearestBase = 0;
+        var nearestLength = 0;
+        var nearestWritable = false;
+        var nearestWriteBack = false;
+
+        foreach (var buffer in buffers)
+        {
+            if (buffer.BaseAddress == 0 || buffer.Length <= 0)
+            {
+                continue;
+            }
+
+            var length = (ulong)buffer.Length;
+            var end = buffer.BaseAddress > ulong.MaxValue - length
+                ? ulong.MaxValue
+                : buffer.BaseAddress + length;
+
+            foreach (var label in targets)
+            {
+                if (RangeContainsLabelV734(buffer.BaseAddress, length, label))
+                {
+                    overlaps++;
+                    TraceLabelProvenanceV734(
+                        $"compute_overlap label=0x{label:X16} " +
+                        $"cs=0x{shaderAddress:X16} queue={queueName} " +
+                        $"submission={submissionId} " +
+                        $"buffer=0x{buffer.BaseAddress:X16}+0x{length:X} " +
+                        $"writable={(buffer.Writable ? 1 : 0)} " +
+                        $"writeback={(buffer.WriteBackToGuest ? 1 : 0)}");
+                    continue;
+                }
+
+                ulong distance;
+                if (label < buffer.BaseAddress)
+                {
+                    distance = buffer.BaseAddress - label;
+                }
+                else
+                {
+                    distance = label >= end
+                        ? label - end
+                        : 0;
+                }
+
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearestBase = buffer.BaseAddress;
+                    nearestLength = buffer.Length;
+                    nearestWritable = buffer.Writable;
+                    nearestWriteBack = buffer.WriteBackToGuest;
+                }
+            }
+        }
+
+        // No-overlap scans are sampled aggressively: first 32 then powers of 2.
+        // This proves whether compute work kept running without turning the
+        // diagnostic into per-dispatch AGC logging.
+        if (overlaps == 0 &&
+            (scan <= 32 || (scan & (scan - 1)) == 0))
+        {
+            var nearestText = nearestDistance == ulong.MaxValue
+                ? "none"
+                : $"0x{nearestBase:X16}+0x{nearestLength:X}/" +
+                  $"distance=0x{nearestDistance:X}/" +
+                  $"writable={(nearestWritable ? 1 : 0)}/" +
+                  $"writeback={(nearestWriteBack ? 1 : 0)}";
+            TraceLabelProvenanceV734(
+                $"compute_scan n={scan} cs=0x{shaderAddress:X16} " +
+                $"queue={queueName} submission={submissionId} " +
+                $"targets={targets.Length} buffers={buffers.Count} " +
+                $"overlaps=0 nearest={nearestText}");
+        }
+    }
+    private static readonly RegisterDefaultGroup[] PrimaryRegisterDefaults =
+        CreatePrimaryRegisterDefaults();
+
+    private static readonly RegisterDefaultGroup[] InternalRegisterDefaults =
+    [
+        new(0, 0, 0x8FB4EDB5, [new(0x00E, 0)]),
+        new(0, 1, 0xB994AD29, [new(0x2AF, 0)]),
+        new(0, 2, 0xD427322F, [new(0x314, 0)]),
+        new(0, 3, 0xF58FEA31, [new(0x1B5, 0)]),
+        new(1, 0, 0x6AC156EF, [new(0x216, 0)]),
+        new(1, 1, 0x6AC15610, [new(0x217, 0)]),
+        new(1, 2, 0x6AC15009, [new(0x219, 0)]),
+        new(1, 3, 0x6AC153BA, [new(0x21A, 0)]),
+        new(1, 4, 0xBE7DCD73, [new(0x27D, 0)]),
+        new(1, 5, 0x0C4B1438, [new(0x22A, 0)]),
+        new(1, 6, 0xDB00D71A, [new(0x204, 0)]),
+        new(1, 7, 0xDB00D249, [new(0x205, 0)]),
+        new(1, 8, 0xDB00EC60, [new(0x206, 0)]),
+        new(1, 9, 0x0C4D6FE4, [new(0x080, 0)]),
+        new(1, 10, 0x0C4A80EF, [new(0x100, 0)]),
+        new(1, 11, 0x0DD283E7, [new(0x006, 0)]),
+        new(1, 12, 0xC620E68C, [new(0x081, 0)]),
+        new(1, 13, 0xC67EFACF, [new(0x101, 0)]),
+        new(1, 14, 0xD9E6D9F7, [new(0x001, 0)]),
+        new(2, 0, 0x31F34B9F, [new(0x24F, 0)]),
+        new(2, 1, 0xAC0F9E76, [new(0x80003FFF, 0)]),
+        new(2, 2, 0x929FD95D, [new(0x250, 0)]),
+    ];
+
+    private readonly record struct TextureDescriptor(
+        ulong Address,
+        uint Width,
+        uint Height,
+        uint Format,
+        uint NumberType,
+        uint TileMode,
+        uint Type,
+        uint BaseLevel,
+        uint LastLevel,
+        uint Pitch,
+        uint DstSelect,
+        uint Depth = 1,
+        uint BaseArray = 0,
+        uint ArrayPitch = 0,
+        uint MaxMip = 0,
+        uint MinLod = 0,
+        uint MinLodWarn = 0,
+        uint BcSwizzle = 0,
+        ulong MetadataAddress = 0,
+        uint DescriptorFlags = 0,
+        bool HasExtendedDescriptor = false)
+    {
+        // SHARPEMU_V74_0_56_34_RDNA2_DCC_COMPRESSION_ENABLE
+        // RDNA2 image-SRD bit 213 is word6 bit 21. Bits 255:216 carry the
+        // metadata address independently. Do not classify an SRD as DCC from
+        // MetadataAddress alone.
+        private const uint Rdna2DccCompressionEnableMaskV7405634 =
+            0x0020_0000u;
+
+        public bool DccCompressionEnabled =>
+            HasExtendedDescriptor &&
+            MetadataAddress != 0 &&
+            (DescriptorFlags &
+             Rdna2DccCompressionEnableMaskV7405634) != 0;
+
+        public uint ResourceMipLevels
+        {
+            get
+            {
+                // RDNA2 table 45 explicitly distinguishes MAX_MIP (the
+                // resource allocation) from BASE_LEVEL/LAST_LEVEL (the
+                // resource view). Do not size a Vulkan image from a view:
+                // another descriptor for the same allocation may expose a
+                // different subset of its mip chain.
+                var maximumMipLevels = GetMaximumMipLevels();
+                var resourceMipLevels = HasExtendedDescriptor
+                    ? MaxMip + 1
+                    : maximumMipLevels;
+                return Math.Min(Math.Max(resourceMipLevels, 1u), maximumMipLevels);
+            }
+        }
+
+        public uint MipLevels
+        {
+            get
+            {
+                var descriptorMipLevels = LastLevel >= ViewBaseLevel
+                    ? LastLevel - ViewBaseLevel + 1
+                    : 1;
+                return Math.Min(
+                    descriptorMipLevels,
+                    ResourceMipLevels - ViewBaseLevel);
+            }
+        }
+
+        public uint ViewBaseLevel
+        {
+            get
+            {
+                // Some single-mip Gen5 descriptors use the reserved/inverted
+                // 15-0 range as a mip-disabled sentinel. The resource still
+                // has exactly one addressable level (MAX_MIP=0). Treating 15
+                // literally makes Vulkan reject an otherwise compatible GPU
+                // image and falls back to stale guest-memory pixels. For any
+                // malformed range, keep BASE_LEVEL's meaning and clamp it to
+                // the allocation's last addressable mip. In particular, the
+                // common 15-0/MAX_MIP=0 sentinel resolves to mip 0 without
+                // making LAST_LEVEL the base of unrelated inverted views.
+                return Math.Min(BaseLevel, ResourceMipLevels - 1);
+            }
+        }
+
+        private uint GetMaximumMipLevels()
+        {
+            var largestDimension = Type == 10
+                ? Math.Max(Math.Max(Width, Height), Depth)
+                : Math.Max(Width, Height);
+            uint maximumMipLevels = 1;
+            while (largestDimension > 1)
+            {
+                largestDimension >>= 1;
+                maximumMipLevels++;
+            }
+
+            return maximumMipLevels;
+        }
+    }
+
+    private readonly record struct RenderTargetDescriptor(
+        uint Slot,
+        ulong Address,
+        uint Width,
+        uint Height,
+        uint Format,
+        uint NumberType,
+        uint TileMode,
+        // ATTRIB3 is legal partial state. Preserve whether TileMode came from
+        // real guest state instead of treating a missing register as tile 0.
+        bool TileModeKnown = true,
+        ulong MetadataAddress = 0,
+        bool DccEnabled = false,
+        // CB_COLOR_INFO.COMP_SWAP is independent from FORMAT and must survive
+        // until the host render-target format/view is selected.
+        uint ComponentSwap = 0);
+
+    private sealed record TranslatedGuestDraw(
+        ulong ExportShaderAddress,
+        ulong PixelShaderAddress,
+        uint PrimitiveType,
+        IGuestCompiledShader VertexShader,
+        IGuestCompiledShader PixelShader,
+        uint AttributeCount,
+        uint VertexCount,
+        uint InstanceCount,
+        int BaseVertex,
+        GuestIndexBuffer? IndexBuffer,
+        IReadOnlyList<TranslatedImageBinding> Textures,
+        IReadOnlyList<Gen5GlobalMemoryBinding> GlobalMemoryBindings,
+        IReadOnlyList<Gen5VertexInputBinding> VertexInputs,
+        IReadOnlyList<RenderTargetDescriptor> RenderTargets,
+        GuestDepthTarget? DepthTarget,
+        // Seam-shaped color targets are built once with the cached translation.
+        IReadOnlyList<GuestRenderTarget> GuestTargets,
+        GuestRenderState RenderState,
+        IReadOnlyList<uint> PixelUserData,
+        uint RawBlendControl,
+        uint RawColorInfo,
+        IReadOnlyList<uint> PixelInitialScalars,
+        IReadOnlyList<uint> VertexInitialScalars,
+        bool IsFullscreenColorClear = false,
+        float ClearRed = 0f,
+        float ClearGreen = 0f,
+        float ClearBlue = 0f,
+        float ClearAlpha = 1f,
+        bool IsDccFastClear = false);
+
+    private sealed record TranslatedImageBinding(
+        TextureDescriptor Descriptor,
+        bool IsStorage,
+        uint MipLevel,
+        IReadOnlyList<uint> SamplerDescriptor,
+        bool IsArrayed = false);
+
+    private readonly record struct RenderTargetWriter(
+        ulong Sequence,
+        ulong ExportShaderAddress,
+        ulong PixelShaderAddress,
+        uint VertexCount,
+        uint PrimitiveType);
+
+    private readonly record struct ComputeImageWriter(
+        ulong Sequence,
+        ulong ShaderAddress,
+        string Opcode);
+
+    private readonly record struct ComputeDispatch(
+        uint GroupCountX,
+        uint GroupCountY,
+        uint GroupCountZ,
+        uint BaseGroupX,
+        uint BaseGroupY,
+        uint BaseGroupZ,
+        uint WaveLaneCount,
+        bool IsIndirect,
+        uint ThreadCountX,
+        uint ThreadCountY,
+        uint ThreadCountZ);
+
+    private readonly record struct SubmittedAcquireMem(
+        uint Engine,
+        uint CbDbControl,
+        ulong BaseAddress,
+        ulong SizeBytes,
+        uint PollInterval,
+        uint GcrControl)
+    {
+        // GFX10 GCR_CNTL invalidation controls. The host has no separate GLI,
+        // GLM, GLK, GLV, GL1 and GL2 caches; they all converge on the guest
+        // memory snapshots used to build Vulkan resources.
+        private const uint GliInvalidateMask = 0x3u;
+        private const int Gl1RangeShift = 2;
+        private const uint Gl1RangeMask = 0x3u;
+        private const uint GlmInvalidate = 1u << 5;
+        private const uint GlkInvalidate = 1u << 7;
+        private const uint GlvInvalidate = 1u << 8;
+        private const uint Gl1Invalidate = 1u << 9;
+        private const uint Gl2Discard = 1u << 13;
+        private const uint Gl2Invalidate = 1u << 14;
+        private const int Gl2RangeShift = 11;
+        private const uint Gl2RangeMask = 0x3u;
+
+        public bool InvalidatesGuestResources =>
+            (GcrControl & (GliInvalidateMask |
+                           GlmInvalidate |
+                           GlkInvalidate |
+                           GlvInvalidate |
+                           Gl1Invalidate |
+                           Gl2Discard |
+                           Gl2Invalidate)) != 0;
+
+        // sceAgc encodes its all-memory sentinel with a zero COHER_SIZE. GFX10
+        // can also request ALL independently in GLI_INV, GL1_RANGE or
+        // GL2_RANGE; in the host's unified resource cache, any invalidated
+        // domain with ALL scope expands the operation to all tracked images.
+        public bool CoversAllGuestMemory =>
+            SizeBytes == 0 ||
+            (GcrControl & GliInvalidateMask) == 1u ||
+            ((GcrControl & (GlmInvalidate |
+                            GlkInvalidate |
+                            GlvInvalidate |
+                            Gl1Invalidate)) != 0 &&
+             ((GcrControl >> Gl1RangeShift) & Gl1RangeMask) == 0) ||
+            ((GcrControl & (Gl2Discard | Gl2Invalidate)) != 0 &&
+             ((GcrControl >> Gl2RangeShift) & Gl2RangeMask) == 0);
+    }
+
+    private sealed class SubmittedDcbState
+    {
+        public readonly record struct PendingSubmission(
+            ulong CommandAddress,
+            uint DwordCount,
+            ulong SubmissionId,
+            bool TracePackets);
+
+        public Dictionary<uint, uint> CxRegisters { get; } = new();
+        public Dictionary<uint, uint> ShRegisters { get; } = new();
+        public Dictionary<uint, uint> UcRegisters { get; } = new();
+        public TextureDescriptor? PresenterTexture { get; set; }
+        public GuestDrawKind GuestDrawKind { get; set; }
+        public TranslatedGuestDraw? TranslatedDraw { get; set; }
+        public Queue<TranslatedGuestDraw> PendingTargetlessDraws { get; } = new();
+        public Dictionary<ulong, RenderTargetDescriptor> KnownRenderTargets { get; } = new();
+        public Dictionary<ulong, RenderTargetWriter> RenderTargetWriters { get; } = new();
+        public ulong IndirectArgsAddress { get; set; }
+        public bool SawIndexedDraw { get; set; }
+        public ulong IndexBufferAddress { get; set; }
+        public uint IndexBufferCount { get; set; }
+        public uint IndexSize { get; set; }
+        public uint InstanceCount { get; set; } = 1;
+        public uint DrawIndexOffset { get; set; }
+        public bool PredicateSkip { get; set; }
+        public string QueueName { get; set; } = "graphics";
+        // Ident this queue's end-of-pipe completion interrupt is published under.
+        // The graphics queue keeps 0; a compute queue takes the owner handle it
+        // was submitted with, which is the same value the guest registers through
+        // sceAgcDriverAddEqEvent.
+        public ulong CompletionEventId { get; set; }
+        public ulong ActiveSubmissionId { get; set; }
+        public Queue<PendingSubmission> PendingSubmissions { get; } = new();
+        public bool HasActiveSubmission { get; set; }
+        public bool IsSuspended { get; set; }
+
+        // Set when parsing stops on an INDIRECT_BUFFER packet so the caller can
+        // continue into the buffer it links to.
+        public ulong PendingChainAddress { get; set; }
+        public uint PendingChainDwords { get; set; }
+
+        // Upstream 0.0.3 ring continuation state. The chunk-advance sentinel
+        // moves RingChunkBase by 64 KiB and an unwritten tail is parked rather
+        // than interpreted as invalid PM4.
+        public ulong RingChunkBase { get; set; }
+        public bool FollowedChunkAdvance { get; set; }
+        public ulong RingTailParkAddress { get; set; }
+        public ulong CompletionEventNotifiedSubmissionId { get; set; }
+        public Dictionary<(uint Op, uint Register), uint> FramePacketCounts { get; } = new();
+        public uint FramePacketCount { get; set; }
+        public uint FrameDrawCount { get; set; }
+        public uint FrameDispatchCount { get; set; }
+        public ulong FlipCount { get; set; }
+        // RootFix V6: separates render-target writers produced in the current
+        // frame from stale writer records retained for resource dependency
+        // tracking across frames.
+        public ulong LastFlipWorkSequence { get; set; }
+
+        // Coalesce ACQUIRE_MEM invalidations within one DCB parse so North
+        // Yankton load does not enqueue hundreds of empty OrderedGuestActions.
+        public bool PendingAcquireInvalidation { get; set; }
+        public ulong PendingAcquireBase { get; set; }
+        public ulong PendingAcquireSize { get; set; }
+    }
+
+    private sealed class SubmittedGpuState
+    {
+        // V32_FORK_AGC_STATE: per-process driver configuration, not blind success.
+        public bool TfRingConfigured { get; set; }
+        public ulong TfRingAddress { get; set; }
+        public uint TfRingSize { get; set; }
+        public bool HsOffchipParamConfigured { get; set; }
+        public uint HsOffchipParamPayload { get; set; }
+        public object Gate { get; } = new();
+        public SubmittedDcbState Graphics { get; } = new();
+        public Dictionary<uint, SubmittedDcbState> ComputeQueues { get; } = new();
+        public Dictionary<ulong, ComputeImageWriter> ComputeImageWriters { get; } = new();
+        public Dictionary<uint, string> ResourceOwners { get; } = new();
+        public Dictionary<uint, RegisteredAgcResource> RegisteredResources { get; } = new();
+        public bool ResourceRegistrationInitialized { get; set; }
+        public ulong ResourceRegistrationMemory { get; set; }
+        public ulong ResourceRegistrationMemorySize { get; set; }
+        public uint ResourceRegistrationMaxOwners { get; set; }
+        public uint DefaultOwner { get; set; } = DefaultAgcOwner;
+        public uint NextOwner { get; set; } = 1;
+        public uint NextResource { get; set; } = 1;
+        public ulong WorkSequence { get; set; }
+        public ulong SubmissionSequence { get; set; }
+        public bool WaitMonitorRunning { get; set; }
+        public object WaitMonitorSignalGate { get; } = new();
+        public long WaitMonitorSignalVersion { get; set; }
+        // Upstream 0.0.3 coalesced producer->waiter drain. Fields are used by Interlocked.
+        public int DrainWorkerActive;
+        public int DrainPending;
+        public CpuContext? PendingDrainContext;
+        // SHARPEMU_V74_0_71_DEDICATED_WAIT_DRAIN
+        // A dedicated background worker removes host ThreadPool scheduling
+        // latency from producer-completion -> WAIT_REG_MEM resume. It still
+        // enters the same AGC Gate and calls the exact DrainResumableDcbs()
+        // routine; no guest value, label, fence or completion is synthesized.
+        public System.Threading.AutoResetEvent DedicatedDrainSignal { get; } = new(false);
+        public int DedicatedDrainWorkerStarted;
+        public System.Threading.Thread? DedicatedDrainThread;
+        public long DedicatedDrainTraceCount;
+        public long DedicatedDrainSlowGateCount;
+        // SHARPEMU_V74_0_72_AGC_GATE_OWNER_WAIT_DRAIN
+        // The parser already owns Gate while walking a PM4 DCB. Let that owner
+        // service a pending producer->waiter drain only at a packet boundary,
+        // instead of forcing the dedicated V71 worker to wait behind the same
+        // long critical section it is trying to unblock.
+        public int GateOwnerDrainActiveV74072;
+        public long GateOwnerDrainTraceCountV74072;
+        public long GateOwnerDrainResumeCountV74072;
+        // V74.0.30: one process-wide PM4 scheduling pass owns runnable queue
+        // selection while the global AGC gate is held. A blocked queue keeps
+        // its active submission/cursor; sibling queue fronts remain runnable.
+        public bool Pm4SchedulerRunningV74030 { get; set; }
+        public int Pm4SchedulerCursorV74030 { get; set; }
+    }
+
+    private readonly record struct RegisteredAgcResource(
+        uint Owner,
+        ulong Address,
+        ulong Size,
+        string Name,
+        uint Type,
+        uint Flags);
+
+    private sealed class LabelProducerTrace
+    {
+        public long Sequence;
+        public required object Memory;
+        public ulong Address;
+        public ulong Length;
+        public ulong PacketAddress;
+        public ulong SubmissionId;
+        public required string QueueName;
+        public required string DebugName;
+        // V14: producer intent discovered when a submitted command buffer is
+        // indexed, before the serial parser reaches the packet.
+        public bool Planned;
+        public bool Completed;
+        // Diagnostic generation timestamps. Completed history from before a
+        // waiter registered belongs to an older recycled-label generation and
+        // must not be reported as that waiter's producer.
+        public long CreatedTicks;
+        public long ActivatedTicks;
+        public long CompletedTicks;
+    }
+
+    private readonly record struct RegisterDefaultValue(uint Offset, uint Value);
+
+    private readonly record struct RegisterDefaultGroup(
+        uint Space,
+        uint Index,
+        uint Type,
+        RegisterDefaultValue[] Registers);
+
+    private sealed record RegisterDefaultsAllocation(ulong Primary, ulong Internal);
+
+    // NID captured from shipped titles; 'sceAgcInit' is a working label that collides with a real catalog symbol of a different NID. Rename pending AGC API confirmation.
+    #pragma warning disable SHEM004
+    [SysAbiExport(
+        Nid = "23LRUSvYu1M",
+        ExportName = "sceAgcInit",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int Init(CpuContext ctx)
+    {
+        var stateAddress = ctx[CpuRegister.Rdi];
+        var version = (uint)ctx[CpuRegister.Rsi];
+        if (stateAddress == 0 || !IsSupportedRegisterDefaultsVersion(version))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (version == RegisterDefaultsVersion12)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] dbfz.agc.version12_init accepted state=0x{stateAddress:X16}");
+        }
+
+        TraceAgc($"agc.init state=0x{stateAddress:X16} version={version}");
+        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+    #pragma warning restore SHEM004
+
+    [SysAbiExport(
+        Nid = "2JtWUUiYBXs",
+        ExportName = "sceAgcGetRegisterDefaults2",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int GetRegisterDefaults2(CpuContext ctx) =>
+        ReturnRegisterDefaults(ctx, internalDefaults: false);
+
+    [SysAbiExport(
+        Nid = "wRbq6ZjNop4",
+        ExportName = "sceAgcGetRegisterDefaults2Internal",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int GetRegisterDefaults2Internal(CpuContext ctx) =>
+        ReturnRegisterDefaults(ctx, internalDefaults: true);
+
+    /// <summary>
+    /// Reports that the GPU is not running in Trinity mode, matching the base
+    /// console this backend emulates.
+    /// </summary>
+    [SysAbiExport(
+        Nid = "BfBDZGbti7A",
+        ExportName = "sceAgcGetIsTrinityMode",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int GetIsTrinityMode(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "f3dg2CSgRKY",
+        ExportName = "sceAgcCreateShader",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CreateShader(CpuContext ctx)
+    {
+        var destinationAddress = ctx[CpuRegister.Rdi];
+        var headerAddress = ctx[CpuRegister.Rsi];
+        var codeAddress = ctx[CpuRegister.Rdx];
+        if (headerAddress == 0 || codeAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryReadUInt32(ctx, headerAddress, out var fileHeader) ||
+            !TryReadUInt32(ctx, headerAddress + sizeof(uint), out var version))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (fileHeader != ShaderFileHeader || version != ShaderVersion)
+        {
+            TraceCreateShader(destinationAddress, headerAddress, codeAddress, $"invalid-header file=0x{fileHeader:X8} version=0x{version:X8}");
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!RelocatePointerField(ctx, headerAddress + ShaderCxRegistersOffset) ||
+            !RelocatePointerField(ctx, headerAddress + ShaderShRegistersOffset) ||
+            !RelocatePointerField(ctx, headerAddress + ShaderUserDataOffset) ||
+            !RelocatePointerField(ctx, headerAddress + ShaderSpecialsOffset) ||
+            !RelocatePointerField(ctx, headerAddress + ShaderInputSemanticsOffset) ||
+            !RelocatePointerField(ctx, headerAddress + ShaderOutputSemanticsOffset) ||
+            !ctx.TryWriteUInt64(headerAddress + ShaderCodeOffset, codeAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (!TryReadUInt64(ctx, headerAddress + ShaderUserDataOffset, out var userDataAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (userDataAddress != 0 &&
+            (!RelocatePointerField(ctx, userDataAddress) ||
+             !RelocatePointerField(ctx, userDataAddress + 0x08) ||
+             !RelocatePointerField(ctx, userDataAddress + 0x10) ||
+             !RelocatePointerField(ctx, userDataAddress + 0x18) ||
+             !RelocatePointerField(ctx, userDataAddress + 0x20)))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (!PatchShaderProgramRegisters(ctx, headerAddress, codeAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (destinationAddress != 0 &&
+            !ctx.TryWriteUInt64(destinationAddress, headerAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        lock (_submitTraceGate)
+        {
+            _shaderHeadersByCode[codeAddress] = headerAddress;
+        }
+
+        TraceCreateShader(destinationAddress, headerAddress, codeAddress, "ok");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    // NID captured from shipped titles; the friendly name collides with a real catalog symbol of a different NID. Rename pending AGC API confirmation.
+    #pragma warning disable SHEM004
+    [SysAbiExport(
+        Nid = "dolOmWH+huQ",
+        ExportName = "sceAgcGetFusedShaderSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int GetFusedShaderSize(CpuContext ctx)
+    {
+        var destinationAddress = ctx[CpuRegister.Rdi];
+        var frontAddress = ctx[CpuRegister.Rsi];
+        var backAddress = ctx[CpuRegister.Rdx];
+        if (destinationAddress == 0 || frontAddress == 0 || backAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryReadByte(ctx, frontAddress + ShaderTypeOffset, out var frontType) ||
+            !TryReadByte(ctx, backAddress + ShaderTypeOffset, out var backType) ||
+            !TryReadByte(ctx, backAddress + ShaderNumShRegistersOffset, out var registerCount))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (!IsFusedShaderHalfPair(frontType, backType))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!ctx.TryWriteUInt64(destinationAddress, registerCount * 8UL) ||
+            !ctx.TryWriteUInt64(destinationAddress + 8, FusedShaderImageAlignment))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc(
+            $"agc.get_fused_shader_size front=0x{frontAddress:X16} back=0x{backAddress:X16} " +
+            $"types={frontType}/{backType} registers={registerCount}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+    #pragma warning restore SHEM004
+
+    // NID captured from shipped titles; the friendly name collides with a real catalog symbol of a different NID. Rename pending AGC API confirmation.
+    #pragma warning disable SHEM004
+    [SysAbiExport(
+        Nid = "fd5Bp5tGTgo",
+        ExportName = "sceAgcFuseShaderHalves",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int FuseShaderHalves(CpuContext ctx)
+    {
+        var fusedAddress = ctx[CpuRegister.Rdi];
+        var frontAddress = ctx[CpuRegister.Rsi];
+        var backAddress = ctx[CpuRegister.Rdx];
+        var scratchAddress = ctx[CpuRegister.Rcx];
+        if (fusedAddress == 0 || frontAddress == 0 || backAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryReadByte(ctx, frontAddress + ShaderTypeOffset, out var frontType) ||
+            !TryReadByte(ctx, backAddress + ShaderTypeOffset, out var backType))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (!IsFusedShaderHalfPair(frontType, backType))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryReadUInt64(ctx, frontAddress + ShaderSpecialsOffset, out var frontSpecialsAddress) ||
+            !TryReadUInt64(ctx, backAddress + ShaderSpecialsOffset, out var backSpecialsAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        var isGeometryPair = frontType == GsFrontShaderType;
+        if (frontSpecialsAddress != 0 && backSpecialsAddress != 0)
+        {
+            if (!TryReadUInt32(ctx, frontSpecialsAddress + ShaderSpecialVgtShaderStagesEnOffset + sizeof(uint), out var frontStages) ||
+                !TryReadUInt32(ctx, backSpecialsAddress + ShaderSpecialVgtShaderStagesEnOffset + sizeof(uint), out var backStages))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            var waveSizeBit = isGeometryPair ? VgtShaderStagesGsW32EnBit : VgtShaderStagesHsW32EnBit;
+            if (((frontStages ^ backStages) & waveSizeBit) != 0)
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+            }
+        }
+
+        if (!TryReadUInt64(ctx, backAddress + ShaderShRegistersOffset, out var backRegistersAddress) ||
+            !TryReadByte(ctx, backAddress + ShaderNumShRegistersOffset, out var registerCount) ||
+            !TryReadUInt64(ctx, frontAddress + ShaderCodeOffset, out var frontCodeAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        Span<byte> header = stackalloc byte[ShaderStructBytes];
+        if (!ctx.Memory.TryRead(backAddress, header) ||
+            !ctx.Memory.TryWrite(fusedAddress, header))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        var fusedRegistersAddress = backRegistersAddress;
+        if (scratchAddress != 0 && backRegistersAddress != 0 && registerCount != 0)
+        {
+            Span<byte> registers = stackalloc byte[registerCount * 8];
+            if (!ctx.Memory.TryRead(backRegistersAddress, registers) ||
+                !ctx.Memory.TryWrite(scratchAddress, registers))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            fusedRegistersAddress = scratchAddress;
+        }
+
+        if (!TryWriteByte(ctx, fusedAddress + ShaderTypeOffset, isGeometryPair ? GsShaderType : HsShaderType) ||
+            !ctx.TryWriteUInt64(fusedAddress + ShaderUserDataOffset, 0) ||
+            !ctx.TryWriteUInt64(fusedAddress + ShaderShRegistersOffset, fusedRegistersAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (isGeometryPair)
+        {
+            if (!TryReadUInt64(ctx, frontAddress + ShaderShRegistersOffset, out var frontRegistersAddress) ||
+                !TryReadByte(ctx, frontAddress + ShaderNumShRegistersOffset, out var frontRegisterCount))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            for (var occurrence = 0; occurrence < 2; occurrence++)
+            {
+                if (!TryFindShaderRegister(ctx, fusedRegistersAddress, registerCount, SpiShaderPgmChksumGs, occurrence, out var fusedEntry) ||
+                    !TryFindShaderRegister(ctx, frontRegistersAddress, frontRegisterCount, SpiShaderPgmChksumGs, occurrence, out var frontEntry))
+                {
+                    continue;
+                }
+
+                if (!TryReadUInt32(ctx, frontEntry + sizeof(uint), out var checksum) ||
+                    !TryWriteUInt32(ctx, fusedEntry + sizeof(uint), checksum))
+                {
+                    return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+                }
+            }
+        }
+
+        if (!PatchFusedProgramAddress(
+                ctx,
+                fusedRegistersAddress,
+                registerCount,
+                isGeometryPair ? SpiShaderPgmLoEs : SpiShaderPgmLoLs,
+                frontCodeAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc(
+            $"agc.fuse_shader_halves fused=0x{fusedAddress:X16} front=0x{frontAddress:X16} " +
+            $"back=0x{backAddress:X16} scratch=0x{scratchAddress:X16} types={frontType}/{backType} " +
+            $"registers={registerCount} code=0x{frontCodeAddress:X16}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+    #pragma warning restore SHEM004
+
+    [SysAbiExport(
+        Nid = "vcmNN+AAXnY",
+        ExportName = "sceAgcSetCxRegIndirectPatchSetAddress",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetCxRegIndirectPatchSetAddress(CpuContext ctx) =>
+        SetIndirectPatchAddress(ctx, "cx");
+
+    [SysAbiExport(
+        Nid = "Qrj4c+61z4A",
+        ExportName = "sceAgcSetShRegIndirectPatchSetAddress",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetShRegIndirectPatchSetAddress(CpuContext ctx) =>
+        SetIndirectPatchAddress(ctx, "sh");
+
+    [SysAbiExport(
+        Nid = "6lNcCp+fxi4",
+        ExportName = "sceAgcSetUcRegIndirectPatchSetAddress",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetUcRegIndirectPatchSetAddress(CpuContext ctx) =>
+        SetIndirectPatchAddress(ctx, "uc");
+
+    [SysAbiExport(
+        Nid = "d-6uF9sZDIU",
+        ExportName = "sceAgcSetCxRegIndirectPatchAddRegisters",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetCxRegIndirectPatchAddRegisters(CpuContext ctx) =>
+        AddIndirectPatchRegisters(ctx, "cx");
+
+    [SysAbiExport(
+        Nid = "z2duB-hHQSM",
+        ExportName = "sceAgcSetShRegIndirectPatchAddRegisters",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetShRegIndirectPatchAddRegisters(CpuContext ctx) =>
+        AddIndirectPatchRegisters(ctx, "sh");
+
+    [SysAbiExport(
+        Nid = "vRoArM9zaIk",
+        ExportName = "sceAgcSetUcRegIndirectPatchAddRegisters",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetUcRegIndirectPatchAddRegisters(CpuContext ctx) =>
+        AddIndirectPatchRegisters(ctx, "uc");
+
+    [SysAbiExport(
+        Nid = "D9sr1xGUriE",
+        ExportName = "sceAgcCreatePrimState",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CreatePrimState(CpuContext ctx)
+    {
+        var cxRegistersAddress = ctx[CpuRegister.Rdi];
+        var ucRegistersAddress = ctx[CpuRegister.Rsi];
+        var hullShaderAddress = ctx[CpuRegister.Rdx];
+        var geometryShaderAddress = ctx[CpuRegister.Rcx];
+        var primitiveType = (uint)ctx[CpuRegister.R8];
+
+        // Hull is optional: tessellation pipelines (GTA fused HS, Ghost of YÅtei)
+        // pass a non-null hull-state block here. Geometry-derived CX/UC writes
+        // stay the same; the hull stage itself is not modelled yet, so it is
+        // only recorded in the trace (#583).
+        if (cxRegistersAddress == 0 || ucRegistersAddress == 0 || geometryShaderAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        // SHARPEMU_V74_0_56_33_ACTIVE_TESSELLATION_AUDIT
+        // Gen5SpirvStage currently exposes only Vertex/Pixel/Compute and this
+        // function explicitly states that Hull is not modelled. Record actual
+        // PPSA01341 usage so the next implementation is driven by a real scene
+        // requirement rather than by eboot strings alone.
+        if (_traceScenePipelineGapsV7405633 &&
+            hullShaderAddress != 0)
+        {
+            var hullCountV7405633 =
+                Interlocked.Increment(
+                    ref _v7405633HullActiveCount);
+
+            if (hullCountV7405633 <= 128 ||
+                (hullCountV7405633 &
+                 (hullCountV7405633 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.33][SCENE_GAP] " +
+                    $"kind=hull-stage-active " +
+                    $"count={hullCountV7405633} " +
+                    $"hull=0x{hullShaderAddress:X16} " +
+                    $"gs=0x{geometryShaderAddress:X16} " +
+                    $"prim=0x{primitiveType:X8}");
+            }
+        }
+
+        if (!TryReadByte(ctx, geometryShaderAddress + ShaderTypeOffset, out var shaderType) || !IsEsGeometryShaderType(shaderType) ||
+            !TryReadUInt64(ctx, geometryShaderAddress + ShaderSpecialsOffset, out var specialsAddress) ||
+            specialsAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!CopyShaderRegister(ctx, specialsAddress + ShaderSpecialVgtShaderStagesEnOffset, cxRegistersAddress) ||
+            !CopyShaderRegister(ctx, specialsAddress + ShaderSpecialVgtGsOutPrimTypeOffset, cxRegistersAddress + 8) ||
+            !CopyShaderRegister(ctx, specialsAddress + ShaderSpecialGeCntlOffset, ucRegistersAddress) ||
+            !CopyShaderRegister(ctx, specialsAddress + ShaderSpecialGeUserVgprEnOffset, ucRegistersAddress + 8) ||
+            !TryWriteUInt32(ctx, ucRegistersAddress + 16, VgtPrimitiveType) ||
+            !TryWriteUInt32(ctx, ucRegistersAddress + 20, primitiveType))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc(
+            $"agc.create_prim_state cx=0x{cxRegistersAddress:X16} uc=0x{ucRegistersAddress:X16} " +
+            $"hull=0x{hullShaderAddress:X16} gs=0x{geometryShaderAddress:X16} type={shaderType} prim=0x{primitiveType:X8}");
+        if (_tracePrimitivePipelineV180)
+        {
+            TryReadUInt32(ctx, cxRegistersAddress, out var stagesOffset);
+            TryReadUInt32(ctx, cxRegistersAddress + 4, out var stagesValue);
+            TryReadUInt32(ctx, cxRegistersAddress + 8, out var gsOutOffset);
+            TryReadUInt32(ctx, cxRegistersAddress + 12, out var gsOutValue);
+            TryReadUInt32(ctx, ucRegistersAddress, out var geCntlOffset);
+            TryReadUInt32(ctx, ucRegistersAddress + 4, out var geCntlValue);
+            TryReadUInt32(ctx, ucRegistersAddress + 8, out var geUserVgprOffset);
+            TryReadUInt32(ctx, ucRegistersAddress + 12, out var geUserVgprValue);
+            Volatile.Write(ref _primitiveStagesOffsetV180, unchecked((int)stagesOffset));
+            Volatile.Write(ref _primitiveGsOutOffsetV180, unchecked((int)gsOutOffset));
+            Volatile.Write(ref _primitiveGeCntlOffsetV180, unchecked((int)geCntlOffset));
+            Volatile.Write(ref _primitiveGeUserVgprOffsetV180, unchecked((int)geUserVgprOffset));
+            Console.Error.WriteLine(
+                $"[V180][PRIM] agc.primitive_state_created " +
+                $"gs_header=0x{geometryShaderAddress:X16} type={shaderType} prim=0x{primitiveType:X8} " +
+                $"stages=0x{stagesOffset:X4}:0x{stagesValue:X8} " +
+                $"gs_out=0x{gsOutOffset:X4}:0x{gsOutValue:X8} " +
+                $"ge_cntl=0x{geCntlOffset:X4}:0x{geCntlValue:X8} " +
+                $"ge_user_vgpr=0x{geUserVgprOffset:X4}:0x{geUserVgprValue:X8}");
+        }
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    // Symbol name unconfirmed (not in ps5_names.txt); resolved from the
+    // decrypted eboot's call site only. On Ghost of Yotei, the caller scans
+    // this same buffer right after sceAgcCreatePrimState for 32 (offset,value)
+    // pairs (a hardcoded size, not read from any header) and open-address-
+    // probes them as a register hash table -- an out-of-bounds probe index
+    // sourced from an unwritten pair was the AV. CreatePrimState only
+    // populates the first 3 pairs; zero the rest of the scanned window so
+    // every unpopulated slot is a harmless failed probe instead of
+    // guest-stack garbage.
+    [SysAbiExport(
+        Nid = "dbOlWdppb4o",
+        ExportName = "sceAgcAddPrimStateRegisters",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AddPrimStateRegisters(CpuContext ctx)
+    {
+        var ucRegistersAddress = ctx[CpuRegister.Rdi];
+        if (ucRegistersAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        const int prefilledPairBytes = 3 * 8; // sceAgcCreatePrimState's 3 (offset,value) pairs
+        const int scannedTableBytes = 0x20 * 8; // caller's hardcoded probe-window size
+        Span<byte> zero = stackalloc byte[scannedTableBytes - prefilledPairBytes];
+        zero.Clear();
+        if (!ctx.Memory.TryWrite(ucRegistersAddress + prefilledPairBytes, zero))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc($"agc.add_prim_state_registers uc=0x{ucRegistersAddress:X16}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    // NID captured from shipped titles; the friendly name collides with a real catalog symbol of a different NID. Rename pending AGC API confirmation.
+    #pragma warning disable SHEM004
+    [SysAbiExport(
+        Nid = "HV4j+E0MBHE",
+        ExportName = "sceAgcCreateInterpolantMapping",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CreateInterpolantMapping(CpuContext ctx)
+    {
+        var registersAddress = ctx[CpuRegister.Rdi];
+        var geometryShaderAddress = ctx[CpuRegister.Rsi];
+        var pixelShaderAddress = ctx[CpuRegister.Rdx];
+
+        if (registersAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        // SPI_PS_INPUT_CNTL maps each PS VINTRP ATTR slot to a VS/GS param export.
+        // Walk PS input semantics, find the GS output with the same semantic id,
+        // and pack the hardware CNTL word (location in bits [4:0], Flat at 0x400).
+        uint inputSemanticsCount = 0;
+        ulong inputSemanticsAddress = 0;
+        if (pixelShaderAddress != 0)
+        {
+            if (!TryReadUInt64(ctx, pixelShaderAddress + ShaderInputSemanticsOffset, out inputSemanticsAddress) ||
+                !TryReadUInt32(ctx, pixelShaderAddress + ShaderNumInputSemanticsOffset, out inputSemanticsCount))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+        }
+
+        if (inputSemanticsCount == 0 || inputSemanticsAddress == 0)
+        {
+            if (!TryWriteIdentityInterpolantRegisters(ctx, registersAddress, 0))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            TraceAgc(
+                $"agc.create_interpolant_mapping regs=0x{registersAddress:X16} " +
+                $"gs=0x{geometryShaderAddress:X16} ps=0x{pixelShaderAddress:X16} inputs=0");
+            ctx[CpuRegister.Rax] = 0;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
+        if (geometryShaderAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        // NumOutputSemantics is a u16 at header +0x56.
+        if (!TryReadUInt64(ctx, geometryShaderAddress + ShaderOutputSemanticsOffset, out var outputSemanticsAddress) ||
+            !TryReadUInt16(ctx, geometryShaderAddress + ShaderNumOutputSemanticsOffset, out var outputSemanticsCount))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        inputSemanticsCount = Math.Min(inputSemanticsCount, 32u);
+        for (uint psIndex = 0; psIndex < inputSemanticsCount; psIndex++)
+        {
+            if (!TryReadUInt32(
+                    ctx,
+                    inputSemanticsAddress + (psIndex * sizeof(uint)),
+                    out var psWord))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            var psSemantic = psWord & 0xFFu;
+            uint? gsWord = null;
+            if (outputSemanticsAddress != 0)
+            {
+                for (uint gsIndex = 0; gsIndex < outputSemanticsCount; gsIndex++)
+                {
+                    if (!TryReadUInt32(
+                            ctx,
+                            outputSemanticsAddress + (gsIndex * sizeof(uint)),
+                            out var candidate))
+                    {
+                        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+                    }
+
+                    if ((candidate & 0xFFu) == psSemantic)
+                    {
+                        gsWord = candidate;
+                        break;
+                    }
+                }
+            }
+
+            var value = (psWord & 0x0030_0000u) != 0
+                ? CreateInterpolantF16Value(psWord, gsWord)
+                : CreateInterpolantNonF16Value(psWord, gsWord.HasValue);
+            value = gsWord is { } matched
+                ? CreateInterpolantMappingValue(value, psWord, matched)
+                : CreateInterpolantDefaultParamValue(value, psWord);
+
+            if (!TryWriteInterpolantRegister(ctx, registersAddress, psIndex, value))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+        }
+
+        if (!TryWriteIdentityInterpolantRegisters(ctx, registersAddress, inputSemanticsCount))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc(
+            $"agc.create_interpolant_mapping regs=0x{registersAddress:X16} " +
+            $"gs=0x{geometryShaderAddress:X16} ps=0x{pixelShaderAddress:X16} " +
+            $"inputs={inputSemanticsCount} outputs={outputSemanticsCount}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+    #pragma warning restore SHEM004
+
+    private static uint ApplyInterpolantDefaultValue(uint value, uint psWord)
+    {
+        value &= ~0x0000_0300u;
+        value |= ((psWord >> 28) & 0x3u) << 8;
+        return value;
+    }
+
+    private static uint ApplyInterpolantDefaultValueHi(uint value, uint psWord)
+    {
+        value &= ~0x0060_0000u;
+        value |= ((psWord >> 30) & 0x3u) << 21;
+        return value;
+    }
+
+    private static uint CreateInterpolantMappingValue(uint value, uint psWord, uint gsWord)
+    {
+        var flatShade =
+            (psWord & 0x0040_0000u) != 0 || (psWord & 0x0100_0000u) != 0
+                ? 0x0000_0400u
+                : 0u;
+        value &= ~0x0000_001Fu;
+        value |= (gsWord >> 8) & 0x1Fu;
+        value &= ~0x0000_0400u;
+        value |= flatShade;
+        return ApplyInterpolantDefaultValue(value, psWord);
+    }
+
+    private static uint CreateInterpolantDefaultParamValue(uint value, uint psWord)
+    {
+        value &= ~0x0000_001Fu;
+        value &= ~0x0000_0400u;
+        return ApplyInterpolantDefaultValue(value, psWord);
+    }
+
+    private static uint CreateInterpolantF16Value(uint psWord, uint? gsWord)
+    {
+        var value = (psWord << 4) & 0x0300_0000u;
+        if (gsWord is null)
+        {
+            value |= 0x0018_0020u;
+        }
+        else
+        {
+            var commonWord = psWord & gsWord.Value;
+            value &= 0xFFF7_FFDFu;
+            value |= (commonWord >> 15) & 0x20u;
+            value ^= 0x0008_0020u;
+            value &= ~0x0010_0000u;
+            value |= (~commonWord >> 1) & 0x0010_0000u;
+        }
+
+        return ApplyInterpolantDefaultValueHi(value, psWord);
+    }
+
+    private static uint CreateInterpolantNonF16Value(uint psWord, bool hasGsSemantic)
+    {
+        uint value = 0;
+        if ((psWord & 0x0100_0000u) != 0 || !hasGsSemantic)
+        {
+            value |= 0x20u;
+        }
+
+        return value;
+    }
+
+    private static bool TryWriteInterpolantRegister(
+        CpuContext ctx,
+        ulong registersAddress,
+        uint index,
+        uint value)
+    {
+        var destination = registersAddress + (index * 8);
+        return TryWriteUInt32(ctx, destination, SpiPsInputCntl0 + index) &&
+               TryWriteUInt32(ctx, destination + sizeof(uint), value);
+    }
+
+    private static bool TryWriteIdentityInterpolantRegisters(
+        CpuContext ctx,
+        ulong registersAddress,
+        uint firstIndex)
+    {
+        for (uint i = firstIndex; i < 32u; i++)
+        {
+            if (!TryWriteInterpolantRegister(ctx, registersAddress, i, i))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static uint[] ReadPsInputCntlRegisters(IReadOnlyDictionary<uint, uint> cxRegisters)
+    {
+        var cntl = new uint[32];
+        for (uint i = 0; i < 32u; i++)
+        {
+            // Unprogrammed slots default to identity (ATTR i â†’ param i).
+            cntl[i] = cxRegisters.TryGetValue(SpiPsInputCntl0 + i, out var value)
+                ? value
+                : i;
+        }
+
+        return cntl;
+    }
+
+    private static ulong ComputePsInputCntlFingerprint(ReadOnlySpan<uint> cntl)
+    {
+        const ulong prime = 1099511628211UL;
+        var hash = 14695981039346656037UL;
+        foreach (var value in cntl)
+        {
+            hash = (hash ^ value) * prime;
+        }
+
+        return hash;
+    }
+
+    // NID captured from shipped titles; the friendly name collides with a real catalog symbol of a different NID. Rename pending AGC API confirmation.
+    #pragma warning disable SHEM004
+    [SysAbiExport(
+        Nid = "V++UgBtQhn0",
+        ExportName = "sceAgcGetDataPacketPayloadAddress",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int GetDataPacketPayloadAddress(CpuContext ctx)
+    {
+        var outputAddress = ctx[CpuRegister.Rdi];
+        var commandAddress = ctx[CpuRegister.Rsi];
+        var type = (int)ctx[CpuRegister.Rdx];
+        if (outputAddress == 0 || commandAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var payloadAddress = commandAddress + 8;
+        if (type == 0)
+        {
+            if (!TryReadUInt32(ctx, commandAddress, out var header))
+            {
+                return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            payloadAddress = (header & 0x3FFF_0000u) == 0x3FFF_0000u
+                ? 0
+                : commandAddress + 4;
+        }
+
+        if (!ctx.TryWriteUInt64(outputAddress, payloadAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (ShouldTraceHotPath(ref _packetPayloadTraceCount))
+        {
+            TraceAgc(
+                $"agc.get_packet_payload out=0x{outputAddress:X16} cmd=0x{commandAddress:X16} " +
+                $"type={type} payload=0x{payloadAddress:X16}");
+        }
+
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+    #pragma warning restore SHEM004
+
+    [SysAbiExport(
+        Nid = "LtTouSCZjHM",
+        ExportName = "sceAgcCbNop",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbNop(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var dwordCount = (uint)ctx[CpuRegister.Rsi];
+        if (commandBufferAddress == 0 || dwordCount < 2 || dwordCount > 0x4001)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, dwordCount, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(dwordCount, ItNop, RZero)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        for (uint index = 1; index < dwordCount; index++)
+        {
+            if (!TryWriteUInt32(ctx, commandAddress + ((ulong)index * sizeof(uint)), 0))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    // RenderThread/Subrender probe this before writing a NOP. Unresolved
+    // GetSize returns NOT_FOUND and leaves command-buffer sizing broken.
+    // CbNop rejects dwordCount < 2, so report that floor.
+    [SysAbiExport(
+        Nid = "t7PlZ9nt5Lc",
+        ExportName = "sceAgcCbNopGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbNopGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 2u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "k3GhuSNmBLU",
+        ExportName = "sceAgcCbDispatch",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbDispatch(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var groupCountX = (uint)ctx[CpuRegister.Rsi];
+        var groupCountY = (uint)ctx[CpuRegister.Rdx];
+        var groupCountZ = (uint)ctx[CpuRegister.Rcx];
+        var modifier = (uint)ctx[CpuRegister.R8];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(5, ItDispatchDirect, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, groupCountX) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, groupCountY) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, groupCountZ) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, DirectDispatchInitiator(modifier)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    private static uint DirectDispatchInitiator(uint modifier) =>
+        // AGC's direct API takes workgroup counts by default. Preserve the
+        // caller's USE_THREAD_DIMENSIONS bit when explicitly requested; do not
+        // force it. Demon's Souls' 0xF00100 dispatch is paired with a
+        // 0x3C004000 element bound (exactly 64 lanes per group), proving the
+        // default packet is group-dimensional.
+        (modifier & 0xA038u) | 0x41u;
+
+    [SysAbiExport(
+        Nid = "UZbQjYAwwXM",
+        ExportName = "sceAgcCbSetShRegistersDirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbSetShRegistersDirect(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var registersAddress = ctx[CpuRegister.Rsi];
+        var registerCount = (uint)ctx[CpuRegister.Rdx];
+        if (registerCount == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (commandBufferAddress == 0 || registersAddress == 0 || registerCount > 4096)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var registers = new RegisterDefaultValue[registerCount];
+        for (uint index = 0; index < registerCount; index++)
+        {
+            var entryAddress = registersAddress + ((ulong)index * 8);
+            if (!TryReadUInt32(ctx, entryAddress, out var offset) ||
+                !TryReadUInt32(ctx, entryAddress + sizeof(uint), out var value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+
+            registers[index] = new RegisterDefaultValue(offset, value);
+        }
+
+        Array.Sort(registers, static (left, right) => left.Offset.CompareTo(right.Offset));
+        ulong firstCommandAddress = 0;
+        var startIndex = 0;
+        while (startIndex < registers.Length)
+        {
+            var endIndex = startIndex + 1;
+            while (endIndex < registers.Length &&
+                   registers[endIndex].Offset == registers[endIndex - 1].Offset + 1)
+            {
+                endIndex++;
+            }
+
+            var valueCount = (uint)(endIndex - startIndex);
+            var packetDwords = valueCount + 2;
+            if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+                !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, ItSetShReg, 0)) ||
+                !TryWriteUInt32(ctx, commandAddress + 4, registers[startIndex].Offset & 0xFFFFu))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+
+            firstCommandAddress = firstCommandAddress == 0 ? commandAddress : firstCommandAddress;
+            for (var index = startIndex; index < endIndex; index++)
+            {
+                if (!TryWriteUInt32(
+                        ctx,
+                        commandAddress + 8 + ((ulong)(index - startIndex) * sizeof(uint)),
+                        registers[index].Value))
+                {
+                    return ReturnPointer(ctx, 0);
+                }
+            }
+
+            startIndex = endIndex;
+        }
+
+        return ReturnPointer(ctx, firstCommandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "JrtiDtKeS38",
+        ExportName = "sceAgcAcbResetQueue",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbResetQueue(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItNop, RAcbReset)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "cFazmnXpJOE",
+        ExportName = "sceAgcAcbEventWrite",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbEventWrite(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var eventType = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var eventAddress = ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 || eventType >= 0x40)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var hasAddress = (eventType & ~1u) == 0x38;
+        var packetDwords = hasAddress ? 4u : 2u;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, ItEventWrite, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, hasAddress ? eventType | 0x100u : eventType & 0x3Fu))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (hasAddress &&
+            (!TryWriteUInt32(ctx, commandAddress + 8, (uint)eventAddress & ~7u) ||
+             !TryWriteUInt32(ctx, commandAddress + 12, (uint)(eventAddress >> 32))))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "KT-hTp-Ch14",
+        ExportName = "sceAgcAcbAcquireMem",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbAcquireMem(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var gcrControl = (uint)ctx[CpuRegister.Rsi];
+        var baseAddress = ctx[CpuRegister.Rdx];
+        var sizeBytes = ctx[CpuRegister.Rcx];
+        var pollCycles = (uint)ctx[CpuRegister.R8];
+        var noSize = sizeBytes == ulong.MaxValue;
+        if (commandBufferAddress == 0 ||
+            (!noSize && (sizeBytes & 0xFF) != 0) ||
+            (!noSize && (sizeBytes >> 40) != 0) ||
+            (baseAddress & 0xFF) != 0 ||
+            (baseAddress >> 40) != 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 8, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(8, ItNop, RAcquireMem)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, 0x8000_0000u) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, noSize ? 0 : (uint)(sizeBytes >> 8)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, (uint)(baseAddress >> 8)) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 24, pollCycles / 40) ||
+            !TryWriteUInt32(ctx, commandAddress + 28, gcrControl))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    // Matches the fixed 8-dword ACQUIRE_MEM packet AcbAcquireMem writes above.
+    [SysAbiExport(
+        Nid = "ewobAQeMo5k",
+        ExportName = "sceAgcAcbAcquireMemGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbAcquireMemGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 8u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "htn36gPnBk4",
+        ExportName = "sceAgcAcbWaitRegMem",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbWaitRegMem(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var size = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var compareFunction = (uint)(ctx[CpuRegister.Rdx] & 0xFF);
+        var cachePolicy = (uint)(ctx[CpuRegister.Rcx] & 0xFF);
+        var address = ctx[CpuRegister.R8];
+        var reference = ctx[CpuRegister.R9];
+        var stackAddress = ctx[CpuRegister.Rsp];
+        if (!TryReadUInt64(ctx, stackAddress + sizeof(ulong), out var mask) ||
+            !TryReadUInt32(ctx, stackAddress + (2 * sizeof(ulong)), out var pollCycles) ||
+            commandBufferAddress == 0 ||
+            size > 1 ||
+            compareFunction > 7 ||
+            cachePolicy > 3)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var packetDwords = size == 0 ? 7u : 9u;
+        var packetRegister = size == 0 ? RWaitMem32 : RWaitMem64;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, ItNop, packetRegister)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, (uint)address & (size == 0 ? ~0x3u : ~0x7u)) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)(address >> 32) & 0x3FFFFu) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)mask))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (size == 0)
+        {
+            if (!TryWriteUInt32(ctx, commandAddress + 16, (uint)reference) ||
+                !TryWriteUInt32(ctx, commandAddress + 20, EncodeWaitRegMem32Control(compareFunction, 0, cachePolicy)) ||
+                !TryWriteUInt32(ctx, commandAddress + 24, EncodeWaitRegMemPoll(pollCycles)))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+        else if (!TryWriteUInt32(ctx, commandAddress + 16, (uint)(mask >> 32)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 20, (uint)reference) ||
+                 !TryWriteUInt32(ctx, commandAddress + 24, (uint)(reference >> 32)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 28, EncodeWaitRegMem64Control(compareFunction, 0, cachePolicy)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 32, EncodeWaitRegMemPoll(pollCycles)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "eZ4+17OQz4Q",
+        ExportName = "sceAgcAcbWriteData",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbWriteData(CpuContext ctx) =>
+        DcbWriteData(ctx);
+
+    [SysAbiExport(
+        Nid = "j3EtxFkSIhQ",
+        ExportName = "sceAgcAcbDispatchIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbDispatchIndirect(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var argumentsAddress = ctx[CpuRegister.Rsi];
+        var modifier = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 4, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(4, ItDispatchIndirect, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, (uint)argumentsAddress) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)(argumentsAddress >> 32)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (modifier & 0xA038u) | 0x41u))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "n2fD4A+pb+g",
+        ExportName = "sceAgcCbSetShRegisterRangeDirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbSetShRegisterRangeDirect(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var offset = (uint)ctx[CpuRegister.Rsi];
+        var valuesAddress = ctx[CpuRegister.Rdx];
+        var valueCount = (uint)ctx[CpuRegister.Rcx];
+        if (commandBufferAddress == 0 || offset == 0 || offset > 0x3FF || valueCount == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var markerAddress) ||
+            !TryWriteUInt32(ctx, markerAddress, Pm4(2, ItNop, RZero)) ||
+            !TryWriteUInt32(ctx, markerAddress + 4, CbSetShRegisterRangeMarker) ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, valueCount + 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(valueCount + 2, ItSetShReg, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, offset))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        for (uint i = 0; i < valueCount; i++)
+        {
+            var value = 0u;
+            if (valuesAddress != 0 &&
+                !TryReadUInt32(ctx, valuesAddress + (i * sizeof(uint)), out value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+
+            if (!TryWriteUInt32(ctx, commandAddress + 8 + (i * sizeof(uint)), value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+
+        TraceAgc($"agc.cb_set_sh_range buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} offset=0x{offset:X8} count={valueCount}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "wr23dPKyWc0",
+        ExportName = "sceAgcCbReleaseMem",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbReleaseMem(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var action = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var gcrControl = (uint)(ctx[CpuRegister.Rdx] & 0xFFFF);
+        var destination = (uint)(ctx[CpuRegister.Rcx] & 0xFF);
+        var cachePolicy = (uint)(ctx[CpuRegister.R8] & 0xFF);
+        var destinationAddress = ctx[CpuRegister.R9];
+        var stackAddress = ctx[CpuRegister.Rsp];
+        if (!TryReadUInt64(ctx, stackAddress + 8, out var dataSelectionRaw) ||
+            !TryReadUInt64(ctx, stackAddress + 16, out var data) ||
+            !TryReadUInt64(ctx, stackAddress + 24, out var gdsOffsetRaw) ||
+            !TryReadUInt64(ctx, stackAddress + 32, out var gdsSizeRaw) ||
+            !TryReadUInt64(ctx, stackAddress + 40, out var interruptRaw) ||
+            !TryReadUInt64(ctx, stackAddress + 48, out var interruptContextIdRaw))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var dataSelection = (uint)(dataSelectionRaw & 0xFF);
+        var gdsOffset = (uint)(gdsOffsetRaw & 0xFFFF);
+        var gdsSize = (uint)(gdsSizeRaw & 0xFFFF);
+        var interrupt = (uint)(interruptRaw & 0xFF);
+        var interruptContextId = (uint)interruptContextIdRaw;
+        if (commandBufferAddress == 0 ||
+            destination > 1 ||
+            dataSelection > 3 ||
+            gdsOffset != 0 ||
+            gdsSize > 2 ||
+            interrupt > 3)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 8, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(8, ItNop, RReleaseMem)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, action | (cachePolicy << 8)) ||
+            !TryWriteUInt32(
+                ctx,
+                commandAddress + 8,
+                gcrControl | (dataSelection << 16) | (interrupt << 24)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)destinationAddress) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, (uint)(destinationAddress >> 32)) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, (uint)data) ||
+            !TryWriteUInt32(ctx, commandAddress + 24, (uint)(data >> 32)) ||
+            !TryWriteUInt32(ctx, commandAddress + 28, interruptContextId))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.cb_release_mem buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"action=0x{action:X2} gcr=0x{gcrControl:X4} dst=0x{destinationAddress:X16} data_sel={dataSelection} data=0x{data:X16}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "TRO721eVt4g",
+        ExportName = "sceAgcDcbResetQueue",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbResetQueue(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var op = (uint)ctx[CpuRegister.Rsi];
+        var state = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 || op != 0x3FF || state != 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItNop, RDrawReset)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_reset_queue buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "ZvwO9euwYzc",
+        ExportName = "sceAgcDcbSetCxRegistersIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetCxRegistersIndirect(CpuContext ctx) =>
+        DcbSetRegistersIndirect(ctx, RCxRegsIndirect, "cx");
+
+    [SysAbiExport(
+        Nid = "-HOOCn0JY48",
+        ExportName = "sceAgcDcbSetShRegistersIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetShRegistersIndirect(CpuContext ctx) =>
+        DcbSetRegistersIndirect(ctx, RShRegsIndirect, "sh");
+
+    [SysAbiExport(
+        Nid = "hvUfkUIQcOE",
+        ExportName = "sceAgcDcbSetUcRegistersIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetUcRegistersIndirect(CpuContext ctx) =>
+        DcbSetRegistersIndirect(ctx, RUcRegsIndirect, "uc");
+
+    [SysAbiExport(
+        Nid = "w4-d0n60hdo",
+        ExportName = "sceAgcDcbSetUcRegisterDirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetUcRegisterDirect(CpuContext ctx) =>
+        DcbSetRegisterDirect(ctx, ItSetUconfigReg, "uc");
+
+    [SysAbiExport(
+        Nid = "aP1Ki9G3++4",
+        ExportName = "sceAgcDcbSetUcRegisterDirectGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetUcRegisterDirectGetSize(CpuContext ctx)
+    {
+        // SET_UCONFIG_REG header + offset + value.
+        ctx[CpuRegister.Rax] = 3u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "GIIW2J37e70",
+        ExportName = "sceAgcDcbSetIndexSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetIndexSize(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var indexSize = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var cachePolicy = (uint)(ctx[CpuRegister.Rdx] & 0xFF);
+        if (commandBufferAddress == 0 || cachePolicy != 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItIndexType, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, indexSize))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_set_index_size buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} size={indexSize}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "8N2tmT3jmC8",
+        ExportName = "sceAgcDcbSetIndexCount",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetIndexCount(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var indexCount = (uint)ctx[CpuRegister.Rsi];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItNop, RIndexCount)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, indexCount))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "mljzuGDZRQ4",
+        ExportName = "sceAgcDcbSetIndexCountGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetIndexCountGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 7u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "tSBxhAPyytQ",
+        ExportName = "sceAgcDcbSetNumInstances",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetNumInstances(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var instanceCount = (uint)ctx[CpuRegister.Rsi];
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItNumInstances, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, instanceCount))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_set_num_instances buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} count={instanceCount}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "q88lQ+GP5Yk",
+        ExportName = "sceAgcDcbDrawIndex",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndex(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var indexCount = (uint)ctx[CpuRegister.Rsi];
+        var indexAddress = ctx[CpuRegister.Rdx];
+        var modifier = (uint)ctx[CpuRegister.Rcx];
+
+        if (commandBufferAddress == 0 || modifier != 0x4000_0000)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var baseCommand) ||
+            !TryWriteUInt32(ctx, baseCommand, Pm4(3, ItIndexBase, 0)) ||
+            !TryWriteUInt32(ctx, baseCommand + 4, (uint)indexAddress) ||
+            !TryWriteUInt32(ctx, baseCommand + 8, (uint)(indexAddress >> 32)) ||
+            !TryWriteUInt32(ctx, baseCommand + 12, Pm4(2, ItIndexBufferSize, 0)) ||
+            !TryWriteUInt32(ctx, baseCommand + 16, indexCount))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        // DRAW_INDEX_2 is six dwords: header, maximum index count, the
+        // 64-bit index-buffer base, the draw count and the initiator.  The
+        // former five-dword packet omitted both the real base and the count
+        // field, so every call made by Unity looked like a zero-count draw to
+        // the submitted-command parser and the complete scene was discarded.
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 6, out var drawCommand) ||
+            !TryWriteUInt32(ctx, drawCommand, Pm4(6, ItDrawIndex2, 0)) ||
+            !TryWriteUInt32(ctx, drawCommand + 4, indexCount) ||
+            !TryWriteUInt32(ctx, drawCommand + 8, (uint)indexAddress) ||
+            !TryWriteUInt32(ctx, drawCommand + 12, (uint)(indexAddress >> 32)) ||
+            !TryWriteUInt32(ctx, drawCommand + 16, indexCount) ||
+            !TryWriteUInt32(ctx, drawCommand + 20, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_draw_index buf=0x{commandBufferAddress:X16} " +
+            $"base=0x{baseCommand:X16} draw=0x{drawCommand:X16} " +
+            $"count={indexCount} index=0x{indexAddress:X16}");
+
+        return ReturnPointer(ctx, drawCommand);
+    }
+
+    [SysAbiExport(
+        Nid = "1q1titRBL6o",
+        ExportName = "sceAgcDcbDrawIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndirect(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var dataOffset = (uint)ctx[CpuRegister.Rsi];
+        var emit = Interlocked.Increment(ref _indirectDrawEmitCount);
+
+        if (emit <= 12 || emit % 250 == 0)
+        {
+            var rcx = ctx[CpuRegister.Rcx];
+            var dump = string.Empty;
+            for (var word = 0; word < 8; word++)
+            {
+                dump += TryReadUInt32(ctx, rcx + dataOffset + ((ulong)word * 4), out var raw)
+                    ? $" {raw}"
+                    : " ?";
+            }
+
+            Console.Error.WriteLine(
+                $"[LOADER][WARN] agc.emit_indirect#{emit} buf=0x{commandBufferAddress:X16} " +
+                $"off=0x{dataOffset:X} rdx=0x{ctx[CpuRegister.Rdx]:X} rcx=0x{rcx:X} " +
+                $"r8=0x{ctx[CpuRegister.R8]:X} rcx_words:{dump}");
+        }
+
+        if (commandBufferAddress == 0)
+        {
+            Interlocked.Increment(ref _indirectDrawEmitRejectCount);
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var drawCommand) ||
+            !TryWriteUInt32(ctx, drawCommand, Pm4(5, ItDrawIndirect, 0)) ||
+            !TryWriteUInt32(ctx, drawCommand + 4, dataOffset) ||
+            !TryWriteUInt32(ctx, drawCommand + 8, 0) ||
+            !TryWriteUInt32(ctx, drawCommand + 12, 0) ||
+            !TryWriteUInt32(ctx, drawCommand + 16, 0))
+        {
+            var rejects = Interlocked.Increment(ref _indirectDrawEmitRejectCount);
+            if (rejects <= 8 || rejects % 250 == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][WARN] agc.emit_indirect_reject#{rejects} " +
+                    $"buf=0x{commandBufferAddress:X16} reason=alloc_or_write");
+            }
+
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_draw_indirect buf=0x{commandBufferAddress:X16} " +
+            $"draw=0x{drawCommand:X16} offset=0x{dataOffset:X}");
+
+        return ReturnPointer(ctx, drawCommand);
+    }
+
+    [SysAbiExport(
+        Nid = "Yw0jKSqop+E",
+        ExportName = "sceAgcDcbDrawIndexAuto",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndexAuto(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var indexCount = (uint)ctx[CpuRegister.Rsi];
+        var modifier = ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 || modifier != 0x4000_0000)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 7, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(7, ItNop, RDrawIndexAuto)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, indexCount) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 24, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        CaptureBuiltDrawStreamV1830(
+            ctx,
+            commandBufferAddress,
+            commandAddress,
+            7);
+
+        TraceAgc($"agc.dcb_draw_index_auto buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} count={indexCount}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "t1vNu082-jM",
+        ExportName = "sceAgcDcbDrawIndexIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndexIndirect(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var dataOffset = (uint)ctx[CpuRegister.Rsi];
+        var modifier = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(5, ItDrawIndexIndirect, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, dataOffset) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, modifier))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_draw_index_indirect buf=0x{commandBufferAddress:X16} " +
+            $"cmd=0x{commandAddress:X16} offset=0x{dataOffset:X8} modifier=0x{modifier:X8}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "ypVBz4uPKcQ",
+        ExportName = "sceAgcDcbDrawIndexIndirectMulti",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndexIndirectMulti(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var dataOffset = (uint)ctx[CpuRegister.Rsi];
+        var drawCount = (uint)ctx[CpuRegister.Rdx];
+        var stride = DrawIndexedIndirectArgsSize;
+        var modifier = (uint)ctx[CpuRegister.R8];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 8, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(8, ItDrawIndexIndirectMulti, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, dataOffset) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, drawCount) ||
+            !TryWriteUInt32(ctx, commandAddress + 24, stride) ||
+            !TryWriteUInt32(ctx, commandAddress + 28, modifier))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_draw_index_indirect_multi buf=0x{commandBufferAddress:X16} " +
+            $"cmd=0x{commandAddress:X16} offset=0x{dataOffset:X8} draws={drawCount} " +
+            $"stride={stride} modifier=0x{modifier:X8}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "mStuvI0zOtc",
+        ExportName = "sceAgcDcbDrawIndexIndirectGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndexIndirectGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 5u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "r98I08t+LOg",
+        ExportName = "sceAgcDcbDrawIndexIndirectMultiGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndexIndirectMultiGetSize(CpuContext ctx)
+    {
+        // Eight, matching the packet DcbDrawIndexIndirectMulti emits.
+        ctx[CpuRegister.Rax] = 8u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "rUuVjyR+Rd4",
+        ExportName = "sceAgcDcbGetLodStatsGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbGetLodStatsGetSize(CpuContext ctx)
+    {
+        var counterCount = (uint)ctx[CpuRegister.Rdi];
+        ctx[CpuRegister.Rax] = 0x10u + (counterCount * sizeof(uint));
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "vuSXe69VILM",
+        ExportName = "sceAgcDcbGetLodStats",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbGetLodStats(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var cachePolicy = (uint)ctx[CpuRegister.Rsi] & 0x3u;
+        var destinationAddress = ctx[CpuRegister.Rdx];
+        var control = (uint)ctx[CpuRegister.Rcx];
+        var counterMask = (uint)ctx[CpuRegister.R8] & 0xFFu;
+        var resetCounters = (uint)ctx[CpuRegister.R9] & 0x1u;
+        if (!TryReadUInt64(ctx, ctx[CpuRegister.Rsp] + sizeof(ulong), out var enableRaw) ||
+            !TryReadUInt64(ctx, ctx[CpuRegister.Rsp] + (2 * sizeof(ulong)), out var counterSelectRaw) ||
+            commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var enable = (uint)enableRaw & 0x1u;
+        var counterSelect = (uint)counterSelectRaw & 0xFFu;
+        var packetControl =
+            (cachePolicy << 28) |
+            (enable << 19) |
+            (resetCounters << 18) |
+            (counterMask << 10) |
+            (counterSelect << 2);
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(5, ItGetLodStats, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, control) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)destinationAddress & ~0x3Fu) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)(destinationAddress >> 32)) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, packetControl))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_get_lod_stats buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"dst=0x{destinationAddress:X16} control=0x{control:X8} counters=0x{counterMask:X2}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "aJf+j5yntiU",
+        ExportName = "sceAgcDcbEventWrite",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbEventWrite(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var eventType = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var eventAddress = ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 || eventType > 0x3F || eventAddress != 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItEventWrite, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, eventType))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_event_write buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} type={eventType}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "57labkp+rSQ",
+        ExportName = "sceAgcDcbAcquireMem",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbAcquireMem(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var engine = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var cbDbOp = (uint)ctx[CpuRegister.Rdx];
+        var gcrControl = (uint)ctx[CpuRegister.Rcx];
+        var baseAddress = ctx[CpuRegister.R8];
+        var sizeBytes = ctx[CpuRegister.R9];
+        if (!TryReadUInt32(ctx, ctx[CpuRegister.Rsp] + sizeof(ulong), out var pollCycles))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var noSize = sizeBytes == ulong.MaxValue;
+        if (commandBufferAddress == 0 ||
+            engine > 1 ||
+            (!noSize && (sizeBytes & 0xFF) != 0) ||
+            (!noSize && (sizeBytes >> 40) != 0) ||
+            (baseAddress & 0xFF) != 0 ||
+            (baseAddress >> 40) != 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 8, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(8, ItNop, RAcquireMem)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, (engine << 31) | cbDbOp) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, noSize ? 0 : (uint)(sizeBytes >> 8)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, (uint)(baseAddress >> 8)) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 24, pollCycles / 40) ||
+            !TryWriteUInt32(ctx, commandAddress + 28, gcrControl))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_acquire_mem buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"engine={engine} cbdb=0x{cbDbOp:X8} gcr=0x{gcrControl:X8} base=0x{baseAddress:X16} size=0x{sizeBytes:X16}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    // Matches the fixed 8-dword ACQUIRE_MEM packet DcbAcquireMem writes above.
+    [SysAbiExport(
+        Nid = "-vnlTPPXPrw",
+        ExportName = "sceAgcDcbAcquireMemGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbAcquireMemGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 8u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "i1jyy49AjXU",
+        ExportName = "sceAgcDcbWriteData",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbWriteData(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var destination = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var cachePolicy = (uint)(ctx[CpuRegister.Rdx] & 0xFF);
+        var destinationAddress = ctx[CpuRegister.Rcx];
+        var dataAddress = ctx[CpuRegister.R8];
+        var dwordCount = (uint)ctx[CpuRegister.R9];
+        var stackAddress = ctx[CpuRegister.Rsp];
+        if (!TryReadUInt64(ctx, stackAddress + sizeof(ulong), out var incrementRaw) ||
+            !TryReadUInt64(ctx, stackAddress + (2 * sizeof(ulong)), out var writeConfirmRaw))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var increment = (uint)(incrementRaw & 0xFF);
+        var writeConfirm = (uint)(writeConfirmRaw & 0xFF);
+        if (commandBufferAddress == 0 ||
+            destinationAddress == 0 ||
+            dataAddress == 0 ||
+            dwordCount > 0x3FFD)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var packetDwords = dwordCount + 4;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, ItNop, RWriteData)) ||
+            !TryWriteUInt32(
+                ctx,
+                commandAddress + 4,
+                destination | (cachePolicy << 8) | (increment << 16) | (writeConfirm << 24)) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)destinationAddress) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)(destinationAddress >> 32)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        for (uint index = 0; index < dwordCount; index++)
+        {
+            if (!TryReadUInt32(ctx, dataAddress + ((ulong)index * sizeof(uint)), out var value) ||
+                !TryWriteUInt32(ctx, commandAddress + 16 + ((ulong)index * sizeof(uint)), value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+
+        if (ShouldTraceHotPath(ref _dcbWriteDataTraceCount))
+        {
+            TraceAgc(
+                $"agc.dcb_write_data buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+                $"dst={destination} cache={cachePolicy} addr=0x{destinationAddress:X16} count={dwordCount} " +
+                $"increment={increment} confirm={writeConfirm}");
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "VmW0Tdpy420",
+        ExportName = "sceAgcDcbWaitRegMem",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbWaitRegMem(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var size = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var compareFunction = (uint)(ctx[CpuRegister.Rdx] & 0xFF);
+        var operation = (uint)(ctx[CpuRegister.Rcx] & 0xFF);
+        var cachePolicy = (uint)(ctx[CpuRegister.R8] & 0xFF);
+        var address = ctx[CpuRegister.R9];
+        var stackAddress = ctx[CpuRegister.Rsp];
+        if (!TryReadUInt64(ctx, stackAddress + sizeof(ulong), out var reference) ||
+            !TryReadUInt64(ctx, stackAddress + (2 * sizeof(ulong)), out var mask) ||
+            !TryReadUInt32(ctx, stackAddress + (3 * sizeof(ulong)), out var pollCycles))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (commandBufferAddress == 0 ||
+            size > 1 ||
+            compareFunction > 7 ||
+            operation > 4 ||
+            cachePolicy > 3)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var packetDwords = size == 0 ? 7u : 9u;
+        var packetRegister = size == 0 ? RWaitMem32 : RWaitMem64;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, ItNop, packetRegister)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 4, (uint)address & (size == 0 ? ~0x3u : ~0x7u)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 8, (uint)(address >> 32) & 0x3FFFFu) ||
+                 !TryWriteUInt32(ctx, commandAddress + 12, (uint)mask))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+        else if (size == 0)
+        {
+            if (!TryWriteUInt32(ctx, commandAddress + 16, (uint)reference) ||
+                !TryWriteUInt32(ctx, commandAddress + 20, EncodeWaitRegMem32Control(compareFunction, operation, cachePolicy)) ||
+                !TryWriteUInt32(ctx, commandAddress + 24, EncodeWaitRegMemPoll(pollCycles)))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+        else if (!TryWriteUInt32(ctx, commandAddress + 16, (uint)(mask >> 32)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 20, (uint)reference) ||
+                 !TryWriteUInt32(ctx, commandAddress + 24, (uint)(reference >> 32)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 28, EncodeWaitRegMem64Control(compareFunction, operation, cachePolicy)) ||
+                 !TryWriteUInt32(ctx, commandAddress + 32, EncodeWaitRegMemPoll(pollCycles)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (ShouldTraceHotPath(ref _dcbWaitRegMemTraceCount))
+        {
+            TraceAgc(
+                $"agc.dcb_wait_reg_mem buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+                $"size={size} compare={compareFunction} op={operation} cache={cachePolicy} " +
+                $"addr=0x{address:X16} ref=0x{reference:X16} mask=0x{mask:X16} poll={pollCycles}");
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "u2T2DiA5hRI",
+        ExportName = "sceAgcDcbStallCommandBufferParser",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbStallCommandBufferParser(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var size = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var address = ctx[CpuRegister.Rdx];
+        var reference = ctx[CpuRegister.Rcx];
+        if (commandBufferAddress == 0 || size > 1 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItNop, RZero)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        // Direct execution submits work synchronously, so there is no independent
+        // hardware command processor to stall. Keep a well-formed no-op in the DCB
+        // so packet addresses and the command-buffer cursor remain coherent.
+        TraceAgc(
+            $"agc.dcb_stall_parser buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"size={size} addr=0x{address:X16} reference=0x{reference:X16}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "+u6dKSLWM2o",
+        ExportName = "sceAgcDcbStallCommandBufferParserGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbStallCommandBufferParserGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 2u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "WmAc2MEj6Io",
+        ExportName = "sceAgcDcbDmaData",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDmaData(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var destination = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var destinationCachePolicy = (uint)(ctx[CpuRegister.Rdx] & 0xFF);
+        var source = (uint)(ctx[CpuRegister.Rcx] & 0xFF);
+        var destinationAddress = ctx[CpuRegister.R8];
+        var sourceCachePolicy = (uint)(ctx[CpuRegister.R9] & 0xFF);
+        var stackAddress = ctx[CpuRegister.Rsp];
+        if (!TryReadUInt64(ctx, stackAddress + sizeof(ulong), out var control4Raw) ||
+            !TryReadUInt64(ctx, stackAddress + (2 * sizeof(ulong)), out var sourceAddress) ||
+            !TryReadUInt32(ctx, stackAddress + (3 * sizeof(ulong)), out var byteCount) ||
+            !TryReadUInt64(ctx, stackAddress + (4 * sizeof(ulong)), out var control7Raw) ||
+            !TryReadUInt64(ctx, stackAddress + (5 * sizeof(ulong)), out var control8Raw) ||
+            !TryReadUInt64(ctx, stackAddress + (6 * sizeof(ulong)), out var control9Raw))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (commandBufferAddress == 0 || byteCount == 0 || (byteCount & 3) != 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var control4 = (uint)(control4Raw & 0xFF);
+        var control7 = (uint)(control7Raw & 0xFF);
+        var control8 = (uint)(control8Raw & 0xFF);
+        var control9 = (uint)(control9Raw & 0xFF);
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 8, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(8, ItNop, RDmaData)) ||
+            !TryWriteUInt32(
+                ctx,
+                commandAddress + 4,
+                destination |
+                (destinationCachePolicy << 8) |
+                (source << 16) |
+                (sourceCachePolicy << 24)) ||
+            !TryWriteUInt32(
+                ctx,
+                commandAddress + 8,
+                control4 | (control7 << 8) | (control8 << 16) | (control9 << 24)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, byteCount) ||
+            !ctx.TryWriteUInt64(commandAddress + 16, destinationAddress) ||
+            !ctx.TryWriteUInt64(commandAddress + 24, sourceAddress))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_dma_data buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"dst=0x{destinationAddress:X16} src=0x{sourceAddress:X16} bytes={byteCount} " +
+            $"control0=0x{destination | (destinationCachePolicy << 8) | (source << 16) | (sourceCachePolicy << 24):X8}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "2ccJz9LQI+w",
+        ExportName = "sceAgcDcbDmaDataGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDmaDataGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 8u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "-RnpfpxIhec",
+        ExportName = "sceAgcAcbDmaData",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbDmaData(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var sourceSelector = (uint)(ctx[CpuRegister.Rsi] & 0xFF);
+        var destinationSelector = (uint)(ctx[CpuRegister.Rdx] & 0xFF);
+        var destinationAddress = ctx[CpuRegister.Rcx];
+        var stackAddress = ctx[CpuRegister.Rsp];
+        if (!TryReadUInt64(ctx, stackAddress + sizeof(ulong), out var sourceOrImmediate) ||
+            !TryReadUInt32(ctx, stackAddress + (2 * sizeof(ulong)), out var byteCount) ||
+            commandBufferAddress == 0 ||
+            byteCount == 0 ||
+            byteCount > 256u * 1024u * 1024u ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 7, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(7, ItNop, RDmaData)) ||
+            !ctx.TryWriteUInt64(commandAddress + 4, destinationAddress) ||
+            !ctx.TryWriteUInt64(commandAddress + 12, sourceOrImmediate) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, byteCount) ||
+            !TryWriteUInt32(
+                ctx,
+                commandAddress + 24,
+                sourceSelector | (destinationSelector << 8)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "M0ttm8h7SKA",
+        ExportName = "sceAgcAcbDmaDataGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbDmaDataGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 8u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "RmaJwLtc8rY",
+        ExportName = "sceAgcDcbSetBaseIndirectArgs",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetBaseIndirectArgs(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var baseIndex = (uint)ctx[CpuRegister.Rsi];
+        var address = ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 4, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(4, ItSetBase, 0) | (baseIndex << 1)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, 1) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)address & ~7u) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)(address >> 32)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "CtB+A9-VxO0",
+        ExportName = "sceAgcDcbDispatchIndirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDispatchIndirect(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var dataOffset = (uint)ctx[CpuRegister.Rsi];
+        var modifier = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 3, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(3, ItDispatchIndirect, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, dataOffset) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (modifier & 0xA038u) | 0x41u))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "+kSrjIVxKFE",
+        ExportName = "sceAgcDcbPushMarker",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbPushMarker(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var markerAddress = ctx[CpuRegister.Rsi];
+        if (commandBufferAddress == 0 ||
+            !TryReadGuestCString(ctx, markerAddress, 4095, out var marker))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var payloadDwords = Math.Max(((uint)marker.Length + 4) / 4, 1);
+        var packetDwords = payloadDwords + 1;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, ItNop, RPushMarker)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        for (uint index = 0; index < payloadDwords; index++)
+        {
+            uint value = 0;
+            for (uint byteIndex = 0; byteIndex < sizeof(uint); byteIndex++)
+            {
+                var markerIndex = (index * sizeof(uint)) + byteIndex;
+                if (markerIndex < (uint)marker.Length)
+                {
+                    value |= (uint)marker[(int)markerIndex] << ((int)byteIndex * 8);
+                }
+            }
+
+            if (!TryWriteUInt32(ctx, commandAddress + 4 + ((ulong)index * sizeof(uint)), value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "cpCILPya5Zk",
+        ExportName = "sceAgcAcbPushMarker",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbPushMarker(CpuContext ctx) => DcbPushMarker(ctx);
+
+    [SysAbiExport(
+        Nid = "H7uZqCoNuWk",
+        ExportName = "sceAgcDcbPopMarker",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbPopMarker(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItNop, RPopMarker)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "6mFxkVqdmbQ",
+        ExportName = "sceAgcAcbPopMarker",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbPopMarker(CpuContext ctx) => DcbPopMarker(ctx);
+
+    [SysAbiExport(
+        Nid = "IxYiarKlXxM",
+        ExportName = "sceAgcDmaDataPatchSetDstAddressOrOffset",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DmaDataPatchSetDstAddressOrOffset(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var destinationAddress = ctx[CpuRegister.Rsi];
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register) ||
+            op != ItNop ||
+            register != RDmaData ||
+            !TryReadUInt32(ctx, commandAddress, out var header))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var packetLength = ((header >> 16) & 0x3FFFu) + 2;
+        var destinationOffset = packetLength == 7 ? 4UL : 16UL;
+        return ctx.TryWriteUInt64(commandAddress + destinationOffset, destinationAddress)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    // The SRC counterpart of sceAgcDmaDataPatchSetDstAddressOrOffset. Patches
+    // the source field (offset +24, matching the layout written by
+    // sceAgcDcbDmaData) of a NOP/RDmaData packet. Games patch this to point a
+    // GPU DMA at the data it should copy â€” commonly a completion/label write.
+    // When it is missing the source stays 0, ApplySubmittedDmaData skips the
+    // copy (copied=False), and whatever the guest waits on that label for never
+    // fires (observed: Void Terrarium's first draw batch presents a black frame
+    // then the render pipeline stalls with no further flips).
+    [SysAbiExport(
+        Nid = "cdDRpqcFGbU",
+        ExportName = "sceAgcDmaDataPatchSetSrcAddressOrOffsetOrImmediate",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DmaDataPatchSetSrcAddressOrOffsetOrImmediate(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var sourceValue = ctx[CpuRegister.Rsi];
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register) ||
+            op != ItNop ||
+            register != RDmaData ||
+            !TryReadUInt32(ctx, commandAddress, out var header))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var packetLength = ((header >> 16) & 0x3FFFu) + 2;
+        var sourceOffset = packetLength == 7 ? 12UL : 24UL;
+        return ctx.TryWriteUInt64(commandAddress + sourceOffset, sourceValue)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "eAy8eGNsCuU",
+        ExportName = "sceAgcWriteDataPatchSetCachePolicy",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WriteDataPatchSetCachePolicy(CpuContext ctx) =>
+        PatchWriteDataControlByte(ctx, byteIndex: 1);
+
+    [SysAbiExport(
+        Nid = "tmy-+rBpspY",
+        ExportName = "sceAgcWriteDataPatchSetDst",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WriteDataPatchSetDst(CpuContext ctx) =>
+        PatchWriteDataControlByte(ctx, byteIndex: 0);
+
+    [SysAbiExport(
+        Nid = "fPSCdQxgpSw",
+        ExportName = "sceAgcWriteDataPatchSetAddressOrOffset",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WriteDataPatchSetAddressOrOffset(CpuContext ctx)
+    {
+        // SDK revisions disagree on whether the packet or destination is the
+        // first argument. Astro passes (destination, packet), while older
+        // captures use (packet, destination), so identify the packet by its
+        // header instead of hard-coding one ordering.
+        var first = ctx[CpuRegister.Rdi];
+        var second = ctx[CpuRegister.Rsi];
+        ulong commandAddress;
+        ulong destinationAddress;
+        if (TryGetPacketIdentity(ctx, first, out var firstOp, out var firstRegister) &&
+            firstOp == ItNop && firstRegister == RWriteData)
+        {
+            commandAddress = first;
+            destinationAddress = second;
+        }
+        else if (TryGetPacketIdentity(ctx, second, out var secondOp, out var secondRegister) &&
+                 secondOp == ItNop && secondRegister == RWriteData)
+        {
+            commandAddress = second;
+            destinationAddress = first;
+        }
+        else
+        {
+            // Astro's SDK 9 ABI passes (address-or-offset, pointer-to-field)
+            // rather than the whole packet. The field is already the packet's
+            // 64-bit address payload, so patch it directly.
+            if (second == 0 || !ctx.TryWriteUInt64(second, first))
+            {
+                return SetReturn(ctx, second == 0
+                    ? OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT
+                    : OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            TraceAgc(
+                $"agc.patch_write_data_field field=0x{second:X16} value=0x{first:X16}");
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+        }
+
+        TraceAgc(
+            $"agc.patch_write_data_addr cmd=0x{commandAddress:X16} dst=0x{destinationAddress:X16}");
+        return ctx.TryWriteUInt64(commandAddress + 8, destinationAddress)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "3KDcnM3lrcU",
+        ExportName = "sceAgcWaitRegMemPatchAddress",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WaitRegMemPatchAddress(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var address = ctx[CpuRegister.Rsi];
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var fieldOffset = op == ItWaitRegMem
+            ? 8UL
+            : op == ItNop && register is RWaitMem32 or RWaitMem64
+                ? 4UL
+                : 0;
+        if (fieldOffset == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var wrote = op == ItNop && register is RWaitMem32 or RWaitMem64
+            ? TryWriteUInt32(
+                  ctx,
+                  commandAddress + fieldOffset,
+                  (uint)address & (register == RWaitMem32 ? ~0x3u : ~0x7u)) &&
+              TryWriteUInt32(ctx, commandAddress + fieldOffset + 4, (uint)(address >> 32) & 0x3FFFFu)
+            : ctx.TryWriteUInt64(commandAddress + fieldOffset, address);
+        return wrote
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "n485EBnIWmk",
+        ExportName = "sceAgcWaitRegMemPatchCompareFunction",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WaitRegMemPatchCompareFunction(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var compareFunction = (uint)ctx[CpuRegister.Rsi];
+        if (compareFunction > 7 ||
+            !TryGetPacketIdentity(ctx, commandAddress, out var op, out var register))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var fieldOffset = op == ItWaitRegMem
+            ? 4UL
+            : op == ItNop && register == RWaitMem32
+                ? 20UL
+                : op == ItNop && register == RWaitMem64
+                    ? 28UL
+                    : 0;
+        return fieldOffset != 0 &&
+               TryPatchUInt32Bits(ctx, commandAddress + fieldOffset, 0x7u, compareFunction)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, fieldOffset == 0
+                ? OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT
+                : OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "7nOoijNPvEU",
+        ExportName = "sceAgcWaitRegMemPatchReference",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WaitRegMemPatchReference(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var reference = ctx[CpuRegister.Rsi];
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var wrote = op == ItWaitRegMem
+            ? TryWriteUInt32(ctx, commandAddress + 16, (uint)reference)
+            : op == ItNop && register == RWaitMem32
+                ? TryWriteUInt32(ctx, commandAddress + 16, (uint)reference)
+                : op == ItNop && register == RWaitMem64 &&
+                  ctx.TryWriteUInt64(commandAddress + 20, reference);
+        return wrote
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, op == ItWaitRegMem ||
+                             (op == ItNop && register is RWaitMem32 or RWaitMem64)
+                ? OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT
+                : OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+    }
+
+    [SysAbiExport(
+        Nid = "hXAnLgDHCoI",
+        ExportName = "sceAgcWaitRegMemPatchMask",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int WaitRegMemPatchMask(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var mask = ctx[CpuRegister.Rsi];
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var wrote = op == ItWaitRegMem
+            ? TryWriteUInt32(ctx, commandAddress + 20, (uint)mask)
+            : op == ItNop && register == RWaitMem32
+                ? TryWriteUInt32(ctx, commandAddress + 12, (uint)mask)
+                : op == ItNop && register == RWaitMem64 &&
+                  ctx.TryWriteUInt64(commandAddress + 12, mask);
+        return wrote
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, op == ItWaitRegMem ||
+                             (op == ItNop && register is RWaitMem32 or RWaitMem64)
+                ? OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT
+                : OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+    }
+
+    // PatchAddress/PatchData touch UInt64 fields at +12/+20 of an RReleaseMem
+    // packet, so the packet is at least 7 dwords; use the 8-dword RELEASE_MEM
+    // family size already used elsewhere in this file.
+    [SysAbiExport(
+        Nid = "hL7C0IRpWZI",
+        ExportName = "sceAgcCbQueueEndOfPipeActionGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbQueueEndOfPipeActionGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 8u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "0fWWK5uG9rQ",
+        ExportName = "sceAgcQueueEndOfPipeActionPatchAddress",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int QueueEndOfPipeActionPatchAddress(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var address = ctx[CpuRegister.Rsi];
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register) ||
+            op != ItNop ||
+            register != RReleaseMem)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        return ctx.TryWriteUInt64(commandAddress + 12, address)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "J8YCgfKAMQs",
+        ExportName = "sceAgcQueueEndOfPipeActionPatchGcrCntl",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int QueueEndOfPipeActionPatchGcrCntl(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        if (!IsAgcReleaseMemPacket(ctx, commandAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        return TryPatchUInt32Bits(
+                ctx,
+                commandAddress + 8,
+                0x0000_FFFFu,
+                (uint)ctx[CpuRegister.Rsi] & 0xFFFFu)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "MlEw1feXcjg",
+        ExportName = "sceAgcQueueEndOfPipeActionPatchData",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int QueueEndOfPipeActionPatchData(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        if (!IsAgcReleaseMemPacket(ctx, commandAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        return ctx.TryWriteUInt64(commandAddress + 20, ctx[CpuRegister.Rsi])
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    [SysAbiExport(
+        Nid = "T9fjQIINoeE",
+        ExportName = "sceAgcQueueEndOfPipeActionPatchType",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int QueueEndOfPipeActionPatchType(CpuContext ctx)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var dataSelection = (uint)ctx[CpuRegister.Rsi];
+        TraceAgc(
+            $"agc.eop_patch_type cmd=0x{commandAddress:X16} value=0x{dataSelection:X8}");
+        if (dataSelection > 3 || !IsAgcReleaseMemPacket(ctx, commandAddress))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        return TryPatchUInt32Bits(
+                ctx,
+                commandAddress + 8,
+                0x00FF_0000u,
+                dataSelection << 16)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    private static bool IsAgcReleaseMemPacket(CpuContext ctx, ulong commandAddress) =>
+        TryGetPacketIdentity(ctx, commandAddress, out var op, out var register) &&
+        op == ItNop &&
+        register == RReleaseMem;
+
+    private static bool TryPatchUInt32Bits(
+        CpuContext ctx,
+        ulong address,
+        uint mask,
+        uint value)
+    {
+        return TryReadUInt32(ctx, address, out var current) &&
+               TryWriteUInt32(ctx, address, PatchUInt32Bits(current, mask, value));
+    }
+
+    private static uint PatchUInt32Bits(uint current, uint mask, uint value) =>
+        (current & ~mask) | (value & mask);
+
+    [SysAbiExport(
+        Nid = "l4fM9K-Lyks",
+        ExportName = "sceAgcDcbSetIndexBuffer",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetIndexBuffer(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var indexBufferAddress = ctx[CpuRegister.Rsi];
+        var indexCount = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(3, ItIndexBase, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, (uint)(indexBufferAddress & 0xFFFF_FFFFUL)) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)(indexBufferAddress >> 32)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, Pm4(2, ItIndexBufferSize, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, indexCount))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_set_index_buffer buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} addr=0x{indexBufferAddress:X16} count={indexCount}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "B+aG9DUnTKA",
+        ExportName = "sceAgcDcbDrawIndexOffset",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbDrawIndexOffset(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var indexOffset = (uint)ctx[CpuRegister.Rsi];
+        var indexCount = (uint)ctx[CpuRegister.Rdx];
+        var flags = (uint)ctx[CpuRegister.Rcx];
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 5, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(5, ItDrawIndexOffset2, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, indexCount) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, indexOffset) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, indexCount) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, flags & 0xE000_0001u))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_draw_index_offset buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} offset={indexOffset} count={indexCount} flags=0x{flags:X8}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "MWiElSNE8j8",
+        ExportName = "sceAgcDcbWaitUntilSafeForRendering",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbWaitUntilSafeForRendering(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var videoOutHandle = (uint)ctx[CpuRegister.Rsi];
+        var displayBufferIndex = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 7, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(7, ItNop, RWaitFlipDone)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, videoOutHandle) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, displayBufferIndex) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, 0) ||
+            !TryWriteUInt32(ctx, commandAddress + 24, 0))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_wait_safe buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} handle={videoOutHandle} index={displayBufferIndex}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "YUeqkyT7mEQ",
+        ExportName = "sceAgcDcbSetFlip",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetFlip(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var videoOutHandle = (uint)ctx[CpuRegister.Rsi];
+        var displayBufferIndex = (int)ctx[CpuRegister.Rdx];
+        var flipMode = (uint)ctx[CpuRegister.Rcx];
+        var flipArg = unchecked((ulong)ctx[CpuRegister.R8]);
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 6, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(6, ItNop, RFlip)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, videoOutHandle) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, unchecked((uint)displayBufferIndex)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, flipMode) ||
+            !TryWriteUInt32(ctx, commandAddress + 16, (uint)(flipArg & 0xFFFF_FFFFUL)) ||
+            !TryWriteUInt32(ctx, commandAddress + 20, (uint)(flipArg >> 32)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_set_flip buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} handle={videoOutHandle} index={displayBufferIndex} mode={flipMode} arg=0x{flipArg:X16}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "w2rJhmD+dsE",
+        ExportName = "sceAgcDriverAddEqEvent",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverAddEqEvent(CpuContext ctx)
+    {
+        var equeue = ctx[CpuRegister.Rdi];
+        var eventId = ctx[CpuRegister.Rsi];
+        var userData = ctx[CpuRegister.Rdx];
+        if (!KernelEventQueueCompatExports.RegisterEvent(
+                equeue,
+                eventId,
+                KernelEventQueueCompatExports.KernelEventFilterGraphics,
+                userData))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
+        }
+
+        TraceAgc($"agc.driver_add_eq_event eq=0x{equeue:X16} id=0x{eventId:X16} udata=0x{userData:X16}");
+        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "DL2RXaXOy88",
+        ExportName = "sceAgcDriverDeleteEqEvent",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverDeleteEqEvent(CpuContext ctx)
+    {
+        var equeue = ctx[CpuRegister.Rdi];
+        var eventId = ctx[CpuRegister.Rsi];
+        if (!KernelEventQueueCompatExports.DeleteRegisteredEvent(
+                equeue,
+                eventId,
+                KernelEventQueueCompatExports.KernelEventFilterGraphics))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
+        }
+
+        TraceAgc($"agc.driver_delete_eq_event eq=0x{equeue:X16} id=0x{eventId:X16}");
+        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "UglJIZjGssM",
+        ExportName = "sceAgcDriverSubmitDcb",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverSubmitDcb(CpuContext ctx)
+    {
+        var packetAddress = ctx[CpuRegister.Rdi];
+        if (packetAddress == 0 ||
+            !TryReadUInt64(ctx, packetAddress, out var commandAddress) ||
+            !TryReadUInt32(ctx, packetAddress + 8, out var dwordCount))
+        {
+            TraceAgc($"agc.driver_submit_dcb_rejected packet=0x{packetAddress:X16}");
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var tracePackets = false;
+        if (_traceAgc)
+        {
+            lock (_submitTraceGate)
+            {
+                tracePackets = _tracedDcbSizes.Add(dwordCount);
+            }
+        }
+
+        TraceAgc(
+            $"agc.driver_submit_dcb packet=0x{packetAddress:X16} addr=0x{commandAddress:X16} " +
+            $"dwords={dwordCount} end=0x{commandAddress + ((ulong)dwordCount * sizeof(uint)):X16}");
+
+        GuestGpu.Current.AttachGuestMemory(ctx.Memory);
+        var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (gpuState.Gate)
+        {
+            gpuState.Graphics.QueueName = "dcb.graphics";
+            var submissionId = ++gpuState.SubmissionSequence;
+
+            // V1.8.28: replay only draw-bearing builder continuations that are
+            // demonstrably outside the submitted control DCB. They share the
+            // same submission id so the normal driver completion event remains
+            // the only externally visible completion boundary.
+            ReplayBuiltDcbSegmentsV1828(
+                ctx,
+                gpuState,
+                gpuState.Graphics,
+                commandAddress,
+                dwordCount,
+                submissionId);
+
+            EnqueueSubmittedDcb(
+                ctx,
+                gpuState,
+                gpuState.Graphics,
+                commandAddress,
+                dwordCount,
+                submissionId,
+                tracePackets);
+            DrainResumableDcbs(ctx, gpuState, tracePackets);
+        }
+
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "gSRnr79F8tQ",
+        ExportName = "sceAgcDriverSubmitAcb",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverSubmitAcb(CpuContext ctx)
+    {
+        var ownerHandle = (uint)ctx[CpuRegister.Rdi];
+        var packetAddress = ctx[CpuRegister.Rsi];
+        if (packetAddress == 0 ||
+            !TryReadUInt64(ctx, packetAddress, out var commandAddress) ||
+            !TryReadUInt32(ctx, packetAddress + 8, out var dwordCount))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var tracePackets = false;
+        if (_traceAgc)
+        {
+            lock (_submitTraceGate)
+            {
+                tracePackets = _tracedDcbSizes.Add(dwordCount);
+            }
+        }
+
+        TraceAgc(
+            $"agc.driver_submit_acb owner={ownerHandle} packet=0x{packetAddress:X16} " +
+            $"addr=0x{commandAddress:X16} dwords={dwordCount} " +
+            $"end=0x{commandAddress + ((ulong)dwordCount * sizeof(uint)):X16}");
+
+        GuestGpu.Current.AttachGuestMemory(ctx.Memory);
+        var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (gpuState.Gate)
+        {
+            if (!gpuState.ComputeQueues.TryGetValue(ownerHandle, out var queueState))
+            {
+                queueState = new SubmittedDcbState();
+                gpuState.ComputeQueues.Add(ownerHandle, queueState);
+            }
+
+            queueState.QueueName = $"acb.compute[{ownerHandle}]";
+            queueState.CompletionEventId = ownerHandle;
+            EnqueueSubmittedDcb(
+                ctx,
+                gpuState,
+                queueState,
+                commandAddress,
+                dwordCount,
+                ++gpuState.SubmissionSequence,
+                tracePackets);
+            DrainResumableDcbs(ctx, gpuState, tracePackets);
+        }
+
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+    Nid = "uJziRsODk1c",
+    ExportName = "sceAgcDriverGetResourceRegistrationMaxNameLength",
+    Target = Generation.Gen5,
+    LibraryName = "libSceAgc")]
+    public static int DriverGetResourceRegistrationMaxNameLength(CpuContext ctx)
+    {
+        var outAddress = ctx[CpuRegister.Rdi];
+
+        if (outAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryWriteUInt32(ctx, outAddress, 256))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc($"agc.driver_get_resource_registration_max_name_length out=0x{outAddress:X16} value=256");
+        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    private const uint DefaultAgcOwner = 1;
+    [SysAbiExport(
+        Nid = "F0ZXt5q0ZTA",
+        ExportName = "sceAgcDriverGetDefaultOwner",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverGetDefaultOwner(CpuContext ctx)
+    {
+        var ownerAddress = ctx[CpuRegister.Rdi];
+
+        if (ownerAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryWriteUInt32(ctx, ownerAddress, DefaultAgcOwner))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc($"agc.driver_get_default_owner out=0x{ownerAddress:X16} owner={DefaultAgcOwner}");
+        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+    Nid = "W5z4eZrjEas",
+    ExportName = "sceAgcDriverRegisterResource",
+    Target = Generation.Gen5,
+    LibraryName = "libSceAgc")]
+    public static int DriverRegisterResource(CpuContext ctx)
+    {
+        var resourceAddress = ctx[CpuRegister.Rdi];
+        var owner = (uint)ctx[CpuRegister.Rsi];
+        var nameAddress = ctx[CpuRegister.Rdx];
+        var type = (uint)ctx[CpuRegister.R8];
+        var flags = (uint)ctx[CpuRegister.R9];
+
+        TraceAgc(
+            $"agc.driver_register_resource resource=0x{resourceAddress:X16} owner={owner} " +
+            $"name=0x{nameAddress:X16} type={type} flags={flags}");
+
+        return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    // Synthetic label for an uncatalogued NID (the Unknown* convention); the NID is authoritative.
+    #pragma warning disable SHEM006
+    [SysAbiExport(
+    Nid = "-KRzWekV120",
+    ExportName = "sceAgcDriverUnknown_KRzWekV120",
+    Target = Generation.Gen5,
+    LibraryName = "libSceAgc")]
+    public static int DriverUnknownKRzWekV120(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        ulong cursorUp = 0;
+        ulong cursorDown = 0;
+        uint reservedDwords = 0;
+        var cursorReadable = commandBufferAddress != 0 &&
+            TryReadUInt64(ctx, commandBufferAddress + CommandBufferCursorUpOffset, out cursorUp) &&
+            TryReadUInt64(ctx, commandBufferAddress + CommandBufferCursorDownOffset, out cursorDown) &&
+            TryReadUInt32(ctx, commandBufferAddress + CommandBufferReservedDwOffset, out reservedDwords);
+        var remainingDwords = cursorReadable
+            ? GetRemainingCommandDwords(cursorUp, cursorDown, reservedDwords)
+            : 0;
+        TraceAgc(
+            $"agc.driver_unknown_krz rdi=0x{commandBufferAddress:X16} " +
+            $"rsi=0x{ctx[CpuRegister.Rsi]:X16} rdx=0x{ctx[CpuRegister.Rdx]:X16} " +
+            $"rcx=0x{ctx[CpuRegister.Rcx]:X16} r8=0x{ctx[CpuRegister.R8]:X16} r9=0x{ctx[CpuRegister.R9]:X16}");
+        if (_tracePrimitivePipelineV180)
+        {
+            Console.Error.WriteLine(
+                $"[V180][PRIM] agc.krz_call dcb=0x{commandBufferAddress:X16} " +
+                $"cursor_readable={(cursorReadable ? 1 : 0)} cursor_up=0x{cursorUp:X16} " +
+                $"cursor_down=0x{cursorDown:X16} reserved_dw={reservedDwords} " +
+                $"remaining_dw={remainingDwords} r8=0x{ctx[CpuRegister.R8]:X16} " +
+                $"r9=0x{ctx[CpuRegister.R9]:X16} behavior=eboot-index-type-emission");
+        }
+        var indexType = (uint)ctx[CpuRegister.Rsi];
+        var abiArg2 = (uint)ctx[CpuRegister.Rdx];
+        var abiArg3 = (uint)ctx[CpuRegister.Rcx];
+        if (commandBufferAddress == 0 || indexType > 1 || abiArg2 != 0 || abiArg3 != 0)
+        {
+            if (_traceKrzEbootFixV201)
+            {
+                Console.Error.WriteLine(
+                    $"[V201][EBOOT] agc.krz_index_type_reject dcb=0x{commandBufferAddress:X16} " +
+                    $"index_type={indexType} arg2=0x{abiArg2:X8} arg3=0x{abiArg3:X8}");
+            }
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 2, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(2, ItIndexType, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + sizeof(uint), indexType))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (_traceKrzEbootFixV201)
+        {
+            Console.Error.WriteLine(
+                $"[V201][EBOOT] agc.krz_index_type_emit dcb=0x{commandBufferAddress:X16} " +
+                $"cmd=0x{commandAddress:X16} index_type={indexType} " +
+                $"import=0x361 eboot_ret=0x00000008008F8A19");
+        }
+        if (_traceKrzCallSiteV190)
+        {
+            TraceKrzCallSiteV190(ctx, commandBufferAddress, cursorUp, cursorReadable);
+        }
+
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    private static void TraceKrzCallSiteV190(
+        CpuContext ctx,
+        ulong commandBufferAddress,
+        ulong cursorUp,
+        bool cursorReadable)
+    {
+        var stackAddress = ctx[CpuRegister.Rsp];
+        ulong returnAddress = 0;
+        var returnReadable = stackAddress != 0 &&
+            TryReadUInt64(ctx, stackAddress, out returnAddress);
+        Span<byte> codeWindow = stackalloc byte[128];
+        var codeStart = returnReadable && returnAddress >= 64 ? returnAddress - 64 : 0;
+        var codeReadable = codeStart != 0 && ctx.Memory.TryRead(codeStart, codeWindow);
+        Span<byte> stackWindow = stackalloc byte[72];
+        var stackReadable = stackAddress != 0 && ctx.Memory.TryRead(stackAddress, stackWindow);
+        Span<byte> dcbHeader = stackalloc byte[56];
+        var dcbHeaderReadable = commandBufferAddress != 0 &&
+            ctx.Memory.TryRead(commandBufferAddress, dcbHeader);
+        Span<byte> dcbTail = stackalloc byte[64];
+        var dcbTailStart = cursorReadable && cursorUp >= 64 ? cursorUp - 64 : 0;
+        var dcbTailReadable = dcbTailStart != 0 && ctx.Memory.TryRead(dcbTailStart, dcbTail);
+        Span<byte> dcbNext = stackalloc byte[64];
+        var dcbNextReadable = cursorReadable && cursorUp != 0 && ctx.Memory.TryRead(cursorUp, dcbNext);
+        Console.Error.WriteLine(
+            $"[V190][KRZ] agc.krz_callsite dcb=0x{commandBufferAddress:X16} " +
+            $"rip=0x{ctx.Rip:X16} import={ctx.ActiveImportIndex} rsp=0x{stackAddress:X16} " +
+            $"return_readable={(returnReadable ? 1 : 0)} ret=0x{(returnReadable ? returnAddress : 0):X16} " +
+            $"code_start=0x{codeStart:X16} code_readable={(codeReadable ? 1 : 0)} " +
+            $"stack_readable={(stackReadable ? 1 : 0)} dcb_header_readable={(dcbHeaderReadable ? 1 : 0)} " +
+            $"dcb_tail_start=0x{dcbTailStart:X16} dcb_tail_readable={(dcbTailReadable ? 1 : 0)} " +
+            $"dcb_next_readable={(dcbNextReadable ? 1 : 0)}");
+        Console.Error.WriteLine(
+            $"[V190][KRZ] agc.krz_registers " +
+            $"rax=0x{ctx[CpuRegister.Rax]:X16} rbx=0x{ctx[CpuRegister.Rbx]:X16} " +
+            $"rcx=0x{ctx[CpuRegister.Rcx]:X16} rdx=0x{ctx[CpuRegister.Rdx]:X16} " +
+            $"rsi=0x{ctx[CpuRegister.Rsi]:X16} rdi=0x{ctx[CpuRegister.Rdi]:X16} " +
+            $"rbp=0x{ctx[CpuRegister.Rbp]:X16} rsp=0x{ctx[CpuRegister.Rsp]:X16} " +
+            $"r8=0x{ctx[CpuRegister.R8]:X16} r9=0x{ctx[CpuRegister.R9]:X16} " +
+            $"r10=0x{ctx[CpuRegister.R10]:X16} r11=0x{ctx[CpuRegister.R11]:X16} " +
+            $"r12=0x{ctx[CpuRegister.R12]:X16} r13=0x{ctx[CpuRegister.R13]:X16} " +
+            $"r14=0x{ctx[CpuRegister.R14]:X16} r15=0x{ctx[CpuRegister.R15]:X16}");
+        Console.Error.WriteLine(
+            $"[V190][KRZ] agc.krz_memory " +
+            $"stack_window={(stackReadable ? Convert.ToHexString(stackWindow) : "NA")} " +
+            $"code_window={(codeReadable ? Convert.ToHexString(codeWindow) : "NA")} " +
+            $"dcb_header={(dcbHeaderReadable ? Convert.ToHexString(dcbHeader) : "NA")} " +
+            $"dcb_tail={(dcbTailReadable ? Convert.ToHexString(dcbTail) : "NA")} " +
+            $"dcb_next={(dcbNextReadable ? Convert.ToHexString(dcbNext) : "NA")}");
+    }
+    #pragma warning restore SHEM006
+
+    [SysAbiExport(
+        Nid = "h9z6+0hEydk",
+        ExportName = "sceAgcSuspendPoint",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SuspendPoint(CpuContext ctx)
+    {
+        TraceAgc("agc.suspend_point");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    // Synthetic label for an uncatalogued NID (the Unknown* convention); the NID is authoritative.
+    #pragma warning disable SHEM006
+    [SysAbiExport(
+        Nid = "qj7QZpgr9Uw",
+        ExportName = "sceAgcUnknownQj7QZpgr9Uw",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int UnknownQj7QZpgr9Uw(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        if (commandBufferAddress == 0 ||
+            !TryAllocateCommandDwords(ctx, commandBufferAddress, 1, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, 0x8000_0000))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.unknown_qj7 buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"arg1=0x{ctx[CpuRegister.Rsi]:X16} arg2=0x{ctx[CpuRegister.Rdx]:X16}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+    #pragma warning restore SHEM006
+
+    // V74.0.30: Kyty-style blocked PM4 queue scheduler. Parsing still runs
+    // synchronously under SubmittedGpuState.Gate, but runnable queue fronts are
+    // selected round-robin instead of every submit draining only its own queue.
+    // WAIT_REG_MEM already preserves ResumeAddress/ResumeOffset in WaitingDcb;
+    // a suspended state is skipped until the real condition is satisfied.
+    private static void PumpSubmittedQueuesV74030(
+        CpuContext ctx,
+        SubmittedGpuState gpuState)
+    {
+        if (gpuState.Pm4SchedulerRunningV74030)
+        {
+            return;
+        }
+
+        gpuState.Pm4SchedulerRunningV74030 = true;
+        try
+        {
+            const int MaxSchedulerPasses = 4096;
+            for (var pass = 0; pass < MaxSchedulerPasses; pass++)
+            {
+                var schedule = new List<SubmittedDcbState>(gpuState.ComputeQueues.Count + 1)
+                {
+                    gpuState.Graphics,
+                };
+                var computeKeys = new List<uint>(gpuState.ComputeQueues.Keys);
+                computeKeys.Sort();
+                foreach (var key in computeKeys)
+                {
+                    schedule.Add(gpuState.ComputeQueues[key]);
+                }
+
+                if (schedule.Count == 0)
+                {
+                    return;
+                }
+
+                if (gpuState.Pm4SchedulerCursorV74030 >= schedule.Count)
+                {
+                    gpuState.Pm4SchedulerCursorV74030 = 0;
+                }
+
+                var selectedIndex = -1;
+                for (var offset = 0; offset < schedule.Count; offset++)
+                {
+                    var index = (gpuState.Pm4SchedulerCursorV74030 + offset) % schedule.Count;
+                    var candidate = schedule[index];
+                    if (candidate.IsSuspended ||
+                        candidate.HasActiveSubmission ||
+                        candidate.PendingSubmissions.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    selectedIndex = index;
+                    break;
+                }
+
+                if (selectedIndex < 0)
+                {
+                    return;
+                }
+
+                var state = schedule[selectedIndex];
+                gpuState.Pm4SchedulerCursorV74030 =
+                    (selectedIndex + 1) % schedule.Count;
+                if (!state.PendingSubmissions.TryDequeue(out var submission))
+                {
+                    continue;
+                }
+
+                state.HasActiveSubmission = true;
+                state.ActiveSubmissionId = submission.SubmissionId;
+                state.RingChunkBase = submission.CommandAddress;
+                state.FollowedChunkAdvance = false;
+                state.IsSuspended = ParseSubmittedDcb(
+                    ctx,
+                    gpuState,
+                    state,
+                    submission.CommandAddress,
+                    submission.DwordCount,
+                    submission.TracePackets);
+
+                var schedulerCount = Interlocked.Increment(
+                    ref _v74030Pm4SchedulerTraceCount);
+                if (schedulerCount <= 128 ||
+                    (schedulerCount & (schedulerCount - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.30][KYTY_PM4_SCHEDULER] count={schedulerCount} " +
+                        $"queue={state.QueueName} submission={submission.SubmissionId} " +
+                        $"blocked={(state.IsSuspended ? 1 : 0)} " +
+                        $"pending={state.PendingSubmissions.Count} next_queue={gpuState.Pm4SchedulerCursorV74030}");
+                }
+
+                if (state.IsSuspended)
+                {
+                    continue;
+                }
+
+                state.HasActiveSubmission = false;
+                NotifySubmittedDcbCompleted(gpuState, state, submission.SubmissionId);
+            }
+        }
+        finally
+        {
+            gpuState.Pm4SchedulerRunningV74030 = false;
+        }
+    }
+
+    private static void PumpSubmittedQueueOrSchedulerV74030(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state)
+    {
+        if (_kytyPm4BlockedSchedulerV74030)
+        {
+            PumpSubmittedQueuesV74030(ctx, gpuState);
+            return;
+        }
+
+        PumpSubmittedQueue(ctx, gpuState, state);
+    }
+
+    private static void EnqueueSubmittedDcb(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        uint dwordCount,
+        ulong submissionId,
+        bool tracePackets)
+    {
+        // Upstream 0.0.3: an explicit new submission supersedes a synthetic
+        // ring-tail park. Normal WAIT_REG_MEM suspension remains untouched.
+        if (state.IsSuspended &&
+            state.RingTailParkAddress != 0 &&
+            GpuWaitRegistry.TryRemoveByState(state, state.RingTailParkAddress))
+        {
+            TraceAgc(
+                $"agc.dcb.ring_tail_superseded addr=0x{state.RingTailParkAddress:X16} " +
+                $"queue={state.QueueName} submission={state.ActiveSubmissionId}");
+            state.RingTailParkAddress = 0;
+            state.IsSuspended = false;
+            state.HasActiveSubmission = false;
+            NotifySubmittedDcbCompleted(gpuState, state, state.ActiveSubmissionId);
+        }
+
+        PreindexSubmittedProducerIntents(
+            ctx,
+            state,
+            commandAddress,
+            dwordCount,
+            submissionId);
+
+        state.PendingSubmissions.Enqueue(new SubmittedDcbState.PendingSubmission(
+            commandAddress,
+            dwordCount,
+            submissionId,
+            tracePackets));
+        PumpSubmittedQueueOrSchedulerV74030(ctx, gpuState, state);
+    }
+
+    private static void PumpSubmittedQueue(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state)
+    {
+        if (state.IsSuspended)
+        {
+            return;
+        }
+
+        while (!state.HasActiveSubmission &&
+               state.PendingSubmissions.TryDequeue(out var submission))
+        {
+            state.HasActiveSubmission = true;
+            state.ActiveSubmissionId = submission.SubmissionId;
+            state.RingChunkBase = submission.CommandAddress;
+            state.FollowedChunkAdvance = false;
+            state.IsSuspended = ParseSubmittedDcb(
+                ctx,
+                gpuState,
+                state,
+                submission.CommandAddress,
+                submission.DwordCount,
+                submission.TracePackets);
+            if (state.IsSuspended)
+            {
+                return;
+            }
+
+            state.HasActiveSubmission = false;
+            NotifySubmittedDcbCompleted(gpuState, state, submission.SubmissionId);
+        }
+    }
+
+    private static void NotifySubmittedDcbCompleted(
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong submissionId)
+    {
+        if (state.CompletionEventNotifiedSubmissionId == submissionId)
+        {
+            return;
+        }
+
+        state.CompletionEventNotifiedSubmissionId = submissionId;
+        // Hardware raises an end-of-pipe interrupt for every submission on every
+        // queue, so this is unconditional. It stays safe for titles that do not
+        // want it because delivery is registration-gated: TriggerRegisteredEvents
+        // only queues onto equeues that registered this exact ident through
+        // sceAgcDriverAddEqEvent. Graphics keeps ident 0; a compute queue uses the
+        // owner handle it was submitted under.
+        var completionEventId = state.CompletionEventId;
+        var isGraphics = ReferenceEquals(state, gpuState.Graphics);
+        var queueName = state.QueueName;
+        void TriggerCompletionEvents()
+        {
+            var triggered = KernelEventQueueCompatExports.TriggerRegisteredEvents(
+                completionEventId,
+                KernelEventQueueCompatExports.KernelEventFilterGraphics,
+                completionEventId);
+            // The broad fan-out wakes graphics registrations whose ident never
+            // matches anything the driver publishes. That is a compatibility
+            // guess rather than hardware behavior, so it stays opt-in and stays
+            // on the graphics queue where it was measured.
+            if (isGraphics && _compatibilitySubmitCompletionEvent)
+            {
+                triggered += KernelEventQueueCompatExports.TriggerRegisteredEventsDistinct(
+                    KernelEventQueueCompatExports.KernelEventFilterGraphics);
+            }
+            TraceAgc(
+                $"agc.completion_event queue={queueName} submission={submissionId} " +
+                $"event=0x{completionEventId:X} queues={triggered}");
+        }
+
+        // A submission is complete only after its translated Vulkan work and
+        // ordered guest-memory writes have finished. Put the notification on that
+        // same logical queue instead of approximating completion with a timer or a
+        // ThreadPool hop, either of which can only make the interrupt late and
+        // reorder it against registration changes (and can wake Unity while its
+        // upload data is still stale).
+        if (GuestGpu.Current.SubmitOrderedGuestAction(
+                TriggerCompletionEvents,
+                $"agc submit completion {submissionId}") == 0)
+        {
+            TriggerCompletionEvents();
+        }
+    }
+
+    // Returns true only when parsing stopped on an unsatisfied WAIT_REG_MEM.
+    // Malformed packets are dropped as completed so one bad submission cannot
+    // permanently wedge all later work on the same hardware queue.
+    private static bool ParseSubmittedDcb(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        uint dwordCount,
+        bool tracePackets)
+    {
+        if (commandAddress == 0 || dwordCount == 0 || dwordCount > 1_000_000)
+        {
+            return false;
+        }
+
+        using var guestQueueScope = GuestGpu.Current.EnterGuestQueue(
+            state.QueueName,
+            state.ActiveSubmissionId);
+        // A submission is one link of a chain, not necessarily the whole stream:
+        // when a title's command arena fills mid-frame it continues in a fresh
+        // buffer and links the two with an INDIRECT_BUFFER packet, then submits
+        // only the first link. Stopping at the end of the submitted window drops
+        // every packet past the switch -- including the flip and the end-of-frame
+        // completion labels the guest is waiting on.
+        for (var chainDepth = 0; ; chainDepth++)
+        {
+            if (chainDepth > MaxSubmittedChainDepth)
+            {
+                TraceAgc(
+                    $"agc.dcb_chain_depth_exceeded queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} addr=0x{commandAddress:X16}");
+                return false;
+            }
+
+            state.PendingChainAddress = 0;
+            state.PendingChainDwords = 0;
+            var windowByteCount = checked((int)(dwordCount * sizeof(uint)));
+            var rented = GuestDataPool.Shared.Rent(windowByteCount);
+            bool suspended;
+            try
+            {
+                if (ctx.Memory.TryRead(commandAddress, rented.AsSpan(0, windowByteCount)))
+                {
+                    _dcbWindowBuffer = rented;
+                    _dcbWindowStart = commandAddress;
+                    _dcbWindowByteLength = windowByteCount;
+                }
+
+                suspended = ParseSubmittedDcbCore(
+                    ctx,
+                    gpuState,
+                    state,
+                    commandAddress,
+                    dwordCount,
+                    tracePackets);
+            }
+            finally
+            {
+                _dcbWindowBuffer = null;
+                _dcbWindowByteLength = 0;
+                GuestDataPool.Shared.Return(rented);
+            }
+
+            if (suspended)
+            {
+                return true;
+            }
+
+            var chainAddress = state.PendingChainAddress;
+            var chainDwords = state.PendingChainDwords;
+            if (chainAddress == 0 || chainDwords == 0 || chainDwords > 1_000_000)
+            {
+                return false;
+            }
+
+            commandAddress = chainAddress;
+            dwordCount = chainDwords;
+        }
+    }
+
+    // Deep enough for a title that links one continuation buffer per frame,
+    // shallow enough that a self-referencing chain cannot spin forever.
+    private const int MaxSubmittedChainDepth = 64;
+
+    private static bool ParseSubmittedDcbCore(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        uint dwordCount,
+        bool tracePackets)
+    {
+        var offset = 0u;
+        while (offset < dwordCount)
+        {
+            // SHARPEMU_V74_0_72_AGC_GATE_OWNER_WAIT_DRAIN
+            // A producer may have completed while this parser owned the global
+            // AGC gate. Service that wake here, between packets, before doing
+            // more PM4 work that can otherwise monopolize Gate for seconds.
+            TryDrainPendingWaitersOnGateOwnerV74072(
+                ctx,
+                gpuState,
+                state,
+                commandAddress,
+                offset,
+                tracePackets);
+
+            var currentAddress = commandAddress + ((ulong)offset * sizeof(uint));
+            if (!TryReadUInt32(ctx, currentAddress, out var header))
+            {
+                TracePacketParseFailure(state, currentAddress, offset, 0, "header-read");
+                return false;
+            }
+
+            var packetType = header >> 30;
+            if (packetType == 2)
+            {
+                if (tracePackets)
+                {
+                    TraceAgc(
+                        $"agc.dcb.packet dw={offset} addr=0x{currentAddress:X16} " +
+                        $"header=0x{header:X8} len=1 type=2");
+                }
+
+                offset++;
+                continue;
+            }
+
+            if (header == 0 &&
+                state.FollowedChunkAdvance &&
+                _gpuWaitSuspendEnabled)
+            {
+                // The CP has reached ring memory the guest has not appended yet.
+                // Park on this dword instead of treating zero-filled tail memory
+                // as malformed PM4 and repeatedly reparsing it on the CPU.
+                return SuspendOnUnwrittenRingWord(
+                    ctx,
+                    state,
+                    commandAddress,
+                    currentAddress,
+                    offset,
+                    tracePackets);
+            }
+
+            if (packetType != 3)
+            {
+                TracePacketParseFailure(
+                    state,
+                    currentAddress,
+                    offset,
+                    header,
+                    $"packet-type-{packetType}");
+                return false;
+            }
+
+            var length = Pm4Length(header);
+            if (length == 0 || offset + length > dwordCount)
+            {
+                TracePacketParseFailure(
+                    state,
+                    currentAddress,
+                    offset,
+                    header,
+                    $"length-{length}-remaining-{dwordCount - offset}");
+                return false;
+            }
+
+            var op = (header >> 8) & 0xFFu;
+            var register = (header >> 2) & 0x3Fu;
+            if (!KnownPm4Opcodes.Contains(op) && _seenUnknownOpcodes.Add(op))
+            {
+                TryReadUInt32(ctx, currentAddress + 4, out var unknownPayload0);
+                TryReadUInt32(ctx, currentAddress + 8, out var unknownPayload1);
+                var possibleTarget = ((ulong)(unknownPayload1 & 0xFFFFu) << 32) | unknownPayload0;
+                Console.Error.WriteLine(
+                    $"[LOADER][WARN] agc.dcb.unknown_opcode op=0x{op:X2} reg=0x{register:X2} " +
+                    $"len={length} addr=0x{currentAddress:X16} queue={state.QueueName} " +
+                    $"payload0=0x{unknownPayload0:X8} payload1=0x{unknownPayload1:X8} " +
+                    $"possible_target=0x{possibleTarget:X16}");
+            }
+            if (_traceFramePackets && ReferenceEquals(state, gpuState.Graphics))
+            {
+                var packetKey = (op, op == ItNop ? register : uint.MaxValue);
+                state.FramePacketCounts[packetKey] =
+                    state.FramePacketCounts.TryGetValue(packetKey, out var packetCount)
+                        ? packetCount + 1
+                        : 1;
+                state.FramePacketCount++;
+            }
+            if (tracePackets)
+            {
+                TraceSubmittedPacket(ctx, currentAddress, offset, header, length, op, register);
+            }
+
+            if (_traceDraws)
+            {
+                CountSubmittedOpcode(op, register);
+            }
+
+            if ((header & 1u) != 0 && state.PredicateSkip)
+            {
+                if (tracePackets)
+                {
+                    TraceAgc(
+                        $"agc.dcb.predicated_skip queue={state.QueueName} " +
+                        $"packet=0x{currentAddress:X16} op=0x{op:X2} len={length}");
+                }
+
+                offset += length;
+                continue;
+            }
+
+            var isAcquireMem = op == ItNop && register == RAcquireMem && length >= 8;
+            // Flush coalesced ACQUIRE_MEM only before packets that consume guest
+            // resources (draw/dispatch/dma/flip). Flushing before every register
+            // write produced a storm of tiny ordered actions during load.
+            if (!isAcquireMem &&
+                PacketRequiresPendingAcquireFlush(op, register, length))
+            {
+                FlushPendingAcquireInvalidation(ctx, state, tracePackets);
+            }
+
+            if (op == ItSetPredication)
+            {
+                ApplySubmittedPredication(ctx, state, currentAddress, length, tracePackets);
+                offset += length;
+                continue;
+            }
+
+            if (op == ItRewind && length >= 2)
+            {
+                if (HandleSubmittedRewind(
+                        ctx,
+                        state,
+                        commandAddress,
+                        currentAddress,
+                        offset,
+                        length,
+                        dwordCount,
+                        tracePackets))
+                {
+                    FlushPendingAcquireInvalidation(ctx, state, tracePackets);
+                    return true; // suspended until RewindPatchSetRewindState
+                }
+
+                offset += length;
+                continue;
+            }
+
+            if (op == ItIndirectBuffer &&
+                length >= 4 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var chainLow) &&
+                TryReadUInt32(ctx, currentAddress + 8, out var chainHigh) &&
+                TryReadUInt32(ctx, currentAddress + 12, out var chainDwords))
+            {
+                var chainAddress = ((ulong)(chainHigh & 0xFFFFu) << 32) | chainLow;
+                var chainLength = chainDwords & 0xFFFFFu;
+                // Titles emit a zeroed INDIRECT_BUFFER as padding for a branch they
+                // decided not to take. Only a populated one redirects the stream.
+                if (chainAddress != 0 && chainLength != 0)
+                {
+                    state.PendingChainAddress = chainAddress;
+                    state.PendingChainDwords = chainLength;
+                    state.RingChunkBase = chainAddress;
+                    TraceAgc(
+                        $"agc.dcb_chain queue={state.QueueName} " +
+                        $"submission={state.ActiveSubmissionId} " +
+                        $"packet=0x{currentAddress:X16} " +
+                        $"target=0x{chainAddress:X16} dwords={chainLength}");
+
+                    // The link is a jump, not a call: whatever follows it in this
+                    // buffer is unreachable padding.
+                    return false;
+                }
+
+                // Upstream 0.0.3: target=1,size=0 is not padding. It advances
+                // the command ring to the next contiguous 64 KiB chunk.
+                if (chainAddress == 1 && state.RingChunkBase != 0)
+                {
+                    var nextChunk = state.RingChunkBase + RingChunkBytes;
+                    TraceAgc(
+                        $"agc.dcb.chunk_advance from=0x{currentAddress:X16} " +
+                        $"next=0x{nextChunk:X16}");
+                    state.PendingChainAddress = nextChunk;
+                    state.PendingChainDwords = RingChunkBytes / sizeof(uint);
+                    state.RingChunkBase = nextChunk;
+                    state.FollowedChunkAdvance = true;
+                    return false;
+                }
+            }
+
+            if (op == ItNop &&
+                register is RDrawReset or RAcbReset &&
+                length >= 2)
+            {
+                ResetSubmittedParserState(state);
+                TraceAgc(
+                    $"agc.queue_reset queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} " +
+                    $"kind={(register == RDrawReset ? "draw" : "acb")} " +
+                    $"packet=0x{currentAddress:X16}");
+            }
+
+            if (isAcquireMem)
+            {
+                ApplySubmittedAcquireMem(
+                    ctx,
+                    state,
+                    currentAddress,
+                    tracePackets);
+            }
+
+            if (op == ItSetShReg &&
+                TryReadTextureDescriptor(ctx, currentAddress, length, out var texture))
+            {
+                state.PresenterTexture = texture;
+            }
+
+            ApplySubmittedRegisters(ctx, state, currentAddress, length, op, register);
+
+            if (op == ItSetBase &&
+                length >= 4 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var baseSelector) &&
+                baseSelector == 1 &&
+                TryReadUInt64(ctx, currentAddress + 8, out var indirectArgsAddress))
+            {
+                state.IndirectArgsAddress = indirectArgsAddress;
+                TraceV26IndirectTable(ctx, state, indirectArgsAddress, phase: "set-base");
+                if (_traceGeometryDraws)
+                {
+                    var baseTrace = Interlocked.Increment(ref _v25GeometryDrawTraceCount);
+                    if (baseTrace <= 4096 || baseTrace % 1000 == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V25][DRAW] agc.indirect_base#{baseTrace} queue={state.QueueName} " +
+                            $"submission={state.ActiveSubmissionId} packet=0x{currentAddress:X16} " +
+                            $"addr=0x{indirectArgsAddress:X16}");
+                    }
+                }
+            }
+
+            if (op == ItEventWrite &&
+                length >= 2 &&
+                TryReadUInt32(ctx, currentAddress + sizeof(uint), out var eventTypeRaw))
+            {
+                var eventType = eventTypeRaw & 0x3Fu;
+                if (_traceLabelProvenanceV734 &&
+                    (eventTypeRaw & 0x100u) != 0 &&
+                    length >= 4 &&
+                    TryReadUInt64(ctx, currentAddress + 8, out var eventAddress))
+                {
+                    var targets = SnapshotLabelProvenanceTargetsV734(ctx.Memory);
+                    if (targets.Length != 0)
+                    {
+                        TraceLabelProvenanceV734(
+                            $"event_write_addressed type=0x{eventType:X2} " +
+                            $"addr=0x{eventAddress:X16} queue={state.QueueName} " +
+                            $"submission={state.ActiveSubmissionId} " +
+                            $"packet=0x{currentAddress:X16}");
+                        TraceLabelProvenanceRangeV734(
+                            ctx.Memory,
+                            eventAddress,
+                            sizeof(ulong),
+                            $"event_write type=0x{eventType:X2}");
+                    }
+                }
+                SubmitOrderedGpuSideEffect(
+                    ctx,
+                    gpuState,
+                    state,
+                    () =>
+                    {
+                        var triggered = KernelEventQueueCompatExports.TriggerRegisteredEventsByFilter(
+                            KernelEventQueueCompatExports.KernelEventFilterGraphics,
+                            eventType);
+                        if (tracePackets)
+                        {
+                            TraceAgc($"agc.dcb.event type=0x{eventType:X2} queues={triggered}");
+                        }
+                    },
+                    $"event_write type=0x{eventType:X2}",
+                    currentAddress);
+            }
+
+            if (op == ItNop && register == RReleaseMem && length >= 7)
+            {
+                ApplySubmittedReleaseMem(ctx, gpuState, state, currentAddress, tracePackets);
+            }
+
+            if (op == ItReleaseMem && length >= 8)
+            {
+                ApplySubmittedStandardReleaseMem(
+                    ctx,
+                    gpuState,
+                    state,
+                    currentAddress,
+                    tracePackets);
+            }
+
+            if (op == ItNop && register == RWriteData && length >= 4)
+            {
+                ApplySubmittedWriteData(
+                    ctx,
+                    gpuState,
+                    state,
+                    currentAddress,
+                    length,
+                    standardPacket: false,
+                    tracePacket: tracePackets);
+            }
+
+            if (op == ItWriteData && length >= 4)
+            {
+                ApplySubmittedWriteData(
+                    ctx,
+                    gpuState,
+                    state,
+                    currentAddress,
+                    length,
+                    standardPacket: true,
+                    tracePacket: tracePackets);
+            }
+
+            if (op == ItNop && register == RDmaData && length >= 7)
+            {
+                ApplySubmittedDmaData(
+                    ctx,
+                    gpuState,
+                    state,
+                    currentAddress,
+                    compactLayout: length == 7,
+                    tracePacket: tracePackets);
+            }
+
+            if (op == ItDmaData && length >= 7)
+            {
+                ApplySubmittedStandardDmaData(ctx, gpuState, state, currentAddress);
+            }
+
+            if (op == ItIndexBase &&
+                length >= 3 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var indexBaseLo) &&
+                TryReadUInt32(ctx, currentAddress + 8, out var indexBaseHi))
+            {
+                state.IndexBufferAddress =
+                    indexBaseLo | ((ulong)indexBaseHi << 32);
+            }
+
+            if (op == ItIndexBufferSize &&
+                length >= 2 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var indexBufferCount))
+            {
+                state.IndexBufferCount = indexBufferCount;
+            }
+
+            if (op == ItNop &&
+                register == RIndexCount &&
+                length >= 2 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var customIndexCount))
+            {
+                state.IndexBufferCount = customIndexCount;
+            }
+
+            if (op == ItIndexType &&
+                length >= 2 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var indexSize))
+            {
+                state.IndexSize = indexSize & 0x3;
+            }
+
+            if (op == ItNumInstances &&
+                length >= 2 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var instanceCount))
+            {
+                state.InstanceCount = Math.Max(instanceCount, 1);
+            }
+
+            if (op == ItNop &&
+                register is RWaitMem32 or RWaitMem64 &&
+                length >= (register == RWaitMem32 ? 6u : 9u))
+            {
+                if (HandleSubmittedWaitRegMem(
+                        ctx, state, commandAddress, currentAddress, offset, length,
+                        dwordCount, is64Bit: register == RWaitMem64, isStandard: false,
+                        tracePackets))
+                {
+                    FlushPendingAcquireInvalidation(ctx, state, tracePackets);
+                    return true; // DCB suspended until the awaited label is written
+                }
+            }
+
+            if (op == ItWaitRegMem && length >= 7)
+            {
+                if (HandleSubmittedWaitRegMem(
+                        ctx, state, commandAddress, currentAddress, offset, length,
+                        dwordCount, is64Bit: false, isStandard: true, tracePackets))
+                {
+                    FlushPendingAcquireInvalidation(ctx, state, tracePackets);
+                    return true; // DCB suspended until the awaited label is written
+                }
+            }
+
+            var isGeometryDrawPacket = IsGeometryDrawOpcode(op);
+            var drawResolved = TryReadSubmittedDrawCount(
+                ctx,
+                gpuState,
+                state,
+                currentAddress,
+                length,
+                op,
+                out var indexCount);
+            var indexed = op is
+                ItDrawIndex2 or
+                ItDrawIndexOffset2 or
+                ItDrawIndexIndirect or
+                ItDrawIndexIndirectMulti;
+            if (isGeometryDrawPacket)
+            {
+                TraceGeometryDrawCandidate(
+                    ctx,
+                    state,
+                    currentAddress,
+                    length,
+                    op,
+                    register,
+                    drawResolved,
+                    indexCount,
+                    indexed);
+            }
+            if (drawResolved && indexCount != 0)
+            {
+                state.FrameDrawCount++;
+                if (_traceAgcShader)
+                {
+                    lock (_submitTraceGate)
+                    {
+                        if (_tracedSubmittedDrawOpcodes.Add(op))
+                        {
+                            TraceAgcShader(
+                                $"agc.draw_packet op=0x{op:X2} count={indexCount}");
+                        }
+                    }
+                }
+
+                state.SawIndexedDraw |= indexed;
+                TryTranslateGuestDraw(ctx, gpuState, state, indexCount, indexed);
+            }
+
+            if (op == ItNop &&
+                register == RDrawIndexAuto &&
+                length >= 2 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var autoIndexCount))
+            {
+                if (_traceGeometryDraws)
+                {
+                    var autoTrace = Interlocked.Increment(ref _v25GeometryDrawTraceCount);
+                    if (autoTrace <= 4096 || autoTrace % 1000 == 0)
+                    {
+                        state.UcRegisters.TryGetValue(VgtPrimitiveType, out var autoPrimitiveType);
+                        Console.Error.WriteLine(
+                            $"[V25][DRAW] agc.draw_auto_candidate#{autoTrace} queue={state.QueueName} " +
+                            $"submission={state.ActiveSubmissionId} packet=0x{currentAddress:X16} " +
+                            $"count={autoIndexCount} prim=0x{autoPrimitiveType:X} " +
+                            $"instances={state.InstanceCount} indirect_base=0x{state.IndirectArgsAddress:X16}");
+                    }
+                }
+                if (autoIndexCount != 0)
+                {
+                    state.FrameDrawCount++;
+                    TryTranslateGuestDraw(
+                        ctx,
+                        gpuState,
+                        state,
+                        autoIndexCount,
+                        indexed: false);
+                }
+            }
+
+            if (op is ItDispatchDirect or ItDispatchIndirect)
+            {
+                if (TryReadComputeDispatch(
+                    ctx,
+                    state,
+                    currentAddress,
+                    length,
+                    op,
+                    out var dispatch,
+                    out var indirectDimsRetryAddress))
+                {
+                    state.FrameDispatchCount++;
+                    ObserveComputeDispatch(ctx, gpuState, state, dispatch);
+                }
+                else if (op == ItDispatchIndirect &&
+                    indirectDimsRetryAddress != 0 &&
+                    HandleSubmittedIndirectDimsWait(
+                        ctx,
+                        state,
+                        commandAddress,
+                        currentAddress,
+                        offset,
+                        dwordCount,
+                        indirectDimsRetryAddress,
+                        tracePackets))
+                {
+                    FlushPendingAcquireInvalidation(ctx, state, tracePackets);
+                    return true;
+                }
+            }
+
+            if (op == ItNop &&
+                register == RWaitFlipDone &&
+                length >= 3 &&
+                TryReadUInt32(ctx, currentAddress + 4, out var waitVideoOutHandle) &&
+                TryReadUInt32(ctx, currentAddress + 8, out var waitDisplayBufferIndex))
+            {
+                var waitSequence = GuestGpu.Current.SubmitOrderedGuestFlipWait(
+                    unchecked((int)waitVideoOutHandle),
+                    unchecked((int)waitDisplayBufferIndex));
+                TraceAgcShader(
+                    $"agc.flip_wait_safe queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} " +
+                    $"handle={waitVideoOutHandle} index={waitDisplayBufferIndex} " +
+                    $"work_sequence={waitSequence}");
+            }
+
+            if (op == ItNop && register == RFlip && length >= 6)
+            {
+                TraceFramePacketSummary(state);
+                SyncCpuWrittenGuestImages(ctx);
+                if (!TryReadUInt32(ctx, currentAddress + 4, out var videoOutHandle) ||
+                    !TryReadUInt32(ctx, currentAddress + 8, out var displayBufferIndexRaw) ||
+                    !TryReadUInt32(ctx, currentAddress + 12, out var flipMode) ||
+                    !TryReadUInt32(ctx, currentAddress + 16, out var flipArgLo) ||
+                    !TryReadUInt32(ctx, currentAddress + 20, out var flipArgHi))
+                {
+                    return false;
+                }
+
+                var flipArg = unchecked((long)(((ulong)flipArgHi << 32) | flipArgLo));
+                var displayBufferIndex = unchecked((int)displayBufferIndexRaw);
+                var handle = unchecked((int)videoOutHandle);
+
+                if (_renderCheckpointsEnabled)
+                {
+                    if (VideoOutExports.TryGetDisplayBufferInfo(
+                            handle,
+                            displayBufferIndex,
+                            out var v16DisplayBuffer))
+                    {
+                        var hasWriter = state.RenderTargetWriters.TryGetValue(
+                            v16DisplayBuffer.Address,
+                            out var v16Writer);
+                        Console.Error.WriteLine(
+                            $"[V16][CP4_FLIP] handle={handle} index={displayBufferIndex} " +
+                            $"mode={flipMode} arg={flipArg} " +
+                            $"display=0x{v16DisplayBuffer.Address:X16} " +
+                            $"size={v16DisplayBuffer.Width}x{v16DisplayBuffer.Height} " +
+                            $"writer={(hasWriter ? v16Writer.Sequence : 0)} " +
+                            $"frame_floor={state.LastFlipWorkSequence} " +
+                            $"known_rt={(state.KnownRenderTargets.ContainsKey(v16DisplayBuffer.Address) ? 1 : 0)}");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(
+                            $"[V16][CP4_FLIP] handle={handle} index={displayBufferIndex} " +
+                            $"mode={flipMode} arg={flipArg} display=unresolved");
+                    }
+                }
+
+                var suppressedTargetlessForDisplay = false;
+
+                if (state.PendingTargetlessDraws.Count != 0 &&
+                    VideoOutExports.TryGetDisplayBufferInfo(
+                        handle,
+                        displayBufferIndex,
+                        out var pendingDisplayBuffer))
+                {
+                    // RootFix V6: the targetless-draw queue is only a fallback for
+                    // titles whose final blit omits CB_COLOR registers.  Demon's
+                    // Souls can emit those targetless draws *and* a real draw to
+                    // the scanout surface in the same frame. Replaying the fallback
+                    // afterwards overwrites the valid display image with stale
+                    // sampled state.
+                    var hasCurrentFrameDisplayWriter =
+                        state.RenderTargetWriters.TryGetValue(
+                            pendingDisplayBuffer.Address,
+                            out var directDisplayWriter) &&
+                        directDisplayWriter.Sequence > state.LastFlipWorkSequence;
+
+                    var isDemonsSoulsV7405628 =
+                        KernelMemoryCompatExports.IsConfiguredApplicationTitle(
+                            "PPSA01341");
+
+                    var preferValidatedDirectWriterV7405628 =
+                        !isDemonsSoulsV7405628 ||
+                        _demonsPreferDirectScanoutWriterV7405628;
+
+                    if (hasCurrentFrameDisplayWriter &&
+                        !_replayTargetlessComposites &&
+                        preferValidatedDirectWriterV7405628)
+                    {
+                        var pendingBeforeSuppressV7405628 =
+                            state.PendingTargetlessDraws.Count;
+
+                        TraceAgcShader(
+                            $"agc.scanout_writer_validated " +
+                            $"dst=0x{pendingDisplayBuffer.Address:X16} " +
+                            $"direct_writer={directDisplayWriter.Sequence} " +
+                            $"frame_floor={state.LastFlipWorkSequence} " +
+                            $"pending={pendingBeforeSuppressV7405628}");
+
+                        var suppressed = 0;
+                        while (state.PendingTargetlessDraws.TryDequeue(
+                                   out var redundantPendingDraw))
+                        {
+                            ReturnPooledDrawArrays(
+                                redundantPendingDraw,
+                                globals: true,
+                                vertex: true,
+                                index: true);
+                            suppressed++;
+                        }
+
+                        suppressedTargetlessForDisplay = suppressed != 0;
+
+                        var suppressFrameCountV7405628 =
+                            Interlocked.Increment(
+                                ref _v7405628DirectSuppressFrameCount);
+
+                        if (suppressed != 0)
+                        {
+                            Interlocked.Add(
+                                ref _v7405628DirectSuppressDrawCount,
+                                suppressed);
+                        }
+
+                        TraceDirectScanoutPolicyV7405628(
+                            "suppress-targetless-after-direct-writer",
+                            suppressFrameCountV7405628,
+                            pendingBeforeSuppressV7405628,
+                            suppressed,
+                            pendingDisplayBuffer,
+                            directDisplayWriter.Sequence,
+                            state.LastFlipWorkSequence);
+
+                        TraceAgcShader(
+                            $"agc.deferred_composite_suppressed count={suppressed} " +
+                            $"dst=0x{pendingDisplayBuffer.Address:X16} " +
+                            $"direct_writer={directDisplayWriter.Sequence} " +
+                            $"frame_floor={state.LastFlipWorkSequence}");
+                        state.TranslatedDraw = null;
+                    }
+                    else if (state.KnownRenderTargets.TryGetValue(
+                                 pendingDisplayBuffer.Address,
+                                 out var pendingDisplayTarget))
+                    {
+                        ProvideRenderTargetInitialData(ctx, pendingDisplayTarget);
+                        var deferredCompositeCount = 0;
+
+                        while (state.PendingTargetlessDraws.TryDequeue(
+                                   out var pendingComposite))
+                        {
+                            var textures = CreateGuestDrawTextures(
+                                ctx,
+                                pendingComposite.Textures,
+                                out _,
+                                gpuState,
+                                state);
+                            var globalMemoryBuffers =
+                                CreateTranslatedDrawGlobalBuffers(pendingComposite);
+                            var vertexBuffers =
+                                CreateGuestVertexBuffers(pendingComposite.VertexInputs);
+
+                            GuestGpu.Current.SubmitOffscreenTranslatedDraw(
+                                pendingComposite.PixelShader,
+                                textures,
+                                globalMemoryBuffers,
+                                pendingComposite.AttributeCount,
+                                [new GuestRenderTarget(
+                                    pendingDisplayTarget.Address,
+                                    pendingDisplayTarget.Width,
+                                    pendingDisplayTarget.Height,
+                                    pendingDisplayTarget.Format,
+                                    pendingDisplayTarget.NumberType,
+                                    TileMode: pendingDisplayTarget.TileMode,
+                                    TileModeKnown: pendingDisplayTarget.TileModeKnown,
+                                    ComponentSwap: pendingDisplayTarget.ComponentSwap)],
+                                pendingComposite.VertexShader,
+                                pendingComposite.VertexCount,
+                                pendingComposite.InstanceCount,
+                                pendingComposite.PrimitiveType,
+                                pendingComposite.IndexBuffer,
+                                vertexBuffers,
+                                pendingComposite.RenderState,
+                                pendingComposite.DepthTarget,
+                                pendingComposite.PixelShaderAddress,
+                                pendingComposite.BaseVertex);
+
+                            deferredCompositeCount++;
+                            TraceAgcShader(
+                                $"agc.deferred_composite index={deferredCompositeCount} " +
+                                $"ps=0x{pendingComposite.PixelShaderAddress:X16} " +
+                                $"src=0x{pendingComposite.Textures.FirstOrDefault()?.Descriptor.Address ?? 0:X16} " +
+                                $"dst=0x{pendingDisplayTarget.Address:X16} " +
+                                $"size={pendingDisplayTarget.Width}x{pendingDisplayTarget.Height}");
+                        }
+
+                        var demonsLegacyReplayV7405628 =
+                            isDemonsSoulsV7405628 &&
+                            !_demonsPreferDirectScanoutWriterV7405628;
+
+                        if ((_replayTargetlessComposites ||
+                             demonsLegacyReplayV7405628) &&
+                            hasCurrentFrameDisplayWriter)
+                        {
+                            var replayFrameCountV7405628 =
+                                Interlocked.Increment(
+                                    ref _v7405628ReplayAfterDirectFrameCount);
+
+                            TraceDirectScanoutPolicyV7405628(
+                                "replay-targetless-after-direct-writer",
+                                replayFrameCountV7405628,
+                                deferredCompositeCount,
+                                deferredCompositeCount,
+                                pendingDisplayBuffer,
+                                directDisplayWriter.Sequence,
+                                state.LastFlipWorkSequence);
+
+                            TraceAgcShader(
+                                $"agc.deferred_composite_replayed_after_direct_writer " +
+                                $"count={deferredCompositeCount} " +
+                                $"dst=0x{pendingDisplayTarget.Address:X16} " +
+                                $"direct_writer={directDisplayWriter.Sequence} " +
+                                $"frame_floor={state.LastFlipWorkSequence}");
+                        }
+
+                        state.TranslatedDraw = null;
+                    }
+                }
+
+                if (VideoOutExports.TryGetDisplayBufferInfo(
+                        handle,
+                        displayBufferIndex,
+                        out var cachedDisplayBuffer))
+                {                    TraceScanoutLineage(state, cachedDisplayBuffer);
+                    // V10: recovery is performed only after the direct GPU flip fails.
+
+                }
+
+                var submittedDirectGpuFlip = false;
+                VideoOutExports.DisplayBufferInfo directFlipDisplayBuffer = default;
+
+                if (VideoOutExports.TryGetDisplayBufferInfo(
+                        handle,
+                        displayBufferIndex,
+                        out directFlipDisplayBuffer))
+                {
+                    // SHARPEMU_STARTMENU_AGGRESSIVE_SCANOUT_RECOVERY_V1_5_0
+                    // Opt-in V1.5 diagnostic path. The V1.4 trace proved that
+                    // the native flip can succeed while the display image is
+                    // visually empty. In aggressive mode, reuse the existing
+                    // current-frame, same-aspect, GPU-resident source selection
+                    // before the ordered flip. Default behavior remains unchanged.
+                    if (_aggressiveScanoutRecovery)
+                    {
+                        var hasAggressiveDisplayWriter =
+                            state.RenderTargetWriters.TryGetValue(
+                                directFlipDisplayBuffer.Address,
+                                out var aggressiveDisplayWriter);
+                        var aggressiveWriterIsCurrent =
+                            hasAggressiveDisplayWriter &&
+                            aggressiveDisplayWriter.Sequence > state.LastFlipWorkSequence;
+                        var aggressiveRecoverySubmitted =
+                            aggressiveWriterIsCurrent &&
+                            TrySubmitScanoutRecoveryBlit(
+                                state,
+                                directFlipDisplayBuffer,
+                                aggressiveDisplayWriter);
+
+                        TraceAgcShader(
+                            $"agc.preflip_scanout_recovery enabled=1 " +
+                            $"dst=0x{directFlipDisplayBuffer.Address:X16} " +
+                            $"display_writer={(hasAggressiveDisplayWriter ? aggressiveDisplayWriter.Sequence : 0)} " +
+                            $"frame_floor={state.LastFlipWorkSequence} " +
+                            $"current={(aggressiveWriterIsCurrent ? 1 : 0)} " +
+                            $"submitted={(aggressiveRecoverySubmitted ? 1 : 0)}");
+                    }
+
+                    // Submit the native image after any opt-in ordered recovery.
+                    submittedDirectGpuFlip =
+                        GuestGpu.Current.TrySubmitOrderedGuestImageFlip(
+                            handle,
+                            displayBufferIndex,
+                            directFlipDisplayBuffer.Address,
+                            directFlipDisplayBuffer.Width,
+                            directFlipDisplayBuffer.Height,
+                            directFlipDisplayBuffer.PitchInPixel);
+
+                    // Only recover after the real GPU-image flip failed.
+                    // Require a writer from the current frame so stale buffers
+                    // from a previous flip cannot be promoted.
+                    if (!submittedDirectGpuFlip &&
+                        state.RenderTargetWriters.TryGetValue(
+                            directFlipDisplayBuffer.Address,
+                            out var failedDirectDisplayWriter) &&
+                        failedDirectDisplayWriter.Sequence > state.LastFlipWorkSequence &&
+                        TrySubmitScanoutRecoveryBlit(
+                            state,
+                            directFlipDisplayBuffer,
+                            failedDirectDisplayWriter))
+                    {
+                        submittedDirectGpuFlip =
+                            GuestGpu.Current.TrySubmitOrderedGuestImageFlip(
+                                handle,
+                                displayBufferIndex,
+                                directFlipDisplayBuffer.Address,
+                                directFlipDisplayBuffer.Width,
+                                directFlipDisplayBuffer.Height,
+                                directFlipDisplayBuffer.PitchInPixel);
+
+                        TraceAgcShader(
+                            $"agc.direct_flip_retry_after_recovery " +
+                            $"dst=0x{directFlipDisplayBuffer.Address:X16} " +
+                            $"writer={failedDirectDisplayWriter.Sequence} " +
+                            $"frame_floor={state.LastFlipWorkSequence} " +
+                            $"success={(submittedDirectGpuFlip ? 1 : 0)}");
+                    }
+                }
+
+                if (submittedDirectGpuFlip)
+                {
+                    TraceDisplayBuffer(
+                        handle,
+                        displayBufferIndex,
+                        directFlipDisplayBuffer,
+                        "gpu-cache");
+                }
+                else if (state.SawIndexedDraw &&
+                    state.TranslatedDraw is { } translatedDraw &&
+                    VideoOutExports.TryGetDisplayBufferInfo(
+                        handle,
+                        displayBufferIndex,
+                        out var translatedDisplayBuffer))
+                {
+                    TraceDisplayBuffer(
+                        handle,
+                        displayBufferIndex,
+                        translatedDisplayBuffer,
+                        "draw-fallback");
+                    var textures = CreateGuestDrawTextures(
+                        ctx,
+                        translatedDraw.Textures,
+                        out var fallbackTextureCount,
+                        gpuState,
+                        state);
+                    var globalMemoryBuffers =
+                        CreateTranslatedDrawGlobalBuffersForPresent(ctx, translatedDraw);
+                    GuestGpu.Current.SubmitTranslatedDraw(
+                        translatedDraw.PixelShader,
+                        textures,
+                        globalMemoryBuffers,
+                        translatedDisplayBuffer.Width,
+                        translatedDisplayBuffer.Height,
+                        translatedDraw.AttributeCount);
+                    TraceAgcShader(
+                        $"agc.shader_present ps=0x{translatedDraw.PixelShaderAddress:X16} " +
+                        $"spirv={translatedDraw.PixelShader.Payload.Length} textures={textures.Count} " +
+                        $"global_buffers={globalMemoryBuffers.Count} " +
+                        $"fallback={fallbackTextureCount} {translatedDisplayBuffer.Width}x{translatedDisplayBuffer.Height}");
+
+                    for (var i = 0; i < translatedDraw.Textures.Count; i++)
+                    {
+                        var binding = translatedDraw.Textures[i];
+                        var d = binding.Descriptor;
+
+                        TraceAgcShader(
+                            $"agc.present_desc[{i}] " +
+                            $"addr=0x{d.Address:X16} " +
+                            $"size={d.Width}x{d.Height} " +
+                            $"fmt={d.Format} " +
+                            $"num={d.NumberType} " +
+                            $"type={d.Type} " +
+                            $"tile={d.TileMode} " +
+                            $"storage={binding.IsStorage}");
+                    }
+                }
+                else if (state.SawIndexedDraw && state.PresenterTexture is { } sourceTexture)
+                {
+                    _ = TrySoftwarePresent(
+                        ctx,
+                        sourceTexture,
+                        unchecked((int)videoOutHandle),
+                        displayBufferIndex);
+                }
+                else if (state.SawIndexedDraw &&
+                         state.GuestDrawKind != GuestDrawKind.None &&
+                         VideoOutExports.TryGetDisplayBufferInfo(
+                             handle,
+                             displayBufferIndex,
+                             out var displayBuffer))
+                {
+                    GuestGpu.Current.SubmitGuestDraw(
+                        state.GuestDrawKind,
+                        displayBuffer.Width,
+                        displayBuffer.Height);
+                }
+
+                _ = VideoOutExports.SubmitFlipFromAgc(ctx, handle, displayBufferIndex, unchecked((int)flipMode), flipArg);
+                state.SawIndexedDraw = false;
+                state.GuestDrawKind = GuestDrawKind.None;
+                while (state.PendingTargetlessDraws.TryDequeue(
+                           out var unusedPendingDraw))
+                {
+                    ReturnPooledDrawArrays(
+                        unusedPendingDraw,
+                        globals: true,
+                        vertex: true,
+                        index: true);
+                }
+                state.TranslatedDraw = null;
+                state.LastFlipWorkSequence = gpuState.WorkSequence;
+            }
+
+            offset += length;
+        }
+
+        FlushPendingAcquireInvalidation(ctx, state, tracePackets);
+        return false;
+    }
+
+    private static void TraceFramePacketSummary(SubmittedDcbState state)
+    {
+        if (!_traceFramePackets)
+        {
+            return;
+        }
+
+        var flip = ++state.FlipCount;
+        if (flip <= 8 || flip % 60 == 0 || state.FrameDrawCount == 0)
+        {
+            var opcodes = string.Join(
+                ',',
+                state.FramePacketCounts
+                    .OrderByDescending(entry => entry.Value)
+                    .ThenBy(entry => entry.Key.Op)
+                    .Take(32)
+                    .Select(entry => entry.Key.Register == uint.MaxValue
+                        ? $"0x{entry.Key.Op:X2}:{entry.Value}"
+                        : $"0x{entry.Key.Op:X2}/r{entry.Key.Register}:{entry.Value}"));
+            Console.Error.WriteLine(
+                $"[FRAMEPKT] flip={flip} submission={state.ActiveSubmissionId} " +
+                $"packets={state.FramePacketCount} draws={state.FrameDrawCount} " +
+                $"dispatches={state.FrameDispatchCount} opcodes=[{opcodes}]");
+        }
+
+        state.FramePacketCounts.Clear();
+        state.FramePacketCount = 0;
+        state.FrameDrawCount = 0;
+        state.FrameDispatchCount = 0;
+    }
+
+    private static void TracePacketParseFailure(
+        SubmittedDcbState state,
+        ulong address,
+        uint offset,
+        uint header,
+        string reason)
+    {
+        if (!_traceFramePackets ||
+            Interlocked.Increment(ref _packetParseFailureTraceCount) > 128)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[FRAMEPKT] parse-failure queue={state.QueueName} " +
+            $"submission={state.ActiveSubmissionId} offset={offset} " +
+            $"address=0x{address:X16} header=0x{header:X8} reason={reason}");
+    }
+
+    private static void TraceDirectScanoutPolicyV7405628(
+        string action,
+        long frameCount,
+        int pendingCount,
+        int processedCount,
+        VideoOutExports.DisplayBufferInfo displayBuffer,
+        ulong directWriterSequence,
+        ulong frameFloor)
+    {
+        if (!(frameCount <= 128 ||
+              (frameCount & (frameCount - 1)) == 0))
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[V74.0.56.28][DIRECT_SCANOUT] " +
+            $"action={action} frame_count={frameCount} " +
+            $"pending={pendingCount} processed={processedCount} " +
+            $"dst=0x{displayBuffer.Address:X16} " +
+            $"size={displayBuffer.Width}x{displayBuffer.Height} " +
+            $"direct_writer={directWriterSequence} " +
+            $"frame_floor={frameFloor}");
+    }
+
+    private static void TraceScanoutLineage(
+        SubmittedDcbState state,
+        VideoOutExports.DisplayBufferInfo displayBuffer)
+    {
+        if (!_traceScanoutLineage)
+        {
+            return;
+        }
+
+        state.KnownRenderTargets.TryGetValue(
+            displayBuffer.Address,
+            out var displayTarget);
+        state.RenderTargetWriters.TryGetValue(
+            displayBuffer.Address,
+            out var displayWriter);
+
+        var displayByteCount = displayTarget.Address != 0
+            ? VulkanVideoPresenter.GetGuestImageByteCount(
+                displayTarget.Format,
+                displayTarget.Width,
+                displayTarget.Height)
+            : 0UL;
+
+        var displayEnd =
+            displayByteCount == 0 ||
+            displayBuffer.Address > ulong.MaxValue - displayByteCount
+                ? displayBuffer.Address
+                : displayBuffer.Address + displayByteCount;
+
+        var candidates = new List<string>();
+
+        foreach (var pair in state.RenderTargetWriters
+                     .Where(pair => pair.Value.Sequence > state.LastFlipWorkSequence)
+                     .OrderByDescending(pair => pair.Value.Sequence))
+        {
+            if (!state.KnownRenderTargets.TryGetValue(
+                    pair.Key,
+                    out var candidate))
+            {
+                continue;
+            }
+
+            var candidateBytes =
+                VulkanVideoPresenter.GetGuestImageByteCount(
+                    candidate.Format,
+                    candidate.Width,
+                    candidate.Height);
+
+            var candidateEnd =
+                candidateBytes == 0 ||
+                candidate.Address > ulong.MaxValue - candidateBytes
+                    ? candidate.Address
+                    : candidate.Address + candidateBytes;
+
+            var exact =
+                candidate.Address == displayBuffer.Address;
+
+            var overlaps =
+                !exact &&
+                candidateBytes != 0 &&
+                displayByteCount != 0 &&
+                candidate.Address < displayEnd &&
+                displayBuffer.Address < candidateEnd;
+
+            var relation =
+                exact ? "exact" :
+                overlaps ? "overlap" :
+                "none";
+
+            var gpuAvailable =
+                GuestGpu.Current.IsGpuGuestImageAvailable(
+                    candidate.Address,
+                    candidate.Format,
+                    candidate.NumberType);
+
+            candidates.Add(
+                $"0x{candidate.Address:X16}:" +
+                $"{candidate.Width}x{candidate.Height}:" +
+                $"f{candidate.Format}/n{candidate.NumberType}:" +
+                $"seq{pair.Value.Sequence}:" +
+                $"gpu{(gpuAvailable ? 1 : 0)}:" +
+                relation);
+
+            if (candidates.Count >= 8)
+            {
+                break;
+            }
+        }
+
+        var displayGpuAvailable =
+            displayTarget.Address != 0 &&
+            GuestGpu.Current.IsGpuGuestImageAvailable(
+                displayTarget.Address,
+                displayTarget.Format,
+                displayTarget.NumberType);
+
+        Console.Error.WriteLine(
+            $"[LOADER][TRACE] agc.scanout_lineage " +
+            $"dst=0x{displayBuffer.Address:X16} " +
+            $"size={displayBuffer.Width}x{displayBuffer.Height} " +
+            $"known={(displayTarget.Address != 0 ? 1 : 0)} " +
+            $"gpu={(displayGpuAvailable ? 1 : 0)} " +
+            $"writer={displayWriter.Sequence} " +
+            $"frame_floor={state.LastFlipWorkSequence} " +
+            $"candidates=[{string.Join(';', candidates)}]");
+    }
+    private static bool TrySubmitScanoutRecoveryBlit(
+        SubmittedDcbState state,
+        VideoOutExports.DisplayBufferInfo displayBuffer,
+        RenderTargetWriter displayWriter)
+    {
+        // RootFix V7: compatibility recovery for final scanout passes that
+        // successfully bind/write the display image but still depend on a
+        // missing/stale full-resolution history surface.  This does not pick
+        // a title-specific address: it searches only render targets written in
+        // the current frame before the display writer and requires a live
+        // Vulkan GuestImageResource.
+        var mode = Environment.GetEnvironmentVariable("SHARPEMU_SCANOUT_RECOVERY");
+        if (string.Equals(mode, "0", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "off", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!state.KnownRenderTargets.TryGetValue(
+                displayBuffer.Address,
+                out var displayTarget))
+        {
+            return false;
+        }
+
+        RenderTargetDescriptor? bestTarget = null;
+        ulong bestSequence = 0;
+        ulong bestArea = 0;
+        var displayAspectLeft = (ulong)displayTarget.Width;
+        var displayAspectRight = (ulong)displayTarget.Height;
+
+        foreach (var pair in state.RenderTargetWriters)
+        {
+            var address = pair.Key;
+            var writer = pair.Value;
+            if (address == displayBuffer.Address ||
+                writer.Sequence <= state.LastFlipWorkSequence ||
+                writer.Sequence >= displayWriter.Sequence ||
+                !state.KnownRenderTargets.TryGetValue(address, out var candidate) ||
+                candidate.Width <= 1 ||
+                candidate.Height <= 1 ||
+                candidate.Width > displayTarget.Width ||
+                candidate.Height > displayTarget.Height)
+            {
+                continue;
+            }
+
+            // The recovery source must be an actual Vulkan image produced by
+            // this frame, never a CPU-only texture or an inferred resource.
+            if (!GuestGpu.Current.IsGpuGuestImageAvailable(
+                    candidate.Address,
+                    candidate.Format,
+                    candidate.NumberType))
+            {
+                continue;
+            }
+
+            // Keep the same display aspect ratio within ~1%. This excludes
+            // shadow/depth/G-buffer surfaces with unrelated geometry.
+            var lhs = (ulong)candidate.Width * displayAspectRight;
+            var rhs = (ulong)candidate.Height * displayAspectLeft;
+            var delta = lhs > rhs ? lhs - rhs : rhs - lhs;
+            var scale = Math.Max(lhs, rhs);
+            if (scale != 0 && delta * 100UL > scale)
+            {
+                continue;
+            }
+
+            var area = (ulong)candidate.Width * candidate.Height;
+
+            // RootFix V7.2: prefer a genuinely scaled scene target over a
+            // same-size history/post-process surface. V7.1 selected the
+            // 3840x2160 history target once it began receiving writers, even
+            // though the stable internal scene target remained 2560x1440.
+            // This remains generic: no guest address or title ID is used.
+            var candidateNeedsScale =
+                candidate.Width != displayTarget.Width ||
+                candidate.Height != displayTarget.Height;
+            var bestNeedsScale =
+                bestTarget is { } currentBest &&
+                (currentBest.Width != displayTarget.Width ||
+                 currentBest.Height != displayTarget.Height);
+
+            var betterClass = candidateNeedsScale && !bestNeedsScale;
+            var sameClass = candidateNeedsScale == bestNeedsScale;
+            var betterArea = sameClass && area > bestArea;
+            var sameAreaLater =
+                sameClass &&
+                area == bestArea &&
+                writer.Sequence > bestSequence;
+
+            if (!betterClass && !betterArea && !sameAreaLater)
+            {
+                continue;
+            }
+
+            bestTarget = candidate;
+            bestArea = area;
+            bestSequence = writer.Sequence;
+        }
+
+        if (bestTarget is not { } source)
+        {
+            TraceAgcShader(
+                $"agc.scanout_recovery_unavailable dst=0x{displayBuffer.Address:X16} " +
+                $"display_writer={displayWriter.Sequence} frame_floor={state.LastFlipWorkSequence}");
+            return false;
+        }
+
+        if (!GuestGpu.Current.TrySubmitGuestImageBlit(
+                source.Address,
+                source.Width,
+                source.Height,
+                source.Format,
+                source.NumberType,
+                displayTarget.Address,
+                displayTarget.Width,
+                displayTarget.Height,
+                displayTarget.Format,
+                displayTarget.NumberType))
+        {
+            TraceAgcShader(
+                $"agc.scanout_recovery_failed src=0x{source.Address:X16} " +
+                $"dst=0x{displayTarget.Address:X16} " +
+                $"source_writer={bestSequence} display_writer={displayWriter.Sequence}");
+            return false;
+        }
+
+        TraceAgcShader(
+            $"agc.scanout_recovery_blit src=0x{source.Address:X16} " +
+            $"{source.Width}x{source.Height}:fmt{source.Format}/num{source.NumberType} " +
+            $"dst=0x{displayTarget.Address:X16} " +
+            $"{displayTarget.Width}x{displayTarget.Height}:fmt{displayTarget.Format}/num{displayTarget.NumberType} " +
+            $"source_writer={bestSequence} display_writer={displayWriter.Sequence}");
+        return true;
+    }
+
+    private static void TraceDisplayBuffer(
+        int handle,
+        int index,
+        VideoOutExports.DisplayBufferInfo buffer,
+        string path)
+    {
+        lock (_submitTraceGate)
+        {
+            if (!_tracedDisplayBuffers.Add((handle, index, buffer.Address, path)))
+            {
+                return;
+            }
+        }
+
+        TraceAgcShader(
+            $"agc.display_buffer handle={handle} index={index} " +
+            $"addr=0x{buffer.Address:X16} fmt=0x{buffer.PixelFormat:X16} " +
+            $"tile={buffer.TilingMode} size={buffer.Width}x{buffer.Height} " +
+            $"pitch={buffer.PitchInPixel} path={path}");
+    }
+
+    /// <summary>
+    /// Records the final values of suspended labels overlapped by a completed
+    /// producer range. Only watched addresses are read, so very large DMA copies
+    /// do not require scanning the entire destination buffer.
+    /// </summary>
+    private static void RecordProducedLabelsInRange(
+        CpuContext ctx,
+        ulong start,
+        ulong length)
+    {
+        if (start == 0 || length == 0)
+        {
+            return;
+        }
+
+        foreach (var watched in GpuWaitRegistry.SnapshotWatchedLabelsInRange(
+                     CanonicalMemory(ctx.Memory),
+                     start,
+                     length))
+        {
+            if (watched.Is64Bit)
+            {
+                if (TryReadUInt64(ctx, watched.Address, out var value64))
+                {
+                    GpuWaitRegistry.RecordProduced(
+                        CanonicalMemory(ctx.Memory),
+                        watched.Address,
+                        value64);
+                }
+
+                continue;
+            }
+
+            if (TryReadUInt32(ctx, watched.Address, out var value32))
+            {
+                GpuWaitRegistry.RecordProduced(
+                    CanonicalMemory(ctx.Memory),
+                    watched.Address,
+                    value32);
+            }
+        }
+    }
+
+
+    /// <summary>
+    /// V61.17.0_GPU_WRITEBACK_PRODUCER_CHAIN
+    /// Bridges real Vulkan shader/global-buffer writeback into the AGC waiter
+    /// registry. Explicit PM4 WRITE_DATA/RELEASE_MEM/DMA paths already record
+    /// produced labels; shader-written guest buffers must do the same after the
+    /// GPU-to-CPU writeback actually succeeds.
+    ///
+    /// This method never fabricates a value and never force-satisfies a wait.
+    /// It reads only currently watched labels overlapped by the successful host
+    /// write range and records the value that is really present in guest memory.
+    /// </summary>
+    internal static int NotifyGpuMemoryWriteback(
+        ICpuMemory memory,
+        ulong start,
+        ulong length)
+    {
+        if (start == 0 || length == 0)
+        {
+            return 0;
+        }
+
+        var canonicalMemory = CanonicalMemory(memory);
+        TraceLabelProvenanceRangeV734(
+            canonicalMemory,
+            start,
+            length,
+            "gpu_writeback");
+        var observed = 0;
+        Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+
+        foreach (var watched in GpuWaitRegistry.SnapshotWatchedLabelsInRange(
+                     canonicalMemory,
+                     start,
+                     length))
+        {
+            ulong value;
+            if (watched.Is64Bit)
+            {
+                var target = bytes[..sizeof(ulong)];
+                if (!memory.TryRead(watched.Address, target))
+                {
+                    continue;
+                }
+
+                value = BinaryPrimitives.ReadUInt64LittleEndian(target);
+            }
+            else
+            {
+                var target = bytes[..sizeof(uint)];
+                if (!memory.TryRead(watched.Address, target))
+                {
+                    continue;
+                }
+
+                value = BinaryPrimitives.ReadUInt32LittleEndian(target);
+            }
+
+            GpuWaitRegistry.RecordProduced(
+                canonicalMemory,
+                watched.Address,
+                value);
+            observed++;
+
+            if (_traceAgc)
+            {
+                TraceAgc(
+                    $"agc.gpu_writeback_producer label=0x{watched.Address:X16} " +
+                    $"value=0x{value:X16} range=0x{start:X16}+0x{length:X}");
+            }
+        }
+
+        if (observed != 0)
+        {
+            SignalGpuWaitMonitor(canonicalMemory);
+        }
+
+        return observed;
+    }
+
+    private static void SignalGpuWaitMonitor(object memory)
+    {
+        memory = CanonicalMemory(memory);
+        if (!_submittedGpuStates.TryGetValue(memory, out var gpuState))
+        {
+            return;
+        }
+
+        lock (gpuState.WaitMonitorSignalGate)
+        {
+            gpuState.WaitMonitorSignalVersion++;
+            Monitor.Pulse(gpuState.WaitMonitorSignalGate);
+        }
+
+        // SHARPEMU_V74_0_78_3_PRODUCER_WAKE_DRAIN
+        // Real producer/writeback evidence only requests the existing authoritative
+        // drain path. No guest value, fence or completion is synthesized here.
+        if (GpuWaitRegistry.CountForMemory(memory) != 0 &&
+            Volatile.Read(ref gpuState.PendingDrainContext) is not null)
+        {
+            Interlocked.Exchange(ref gpuState.DrainPending, 1);
+            if (_dedicatedWaitDrainV74071 &&
+                EnsureDedicatedResumableDcbDrainWorkerV74071(gpuState))
+            {
+                gpuState.DedicatedDrainSignal.Set();
+            }
+            else
+            {
+                QueueLegacyResumableDcbDrainWorkerV74071(gpuState);
+            }
+        }    }
+
+    private static void ApplySubmittedDmaData(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        bool compactLayout,
+        bool tracePacket)
+    {
+        var byteCountOffset = compactLayout ? 20UL : 12UL;
+        var destinationOffset = compactLayout ? 4UL : 16UL;
+        var sourceOffset = compactLayout ? 12UL : 24UL;
+        if (!TryReadUInt32(ctx, packetAddress + byteCountOffset, out var byteCount) ||
+            !TryReadUInt64(ctx, packetAddress + destinationOffset, out var destinationAddress) ||
+            !TryReadUInt64(ctx, packetAddress + sourceOffset, out var sourceAddress))
+        {
+            return;
+        }
+
+        if (OverlapsTarget45DRangeV74041(destinationAddress, byteCount) ||
+            IsTarget45DIdentityV74041(destinationAddress))
+        {
+            TraceTarget45DProducerV74041(
+                "agc_dma",
+                $"packet=0x{packetAddress:X16} dst=0x{destinationAddress:X16} " +
+                $"src=0x{sourceAddress:X16} bytes={byteCount} compact={(compactLayout ? 1 : 0)}");
+        }
+
+        var copiedData = false;
+        SubmitOrderedGpuSideEffect(
+            ctx,
+            gpuState,
+            state,
+            () =>
+            {
+                InvalidateDcbWindowIfOverlaps(destinationAddress, byteCount);
+                var immediateFill =
+                    compactLayout &&
+                    destinationAddress >= 0x10000 &&
+                    sourceAddress <= uint.MaxValue;
+                var copied =
+                    byteCount != 0 &&
+                    byteCount <= 256u * 1024u * 1024u &&
+                    destinationAddress != 0 &&
+                    (immediateFill
+                        ? TryFillGuestMemory(ctx, (uint)sourceAddress, destinationAddress, byteCount)
+                        : sourceAddress != 0 &&
+                          TryCopyGuestMemory(ctx, sourceAddress, destinationAddress, byteCount));
+                copiedData = copied;
+                if (copied)
+                {
+                    MirrorDmaWriteToGuestImage(
+                        ctx,
+                        destinationAddress,
+                        byteCount,
+                        immediateFill ? (uint)sourceAddress : null);
+                }
+
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.dcb.dma_data dst=0x{destinationAddress:X16} " +
+                        $"src=0x{sourceAddress:X16} bytes={byteCount} " +
+                        $"fill={immediateFill} copied={copied}");
+                }
+            },
+            $"agc_dma_data dst=0x{destinationAddress:X16} bytes={byteCount}",
+            packetAddress,
+            destinationAddress,
+            byteCount,
+            deferLabelCompletion: true,
+            producerCompletionAction: () =>
+            {
+                if (copiedData)
+                {
+                    RecordProducedLabelsInRange(
+                        ctx,
+                        destinationAddress,
+                        byteCount);
+                }
+            });
+    }
+
+    private static bool PacketRequiresPendingAcquireFlush(
+        uint op,
+        uint register,
+        uint length) =>
+        op is ItDispatchDirect or ItDispatchIndirect ||
+        op is ItDrawIndirect or
+            ItDrawIndexIndirect or
+            ItDrawIndexIndirectMulti or
+            ItDrawIndex2 or
+            ItDrawIndexAuto or
+            ItDrawIndexMultiAuto or
+            ItDrawIndexOffset2 ||
+        op == ItDmaData ||
+        (op == ItNop && register == RDmaData && length >= 7) ||
+        (op == ItNop && register == RFlip && length >= 6) ||
+        (op == ItNop && register == RDrawIndexAuto && length >= 2) ||
+        (op == ItNop && register == RWaitFlipDone && length >= 3);
+
+    private static void SubmitOrderedGpuSideEffect(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        Action action,
+        string debugName,
+        ulong packetAddress,
+        ulong producerAddress = 0,
+        ulong producerLength = 0,
+        bool deferLabelCompletion = false,
+        Action? producerCompletionAction = null,
+        bool requiresGpuBufferReadback = true)
+    {
+        if (Interlocked.CompareExchange(
+                ref _v74063CrossQueueDefaultTraceOnce,
+                1,
+                0) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.63][CROSS_QUEUE_WRITE_DEFAULT] " +
+                $"enabled={(_crossQueueWatchedInlineWriteV7405618 ? 1 : 0)} " +
+                "scope=watched-cross-queue-write_data-only");
+        }
+
+        if (_releaseMemQueueCompletionOnlyV74085 &&
+            !requiresGpuBufferReadback &&
+            debugName.StartsWith("release_mem", StringComparison.Ordinal))
+        {
+            var releaseQueueCountV74085 = Interlocked.Increment(
+                ref _v74085ReleaseQueueOnlyTraceCount);
+            if (releaseQueueCountV74085 <= 256 ||
+                (releaseQueueCountV74085 & (releaseQueueCountV74085 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.85][RELEASE_QUEUE_ONLY] count={releaseQueueCountV74085} " +
+                    $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                    $"packet=0x{packetAddress:X16} name='{debugName}'");
+            }
+        }
+
+        var producer = RegisterLabelProducer(
+            ctx.Memory,
+            state,
+            packetAddress,
+            producerAddress,
+            producerLength,
+            debugName);
+
+        TraceLabelProvenanceRangeV734(
+            ctx.Memory,
+            producerAddress,
+            producerLength,
+            $"pm4_producer_registered queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+            $"packet=0x{packetAddress:X16} name={debugName}");
+        void CompleteAndWake()
+        {
+            // V61.13.26.3 produced-range completion.
+            // RegisterLabelProducer already declared this address span as the
+            // output of the ordered side effect. Once the effect has completed,
+            // sample watched labels in that span before producer completion so
+            // waiters can observe transient/final values instead of remaining
+            // producer=none-observed indefinitely.
+            if (producerAddress != 0 && producerLength != 0)
+            {
+                RecordProducedLabelsInRange(
+                    ctx,
+                    producerAddress,
+                    producerLength);
+            }
+            producerCompletionAction?.Invoke();
+            CompleteLabelProducer(producer);
+            lock (gpuState.WaitMonitorSignalGate)
+            {
+                gpuState.WaitMonitorSignalVersion++;
+                Monitor.Pulse(gpuState.WaitMonitorSignalGate);
+            }
+            // Upstream 0.0.3: do not wait for the 1..16 ms monitor poll to
+            // reacquire the AGC gate after every producer. A single coalesced
+            // worker drains resumable DCBs immediately without a thread-per-event herd.
+            if (!string.Equals(
+                    Environment.GetEnvironmentVariable("SHARPEMU_UPSTREAM003_DIRECT_DRAIN"),
+                    "0",
+                    StringComparison.Ordinal))
+            {
+                RequestResumableDcbDrain(ctx, gpuState);
+            }
+        }
+
+        void ApplyAndQueueCompletion()
+        {
+            action();
+            // No label producer â†’ nothing to wake; skip the follow-up enqueue
+            // that was doubling OrderedGuestAction traffic during load.
+            if (producer is null)
+            {
+                CompleteAndWake();
+                return;
+            }
+
+            // Release/write-data paths cannot enqueue Vulkan image mirrors, so
+            // complete the producer in the same ordered action. DMA can enqueue
+            // a mirror while applying; defer completion until after those
+            // follow-ups so waiters see the mirrored image.
+            if (!deferLabelCompletion)
+            {
+                CompleteAndWake();
+                return;
+            }
+
+            if (GuestGpu.Current.SubmitOrderedGuestAction(
+                    CompleteAndWake,
+                    $"{debugName} completion") == 0)
+            {
+                CompleteAndWake();
+            }
+        }
+
+        // SHARPEMU_V74_0_56_18_CROSS_QUEUE_WATCHED_INLINE_WRITE
+        // WRITE_DATA is an immediate command-processor memory packet; the PS5
+        // completion primitive is RELEASE_MEM/EOP. If another logical queue is
+        // already suspended on this exact label, executing this CPU-resident
+        // payload now avoids a host-fence/ordered-action round trip while still
+        // leaving every same-queue dependency on the conservative path.
+        var crossQueueWaiterCountV7405618 =
+            _crossQueueWatchedInlineWriteV7405618 &&
+            !requiresGpuBufferReadback &&
+            !deferLabelCompletion &&
+            producerAddress != 0 &&
+            producerLength != 0 &&
+            debugName.StartsWith(
+                "write_data ",
+                StringComparison.Ordinal)
+                ? GpuWaitRegistry.CountCrossQueueWaitersInRange(
+                    CanonicalMemory(ctx.Memory),
+                    producerAddress,
+                    producerLength,
+                    state.QueueName)
+                : 0;
+
+        if (crossQueueWaiterCountV7405618 > 0)
+        {
+            ApplyAndQueueCompletion();
+
+            var inlineCountV7405618 =
+                Interlocked.Increment(
+                    ref _v7405618CrossQueueWatchedInlineWriteCount);
+            if (inlineCountV7405618 <= 256 ||
+                (inlineCountV7405618 &
+                 (inlineCountV7405618 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.18][CROSS_QUEUE_WATCHED_INLINE_WRITE] " +
+                    $"count={inlineCountV7405618} " +
+                    $"queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} " +
+                    $"packet=0x{packetAddress:X16} " +
+                    $"addr=0x{producerAddress:X16} " +
+                    $"bytes={producerLength} " +
+                    $"cross_queue_waiters={crossQueueWaiterCountV7405618} " +
+                    $"name='{debugName}'");
+            }
+
+            return;
+        }
+
+        if (_kytyInlineWriteDataV74030 &&
+            !requiresGpuBufferReadback &&
+            !deferLabelCompletion &&
+            debugName.StartsWith("write_data ", StringComparison.Ordinal))
+        {
+            var watchedRanges = producerAddress != 0 && producerLength != 0
+                ? GpuWaitRegistry.SnapshotInRange(
+                    CanonicalMemory(ctx.Memory),
+                    producerAddress,
+                    producerLength).Count
+                : 0;
+            ApplyAndQueueCompletion();
+            var inlineCount = Interlocked.Increment(
+                ref _v74030InlineWriteDataTraceCount);
+            if (inlineCount <= 256 || (inlineCount & (inlineCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.30][KYTY_INLINE_WRITE_DATA] count={inlineCount} " +
+                    $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                    $"packet=0x{packetAddress:X16} addr=0x{producerAddress:X16} " +
+                    $"bytes={producerLength} watched_ranges={watchedRanges} " +
+                    $"name='{debugName}'");
+            }
+
+            // Current Kyty executes WRITE_DATA in the command processor itself.
+            // No second host action is queued, so WAIT_REG_MEM generation/wake
+            // observes the write at its PM4 position.
+            return;
+        }
+
+        var watchedWritePacketPositionV7405613 =
+            _watchedWritePacketPositionV7405613 &&
+            !requiresGpuBufferReadback &&
+            !deferLabelCompletion &&
+            producerAddress != 0 &&
+            producerLength != 0 &&
+            debugName.StartsWith("write_data ", StringComparison.Ordinal) &&
+            GpuWaitRegistry.SnapshotInRange(
+                CanonicalMemory(ctx.Memory),
+                producerAddress,
+                producerLength).Count != 0;
+
+        var packetPositionWriteV74025 =
+            !requiresGpuBufferReadback &&
+            (_writeDataPacketPositionV74025 ||
+             watchedWritePacketPositionV7405613);
+        // SHARPEMU_V74_0_26_WRITE_DATA_NO_GPU_READBACK
+        // V74.0.25 intended WRITE_DATA's CPU-resident immediate payload to run
+        // at its logical PM4 queue position after prior commands are flushed.
+        // SubmitOrderedGuestAction() defaults RequiresGpuToCpuVisibility=true,
+        // which reintroduced a fence/readback stall. Use the existing explicit
+        // visibility-direction overload for this opt-in packet-position path.
+        var orderedSequence = requiresGpuBufferReadback
+            ? GuestGpu.Current.SubmitOrderedGuestAction(
+                ApplyAndQueueCompletion,
+                debugName)
+            : packetPositionWriteV74025
+                ? GuestGpu.Current.SubmitOrderedGuestActionWithVisibility(
+                    ApplyAndQueueCompletion,
+                    debugName,
+                    requiresGpuToCpuVisibility: false,
+                    // SHARPEMU_V74_0_28_WATCHED_WRITE_DATA_PRIORITY
+                    // Metadata is carried even when watched_ranges=0 now.
+                    // The presenter checks the live registry only after this
+                    // WRITE_DATA reaches the head of its own logical queue.
+                    waitProducerMemory: CanonicalMemory(ctx.Memory),
+                    waitProducerAddress: producerAddress,
+                    waitProducerLength: producerLength)
+                : GuestGpu.Current.SubmitOrderedGuestActionAfterQueueCompletion(
+                    ApplyAndQueueCompletion,
+                    debugName,
+                    // SHARPEMU_V74_0_56_12_QUEUE_COMPLETION_PRODUCER_METADATA
+                    // Metadata only: the presenter still waits for all prior
+                    // work in this logical queue before executing the action.
+                    CanonicalMemory(ctx.Memory),
+                    producerAddress,
+                    producerLength);
+        if (watchedWritePacketPositionV7405613)
+        {
+            var selectiveCount = Interlocked.Increment(
+                ref _v7405613WatchedWritePacketPositionCount);
+            if (selectiveCount <= 128 ||
+                (selectiveCount & (selectiveCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.13][WATCHED_WRITE_PACKET_POSITION] count={selectiveCount} " +
+                    $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                    $"packet=0x{packetAddress:X16} addr=0x{producerAddress:X16} " +
+                    $"bytes={producerLength} sequence={orderedSequence} " +
+                    $"global_packet_position={(_writeDataPacketPositionV74025 ? 1 : 0)} " +
+                    $"name='{debugName}'");
+            }
+        }
+
+        if (packetPositionWriteV74025)
+        {
+            var packetPositionCount = Interlocked.Increment(
+                ref _v74025WriteDataPacketPositionTraceCount);
+            if (packetPositionCount <= 64 ||
+                (packetPositionCount & (packetPositionCount - 1)) == 0)
+            {
+                var watchedRanges = producerAddress != 0 && producerLength != 0
+                    ? GpuWaitRegistry.SnapshotInRange(
+                        CanonicalMemory(ctx.Memory),
+                        producerAddress,
+                        producerLength).Count
+                    : 0;
+                Console.Error.WriteLine(
+                    $"[V74.0.25][WRITE_DATA_PACKET_POSITION] count={packetPositionCount} " +
+                    $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                    $"addr=0x{producerAddress:X16} bytes={producerLength} " +
+                    $"watched_ranges={watchedRanges} sequence={orderedSequence} " +
+                    $"name='{debugName}'");
+            }
+        }
+        if (orderedSequence == 0)
+        {
+            // Headless/startup submissions have no Vulkan queue to order
+            // against, so retaining the previous immediate behavior is exact.
+            ApplyAndQueueCompletion();
+        }
+    }
+
+    // V74.0.71: the V70.1 runtime still recorded WAIT_REG_MEM delays of
+    // roughly 1-9.8 seconds even when the matching WRITE_DATA producer was
+    // already producer_state=completed. Host file reads were only ~0.01-0.03
+    // ms, so keep GPU ordering untouched and remove only the ThreadPool wake
+    // dependency from the producer->waiter drain path.
+    private static readonly bool _dedicatedWaitDrainV74071 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_DEDICATED_WAIT_DRAIN"),
+            "0",
+            StringComparison.Ordinal);
+
+    private static void RequestResumableDcbDrain(CpuContext ctx, SubmittedGpuState gpuState)
+    {
+        Volatile.Write(ref gpuState.PendingDrainContext, ctx);
+        Interlocked.Exchange(ref gpuState.DrainPending, 1);
+
+        if (_dedicatedWaitDrainV74071 &&
+            EnsureDedicatedResumableDcbDrainWorkerV74071(gpuState))
+        {
+            gpuState.DedicatedDrainSignal.Set();
+            return;
+        }
+
+        QueueLegacyResumableDcbDrainWorkerV74071(gpuState);
+    }
+
+    private static void QueueLegacyResumableDcbDrainWorkerV74071(
+        SubmittedGpuState gpuState)
+    {
+        if (Interlocked.CompareExchange(ref gpuState.DrainWorkerActive, 1, 0) == 0)
+        {
+            ThreadPool.UnsafeQueueUserWorkItem(
+                static state => RunResumableDcbDrainWorker(state),
+                gpuState,
+                preferLocal: false);
+        }
+    }
+
+    private static bool EnsureDedicatedResumableDcbDrainWorkerV74071(
+        SubmittedGpuState gpuState)
+    {
+        if (Volatile.Read(ref gpuState.DedicatedDrainWorkerStarted) != 0)
+        {
+            return true;
+        }
+
+        if (Interlocked.CompareExchange(
+                ref gpuState.DedicatedDrainWorkerStarted,
+                1,
+                0) != 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            var worker = new System.Threading.Thread(
+                RunDedicatedResumableDcbDrainWorkerV74071)
+            {
+                IsBackground = true,
+                Name = "SharpEmu-AGC-WaitDrain",
+            };
+
+            gpuState.DedicatedDrainThread = worker;
+            worker.Start(gpuState);
+
+            Console.Error.WriteLine(
+                "[V74.0.71][DEDICATED_WAIT_DRAIN] worker_started=1");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            gpuState.DedicatedDrainThread = null;
+            Volatile.Write(ref gpuState.DedicatedDrainWorkerStarted, 0);
+            Console.Error.WriteLine(
+                $"[V74.0.71][DEDICATED_WAIT_DRAIN] worker_start_failed " +
+                $"type={ex.GetType().Name}; falling back to ThreadPool");
+            return false;
+        }
+    }
+
+    private static void RunDedicatedResumableDcbDrainWorkerV74071(
+        object? state)
+    {
+        if (state is not SubmittedGpuState gpuState)
+        {
+            return;
+        }
+
+        while (true)
+        {
+            gpuState.DedicatedDrainSignal.WaitOne();
+
+            while (true)
+            {
+                Interlocked.Exchange(ref gpuState.DrainPending, 0);
+                var drainContext =
+                    Volatile.Read(ref gpuState.PendingDrainContext);
+
+                var resumed = 0;
+                var gateWaitMilliseconds = 0.0;
+
+                if (drainContext is not null)
+                {
+                    var gateWaitStart =
+                        System.Diagnostics.Stopwatch.GetTimestamp();
+
+                    lock (gpuState.Gate)
+                    {
+                        gateWaitMilliseconds =
+                            (System.Diagnostics.Stopwatch.GetTimestamp() -
+                             gateWaitStart) *
+                            1000.0 /
+                            System.Diagnostics.Stopwatch.Frequency;
+
+                        resumed = DrainResumableDcbs(
+                            drainContext,
+                            gpuState,
+                            tracePackets: _traceAgc);
+                    }
+
+                    var traceCount = Interlocked.Increment(
+                        ref gpuState.DedicatedDrainTraceCount);
+                    var slowGate = gateWaitMilliseconds >= 5.0;
+                    if (slowGate)
+                    {
+                        Interlocked.Increment(
+                            ref gpuState.DedicatedDrainSlowGateCount);
+                    }
+
+                    if (resumed > 0 ||
+                        slowGate ||
+                        traceCount <= 128 ||
+                        (traceCount & (traceCount - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.71][DEDICATED_WAIT_DRAIN] " +
+                            $"count={traceCount} resumed={resumed} " +
+                            $"gate_wait_ms={gateWaitMilliseconds:F3} " +
+                            $"pending={Volatile.Read(ref gpuState.DrainPending)} " +
+                            $"slow_gate={Volatile.Read(ref gpuState.DedicatedDrainSlowGateCount)}");
+                    }
+                }
+
+                // Producer completion can race with the drain above. If it
+                // marked another pass pending, consume it immediately on this
+                // same dedicated worker rather than scheduling a new host job.
+                if (Volatile.Read(ref gpuState.DrainPending) != 0)
+                {
+                    continue;
+                }
+
+                break;
+            }
+        }
+    }
+
+    // V74.0.72: V71 proved the dominant remaining producer->waiter latency is
+    // contention on SubmittedGpuState.Gate, not ThreadPool startup. This helper
+    // is deliberately narrower than V70's direct-drain experiment:
+    //
+    // - it runs only on a thread that ALREADY owns gpuState.Gate;
+    // - it is called only between fully parsed PM4 packets;
+    // - it never acquires Gate from the Vulkan presenter/completion thread;
+    // - it preserves/restores the outer DCB snapshot because a resumed queue
+    //   can recursively enter ParseSubmittedDcb;
+    // - GateOwnerDrainActive prevents recursive drain-on-drain.
+    //
+    // No guest label/value/fence is synthesized. The exact existing
+    // DrainResumableDcbs comparison/generation logic remains authoritative.
+    private static readonly bool _agcGateOwnerWaitDrainV74072 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_AGC_GATE_OWNER_WAIT_DRAIN"),
+            "0",
+            StringComparison.Ordinal);
+
+    private static void TryDrainPendingWaitersOnGateOwnerV74072(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState currentState,
+        ulong commandAddress,
+        uint packetOffset,
+        bool tracePackets)
+    {
+        if (!_agcGateOwnerWaitDrainV74072 ||
+            Volatile.Read(ref gpuState.DrainPending) == 0 ||
+            !System.Threading.Monitor.IsEntered(gpuState.Gate) ||
+            Interlocked.CompareExchange(
+                ref gpuState.GateOwnerDrainActiveV74072,
+                1,
+                0) != 0)
+        {
+            return;
+        }
+
+        var previousBuffer = _dcbWindowBuffer;
+        var previousStart = _dcbWindowStart;
+        var previousLength = _dcbWindowByteLength;
+        var resumed = 0;
+
+        try
+        {
+            // Consume the current producer-completion request. A completion
+            // racing with this drain can set DrainPending again; the next PM4
+            // packet boundary (or the V71 worker after Gate release) handles it.
+            Interlocked.Exchange(ref gpuState.DrainPending, 0);
+
+            // WAIT labels are data addresses, not PM4 bytes. Force waiter
+            // comparisons to read canonical guest memory while nested resumed
+            // parsers are free to install their own DCB snapshots.
+            _dcbWindowBuffer = null;
+            _dcbWindowStart = 0;
+            _dcbWindowByteLength = 0;
+
+            resumed = DrainResumableDcbs(
+                ctx,
+                gpuState,
+                tracePackets: tracePackets || _traceAgc);
+
+            if (resumed != 0)
+            {
+                Interlocked.Add(
+                    ref gpuState.GateOwnerDrainResumeCountV74072,
+                    resumed);
+            }
+
+            var traceCount = Interlocked.Increment(
+                ref gpuState.GateOwnerDrainTraceCountV74072);
+            if (resumed != 0 ||
+                traceCount <= 128 ||
+                (traceCount & (traceCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.72][GATE_OWNER_WAIT_DRAIN] " +
+                    $"count={traceCount} resumed={resumed} " +
+                    $"resumed_total={Volatile.Read(ref gpuState.GateOwnerDrainResumeCountV74072)} " +
+                    $"queue={currentState.QueueName} " +
+                    $"submission={currentState.ActiveSubmissionId} " +
+                    $"cmd=0x{commandAddress:X16} dw={packetOffset} " +
+                    $"pending={Volatile.Read(ref gpuState.DrainPending)}");
+            }
+        }
+        finally
+        {
+            _dcbWindowBuffer = previousBuffer;
+            _dcbWindowStart = previousStart;
+            _dcbWindowByteLength = previousLength;
+            Volatile.Write(ref gpuState.GateOwnerDrainActiveV74072, 0);
+        }
+    }
+
+    private static void RunResumableDcbDrainWorker(SubmittedGpuState gpuState)
+    {
+        while (true)
+        {
+            Interlocked.Exchange(ref gpuState.DrainPending, 0);
+            if (Volatile.Read(ref gpuState.PendingDrainContext) is { } drainContext)
+            {
+                lock (gpuState.Gate)
+                {
+                    DrainResumableDcbs(drainContext, gpuState, tracePackets: _traceAgc);
+                }
+            }
+
+            if (Volatile.Read(ref gpuState.DrainPending) != 0)
+            {
+                continue;
+            }
+
+            Volatile.Write(ref gpuState.DrainWorkerActive, 0);
+            if (Volatile.Read(ref gpuState.DrainPending) == 0 ||
+                Interlocked.CompareExchange(ref gpuState.DrainWorkerActive, 1, 0) != 0)
+            {
+                return;
+            }
+        }
+    }
+    private static void PreindexSubmittedProducerIntents(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        uint dwordCount,
+        ulong submissionId)
+    {
+        var visited = new HashSet<(ulong Address, uint Dwords)>();
+        PreindexSubmittedProducerIntentsCore(
+            ctx,
+            state,
+            commandAddress,
+            dwordCount,
+            submissionId,
+            visited,
+            depth: 0);
+    }
+
+    // V74.0.62: use the same one-shot guest-memory snapshot strategy that
+    // upstream 0.0.3 already uses in ParseSubmittedDcb. Producer-intent lookahead
+    // remains enabled, but its PM4 reads now hit a thread-local byte window
+    // instead of taking the guest-memory reader path once per dword.
+    private static readonly bool _tracePm4PreindexBulkV74062 =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_TRACE_PM4_PREINDEX_BULK"),
+            "1",
+            StringComparison.Ordinal);
+    private static long _pm4PreindexBulkScanCountV74062;
+    private static long _pm4PreindexBulkDwordsV74062;
+    private static long _pm4PreindexBulkFallbackCountV74062;
+
+    private static void PreindexSubmittedProducerIntentsCore(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        uint dwordCount,
+        ulong submissionId,
+        HashSet<(ulong Address, uint Dwords)> visited,
+        int depth)
+    {
+        if (commandAddress == 0 ||
+            dwordCount == 0 ||
+            dwordCount > 1_000_000 ||
+            depth > MaxSubmittedChainDepth ||
+            !visited.Add((commandAddress, dwordCount)))
+        {
+            return;
+        }
+
+        var byteCount = checked((int)(dwordCount * sizeof(uint)));
+        var rented = GuestDataPool.Shared.Rent(byteCount);
+
+        // Preindex can recurse through INDIRECT_BUFFER. Preserve the parent
+        // thread-local DCB window while a child chain gets its own snapshot.
+        var previousBuffer = _dcbWindowBuffer;
+        var previousStart = _dcbWindowStart;
+        var previousLength = _dcbWindowByteLength;
+        var bulkLoaded = false;
+
+        try
+        {
+            _dcbWindowBuffer = null;
+            _dcbWindowStart = 0;
+            _dcbWindowByteLength = 0;
+
+            if (ctx.Memory.TryRead(commandAddress, rented.AsSpan(0, byteCount)))
+            {
+                _dcbWindowBuffer = rented;
+                _dcbWindowStart = commandAddress;
+                _dcbWindowByteLength = byteCount;
+                bulkLoaded = true;
+            }
+            else
+            {
+                Interlocked.Increment(ref _pm4PreindexBulkFallbackCountV74062);
+            }
+
+            var scanCount =
+                Interlocked.Increment(ref _pm4PreindexBulkScanCountV74062);
+            var totalDwords =
+                Interlocked.Add(ref _pm4PreindexBulkDwordsV74062, dwordCount);
+
+            if (_tracePm4PreindexBulkV74062 &&
+                (scanCount <= 128 || (scanCount & (scanCount - 1)) == 0))
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.62][PM4_PREINDEX_BULK] count={scanCount} " +
+                    $"addr=0x{commandAddress:X16} dwords={dwordCount} " +
+                    $"total_dwords={totalDwords} bulk={(bulkLoaded ? 1 : 0)} " +
+                    $"depth={depth} queue={state.QueueName} " +
+                    $"submission={submissionId}");
+            }
+
+            PreindexSubmittedProducerIntentsCoreWindowedV74062(
+                ctx,
+                state,
+                commandAddress,
+                dwordCount,
+                submissionId,
+                visited,
+                depth);
+        }
+        finally
+        {
+            _dcbWindowBuffer = previousBuffer;
+            _dcbWindowStart = previousStart;
+            _dcbWindowByteLength = previousLength;
+            GuestDataPool.Shared.Return(rented);
+        }
+    }
+
+    private static void PreindexSubmittedProducerIntentsCoreWindowedV74062(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        uint dwordCount,
+        ulong submissionId,
+        HashSet<(ulong Address, uint Dwords)> visited,
+        int depth)
+    {
+        var offset = 0u;
+        while (offset < dwordCount)
+        {
+            var packetAddress = commandAddress + ((ulong)offset * sizeof(uint));
+            if (!TryReadUInt32(ctx, packetAddress, out var header))
+            {
+                return;
+            }
+
+            var packetType = header >> 30;
+            if (packetType == 2)
+            {
+                offset++;
+                continue;
+            }
+
+            if (packetType != 3)
+            {
+                return;
+            }
+
+            var length = Pm4Length(header);
+            if (length == 0 || offset + length > dwordCount)
+            {
+                return;
+            }
+
+            var op = (header >> 8) & 0xFFu;
+            var register = (header >> 2) & 0x3Fu;
+
+            if (TryDescribeSubmittedProducer(
+                    ctx,
+                    packetAddress,
+                    length,
+                    op,
+                    register,
+                    out var producerAddress,
+                    out var producerLength,
+                    out var producerName))
+            {
+                RegisterPlannedLabelProducer(
+                    ctx.Memory,
+                    state.QueueName,
+                    submissionId,
+                    packetAddress,
+                    producerAddress,
+                    producerLength,
+                    producerName);
+            }
+
+            if (op == ItIndirectBuffer &&
+                length >= 4 &&
+                TryReadUInt32(ctx, packetAddress + 4, out var chainLow) &&
+                TryReadUInt32(ctx, packetAddress + 8, out var chainHigh) &&
+                TryReadUInt32(ctx, packetAddress + 12, out var chainDwordsRaw))
+            {
+                var chainAddress = ((ulong)(chainHigh & 0xFFFFu) << 32) | chainLow;
+                var chainDwords = chainDwordsRaw & 0xFFFFFu;
+                if (chainAddress != 0 && chainDwords != 0)
+                {
+                    PreindexSubmittedProducerIntentsCore(
+                        ctx,
+                        state,
+                        chainAddress,
+                        chainDwords,
+                        submissionId,
+                        visited,
+                        depth + 1);
+                }
+            }
+
+            offset += length;
+        }
+    }
+
+    private static bool TryDescribeSubmittedProducer(
+        CpuContext ctx,
+        ulong packetAddress,
+        uint packetLength,
+        uint op,
+        uint register,
+        out ulong address,
+        out ulong length,
+        out string debugName)
+    {
+        address = 0;
+        length = 0;
+        debugName = string.Empty;
+
+        if ((op == ItWriteData ||
+             (op == ItNop && register == RWriteData)) &&
+            packetLength >= 4 &&
+            TryReadUInt32(ctx, packetAddress + 4, out var writeControl) &&
+            TryReadUInt64(ctx, packetAddress + 8, out var writeAddress))
+        {
+            var decoded = op == ItWriteData
+                ? DecodeStandardWriteDataControl(writeControl)
+                : DecodeAgcWriteDataControl(writeControl);
+            var count = packetLength - 4;
+            if (decoded.Destination is 1 or 2 or 4 or 5 &&
+                writeAddress != 0 &&
+                count != 0)
+            {
+                address = writeAddress;
+                length = decoded.IncrementAddress
+                    ? (ulong)count * sizeof(uint)
+                    : sizeof(uint);
+                debugName = "planned_write_data";
+                return true;
+            }
+        }
+
+        if ((op == ItReleaseMem ||
+             (op == ItNop && register == RReleaseMem)) &&
+            packetLength >= 7 &&
+            TryReadUInt32(ctx, packetAddress + 8, out var releaseControl) &&
+            TryReadUInt32(ctx, packetAddress + 12, out var releaseLo) &&
+            TryReadUInt32(ctx, packetAddress + 16, out var releaseHi))
+        {
+            uint dataSelection;
+            var writesMemory = true;
+            if (op == ItReleaseMem)
+            {
+                var decoded = DecodeStandardReleaseMemControl(releaseControl);
+                dataSelection = decoded.DataSelection;
+                writesMemory = decoded.Destination is 0 or 1;
+            }
+            else
+            {
+                dataSelection = (releaseControl >> 16) & 0xFFu;
+            }
+
+            var width = dataSelection switch
+            {
+                1 => (ulong)sizeof(uint),
+                2 or 3 or 4 => (ulong)sizeof(ulong),
+                _ => 0UL,
+            };
+            var releaseAddress = ((ulong)releaseHi << 32) | releaseLo;
+            if (writesMemory && releaseAddress != 0 && width != 0)
+            {
+                address = releaseAddress;
+                length = width;
+                debugName = "planned_release_mem";
+                return true;
+            }
+        }
+
+        if (op == ItDmaData &&
+            packetLength >= 7 &&
+            TryReadUInt32(ctx, packetAddress + 4, out var dmaControl) &&
+            TryReadUInt32(ctx, packetAddress + 16, out var dmaDstLo) &&
+            TryReadUInt32(ctx, packetAddress + 20, out var dmaDstHi) &&
+            TryReadUInt32(ctx, packetAddress + 24, out var dmaCommand))
+        {
+            var byteCount = dmaCommand & 0x1F_FFFFu;
+            var destinationSelect = (dmaControl >> 20) & 0x3u;
+            var destinationSwap = (dmaCommand >> 24) & 0x3u;
+            var destinationAddressSpace = (dmaCommand >> 27) & 0x1u;
+            if (byteCount != 0 &&
+                destinationSwap == 0 &&
+                destinationSelect is 0 or 3 &&
+                (destinationSelect == 3 || destinationAddressSpace == 0))
+            {
+                address = dmaDstLo | ((ulong)dmaDstHi << 32);
+                length = byteCount;
+                debugName = "planned_dma_data";
+                return address != 0;
+            }
+        }
+
+        if (op == ItNop &&
+            register == RDmaData &&
+            packetLength >= 7)
+        {
+            var compact = packetLength == 7;
+            var byteCountOffset = compact ? 20UL : 12UL;
+            var destinationOffset = compact ? 4UL : 16UL;
+            if (TryReadUInt32(ctx, packetAddress + byteCountOffset, out var byteCount) &&
+                TryReadUInt64(ctx, packetAddress + destinationOffset, out var dmaAddress) &&
+                byteCount != 0 &&
+                dmaAddress != 0)
+            {
+                address = dmaAddress;
+                length = byteCount;
+                debugName = "planned_agc_dma_data";
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // V74.0.29.1: only a live explicit memory producer qualifies. Completed
+    // history is deliberately excluded because it can belong to an older label
+    // generation. Same-queue producers must be earlier than the wait; future
+    // packets cannot satisfy a WAIT_REG_MEM that precedes them.
+    private static bool HasPendingExplicitLabelProducerV740291(
+        object memory,
+        in GpuWaitRegistry.WaitingDcb waiter)
+    {
+        memory = CanonicalMemory(memory);
+        lock (_labelProducerGate)
+        {
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var producer = _labelProducers[index];
+                if (producer.Completed ||
+                    !ReferenceEquals(producer.Memory, memory) ||
+                    producer.Address == 0 ||
+                    producer.Length == 0 ||
+                    waiter.WaitAddress < producer.Address ||
+                    waiter.WaitAddress - producer.Address >= producer.Length)
+                {
+                    continue;
+                }
+
+                var explicitMemoryProducer =
+                    producer.DebugName.Contains("write_data", StringComparison.Ordinal) ||
+                    producer.DebugName.Contains("release_mem", StringComparison.Ordinal) ||
+                    producer.DebugName.Contains("dma_data", StringComparison.Ordinal);
+                if (!explicitMemoryProducer)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(producer.QueueName, waiter.QueueName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                if (producer.SubmissionId < waiter.SubmissionId)
+                {
+                    return true;
+                }
+
+                if (producer.SubmissionId == waiter.SubmissionId &&
+                    producer.PacketAddress != 0 &&
+                    producer.PacketAddress < waiter.ResumeAddress)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // V61.24.5 PRODUCER_AWARE_VISIBILITY
+    // Return true for any producer intent/operation whose destination range
+    // covers the watched label. This includes Planned, queued and Completed
+    // LabelProducerTrace entries. Completion history is checked separately
+    // through GpuWaitRegistry.TryGetLastProduced().
+    private static bool HasObservedLabelProducer(
+        object memory,
+        ulong address)
+    {
+        memory = CanonicalMemory(memory);
+
+        lock (_labelProducerGate)
+        {
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var producer = _labelProducers[index];
+                if (!ReferenceEquals(producer.Memory, memory) ||
+                    producer.Address == 0 ||
+                    producer.Length == 0 ||
+                    address < producer.Address)
+                {
+                    continue;
+                }
+
+                if (address - producer.Address < producer.Length)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+    private static void RegisterPlannedLabelProducer(
+        object memory,
+        string queueName,
+        ulong submissionId,
+        ulong packetAddress,
+        ulong address,
+        ulong length,
+        string debugName)
+    {
+        if (address == 0 || length == 0)
+        {
+            return;
+        }
+
+        memory = CanonicalMemory(memory);
+        lock (_labelProducerGate)
+        {
+            foreach (var existing in _labelProducers)
+            {
+                if (ReferenceEquals(existing.Memory, memory) &&
+                    existing.PacketAddress == packetAddress &&
+                    existing.QueueName == queueName &&
+                    existing.Address == address &&
+                    existing.Length == length &&
+                    !existing.Completed)
+                {
+                    return;
+                }
+            }
+
+            _labelProducers.Add(new LabelProducerTrace
+            {
+                Sequence = Interlocked.Increment(ref _labelProducerSequence),
+                Memory = memory,
+                Address = address,
+                Length = length,
+                PacketAddress = packetAddress,
+                SubmissionId = submissionId,
+                QueueName = queueName,
+                DebugName = debugName,
+                Planned = true,
+                CreatedTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+            });
+        }
+    }
+
+    private static LabelProducerTrace? RegisterLabelProducer(
+        object memory,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        ulong address,
+        ulong length,
+        string debugName)
+    {
+        if (address == 0 || length == 0)
+        {
+            return null;
+        }
+
+        memory = CanonicalMemory(memory);
+        LabelProducerTrace? producer = null;
+        lock (_labelProducerGate)
+        {
+            // Promote an intent registered at submission time instead of
+            // creating a duplicate producer record. Queue + packet address are
+            // stable identifiers within the submitted command stream.
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var candidate = _labelProducers[index];
+                if (!candidate.Planned ||
+                    candidate.Completed ||
+                    !ReferenceEquals(candidate.Memory, memory) ||
+                    candidate.PacketAddress != packetAddress ||
+                    candidate.QueueName != state.QueueName ||
+                    candidate.Address != address ||
+                    candidate.Length != length)
+                {
+                    continue;
+                }
+
+                candidate.Planned = false;
+                candidate.SubmissionId = state.ActiveSubmissionId;
+                candidate.DebugName = debugName;
+                candidate.ActivatedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                producer = candidate;
+                break;
+            }
+
+            producer ??= new LabelProducerTrace
+            {
+                Sequence = Interlocked.Increment(ref _labelProducerSequence),
+                Memory = memory,
+                Address = address,
+                Length = length,
+                PacketAddress = packetAddress,
+                SubmissionId = state.ActiveSubmissionId,
+                QueueName = state.QueueName,
+                DebugName = debugName,
+                CreatedTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+                ActivatedTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+            };
+
+            if (_labelProducers.Count >= _labelProducerCompactionBound)
+            {
+                // Active producer records are synchronization state, not a
+                // diagnostic cache. Removing one can hide an earlier
+                // same-submission label write and make a valid in-stream fence
+                // suspend forever. Compact only completed history; if all
+                // records are active, correctness takes precedence over the
+                // soft diagnostic bound.
+                var removed = CompactCompletedEntries(
+                    _labelProducers,
+                    static candidate => candidate.Completed,
+                    targetCount: LabelProducerSoftBound * 3 / 4);
+                _labelProducerCompactionBound = removed == 0
+                    ? _labelProducers.Count * 2
+                    : LabelProducerSoftBound;
+            }
+
+            if (!_labelProducers.Contains(producer))
+            {
+                _labelProducers.Add(producer);
+            }
+        }
+
+        if (_traceAgc)
+        {
+            foreach (var waiting in GpuWaitRegistry.SnapshotInRange(memory, address, length))
+            {
+                TraceAgc(
+                    $"agc.wait_producer_scheduled label=0x{waiting.Address:X16} " +
+                    $"waiters={waiting.Count} producer_seq={producer.Sequence} " +
+                    $"queue={producer.QueueName} submission={producer.SubmissionId} " +
+                    $"packet=0x{packetAddress:X16} action='{debugName}'");
+            }
+        }
+
+        return producer;
+    }
+
+    internal static int CompactCompletedEntries<T>(
+        List<T> entries,
+        Func<T, bool> isCompleted,
+        int targetCount)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(isCompleted);
+        targetCount = Math.Max(0, targetCount);
+
+        // Single order-preserving pass. Removing one-by-one would shift the
+        // tail on every eviction, which is quadratic on a list this size and
+        // runs while the label gate is held.
+        var removable = entries.Count - targetCount;
+        var removed = 0;
+        var write = 0;
+        for (var read = 0; read < entries.Count; read++)
+        {
+            if (removed < removable && isCompleted(entries[read]))
+            {
+                removed++;
+                continue;
+            }
+
+            entries[write++] = entries[read];
+        }
+
+        entries.RemoveRange(write, entries.Count - write);
+        return removed;
+    }
+
+    private static void CompleteLabelProducer(LabelProducerTrace? producer)
+    {
+        if (producer is null)
+        {
+            return;
+        }
+
+        lock (_labelProducerGate)
+        {
+            producer.Completed = true;
+            producer.CompletedTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        if (_traceAgc)
+        {
+            foreach (var waiting in GpuWaitRegistry.SnapshotInRange(
+                         producer.Memory,
+                         producer.Address,
+                         producer.Length))
+            {
+                TraceAgc(
+                    $"agc.wait_producer_completed label=0x{waiting.Address:X16} " +
+                    $"waiters={waiting.Count} producer_seq={producer.Sequence} " +
+                    $"queue={producer.QueueName} submission={producer.SubmissionId} " +
+                    $"action='{producer.DebugName}'");
+            }
+        }
+    }
+
+// V74.0.27: identify the real producer behind only the pathological waits.
+    // This deliberately reuses the existing provenance table rather than
+    // enabling SHARPEMU_LOG_AGC/SHARPEMU_LOG_AGC_SHADER hot-path tracing.
+    private static void TraceSlowWaitProducerV74027(
+        CpuContext ctx,
+        in GpuWaitRegistry.WaitingDcb waiter,
+        double waitedMilliseconds)
+    {
+        if (waitedMilliseconds < 1_000.0)
+        {
+            return;
+        }
+
+        var memory = CanonicalMemory(ctx.Memory);
+        var producerFound = false;
+        long producerSequence = 0;
+        ulong producerPacketAddress = 0;
+        ulong producerSubmissionId = 0;
+        ulong producerAddress = 0;
+        ulong producerLength = 0;
+        var producerQueue = "none";
+        var producerName = "none";
+        var producerState = "none";
+        long producerCompletedTicks = 0;
+
+        lock (_labelProducerGate)
+        {
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var candidate = _labelProducers[index];
+                if (candidate.Completed &&
+                    candidate.CompletedTicks != 0 &&
+                    waiter.RegisteredTicks != 0 &&
+                    candidate.CompletedTicks < waiter.RegisteredTicks)
+                {
+                    // Recycled-label history from before this logical wait is
+                    // not this waiter's producer generation.
+                    continue;
+                }
+
+                if (!ReferenceEquals(candidate.Memory, memory) ||
+                    !RangesOverlap(
+                        candidate.Address,
+                        candidate.Length,
+                        waiter.WaitAddress,
+                        waiter.Is64Bit ? (ulong)sizeof(ulong) : sizeof(uint)))
+                {
+                    continue;
+                }
+
+                producerFound = true;
+                producerSequence = candidate.Sequence;
+                producerPacketAddress = candidate.PacketAddress;
+                producerSubmissionId = candidate.SubmissionId;
+                producerAddress = candidate.Address;
+                producerLength = candidate.Length;
+                producerQueue = candidate.QueueName;
+                producerName = candidate.DebugName;
+                producerCompletedTicks = candidate.CompletedTicks;
+                producerState = candidate.Completed
+                    ? "completed"
+                    : candidate.Planned
+                        ? "planned"
+                        : "queued";
+                break;
+            }
+        }
+
+        var traceCount = Interlocked.Increment(
+            ref _v74027SlowWaitProducerTraceCount);
+        var waitKind = waiter.RetryDeadlineTicks != 0
+            ? "indirect-dims-retry"
+            : "wait-reg-mem";
+        Console.Error.WriteLine(
+            $"[V74.0.27][SLOW_WAIT_PRODUCER] count={traceCount} " +
+            $"wait_kind={waitKind} " +
+            $"label=0x{waiter.WaitAddress:X16} waited_ms={waitedMilliseconds:F3} " +
+            $"waiter_queue={waiter.QueueName} waiter_submission={waiter.SubmissionId} " +
+            $"producer_found={producerFound} producer_state={producerState} " +
+            $"producer_seq={producerSequence} producer_queue={producerQueue} " +
+            $"producer_submission={producerSubmissionId} " +
+            $"producer_packet=0x{producerPacketAddress:X16} " +
+            $"producer_range=0x{producerAddress:X16}+0x{producerLength:X} " +
+            $"producer_completed_after_wait={(producerCompletedTicks == 0 || waiter.RegisteredTicks == 0 ? -1 : producerCompletedTicks >= waiter.RegisteredTicks ? 1 : 0)} " +
+            $"renderer_work_sequence={GuestGpu.Current.CurrentGuestWorkSequenceForDiagnostics} " +
+            $"action='{producerName}'");
+    }
+
+    // V61.17.1: late cross-queue producers are valid; never force a WAIT_REG_MEM label.
+    private static void TraceWaitProducerState(
+        object memory,
+        in GpuWaitRegistry.WaitingDcb waiter,
+        ulong commandAddress,
+        ulong packetAddress,
+        bool stale,
+        ulong? currentValue = null)
+    {
+        memory = CanonicalMemory(memory);
+        LabelProducerTrace? producer = null;
+        lock (_labelProducerGate)
+        {
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var candidate = _labelProducers[index];
+                if (!ReferenceEquals(candidate.Memory, memory) ||
+                    !RangesOverlap(
+                        candidate.Address,
+                        candidate.Length,
+                        waiter.WaitAddress,
+                        waiter.Is64Bit ? (ulong)sizeof(ulong) : sizeof(uint)))
+                {
+                    continue;
+                }
+
+                producer = candidate;
+                break;
+            }
+
+            if (_tracedProducerlessWaits.Count >= 4096)
+            {
+                _tracedProducerlessWaits.Clear();
+            }
+
+            if (!stale)
+            {
+                // Count before the deduplication below: the warning fires once
+                // per label, so on its own it cannot say how often a queue
+                // actually suspends.
+                GpuWaitProfile.RecordSuspend(producer is not null);
+            }
+
+            if (!stale && producer is null &&
+                !_tracedProducerlessWaits.Add(
+                    (memory, waiter.WaitAddress)))
+            {
+                return;
+            }
+        }
+
+        // Producer-backed waits are trace-only. Keep the producer lookup above
+        // because producerless waits are always warned, but do not build the
+        // detailed condition strings when AGC tracing is disabled.
+        if (producer is not null && !_traceAgc)
+        {
+            return;
+        }
+
+        var prefix = stale ? "agc.wait_stale" : "agc.wait_suspended";
+        var current = currentValue.HasValue
+            ? $"0x{currentValue.Value:X16}"
+            : "unreadable";
+        var condition =
+            $"value={current} mask=0x{waiter.Mask:X16} " +
+            $"ref=0x{waiter.ReferenceValue:X16} cmp={waiter.CompareFunction} " +
+            $"control=0x{waiter.ControlValue:X8} bits={(waiter.Is64Bit ? 64 : 32)} " +
+            $"form={(waiter.IsStandard ? "standard" : "agc-nop")}";
+        if (producer is null)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][WARN] {prefix} label=0x{waiter.WaitAddress:X16} " +
+                $"queue={waiter.QueueName} submission={waiter.SubmissionId} " +
+                $"command=0x{commandAddress:X16} packet=0x{packetAddress:X16} " +
+                condition + " " +
+                "producer=none-observed; remaining-suspended");
+            return;
+        }
+
+        TraceAgc(
+            $"{prefix} label=0x{waiter.WaitAddress:X16} " +
+            $"queue={waiter.QueueName} submission={waiter.SubmissionId} " +
+            condition + " " +
+            $"producer_seq={producer.Sequence} producer_state=" +
+            $"{(producer.Completed ? "completed" : producer.Planned ? "planned" : "queued")} " +
+            $"producer_queue={producer.QueueName} " +
+            $"producer_submission={producer.SubmissionId} " +
+            $"producer_packet=0x{producer.PacketAddress:X16} " +
+            $"action='{producer.DebugName}'");
+    }
+
+    private static void ApplySubmittedAcquireMem(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        bool tracePacket)
+    {
+        if (!TryDecodeSubmittedAcquireMem(ctx, packetAddress, out var acquire))
+        {
+            TraceAgc(
+                $"agc.acquire_mem_decode_failed queue={state.QueueName} " +
+                $"submission={state.ActiveSubmissionId} packet=0x{packetAddress:X16}");
+            return;
+        }
+
+        // The bulk PM4 read is itself a parser-side cache. Do not retain it
+        // across a guest cache-invalidation point.
+        _dcbWindowBuffer = null;
+        _dcbWindowByteLength = 0;
+
+        if (!acquire.InvalidatesGuestResources)
+        {
+            if (tracePacket)
+            {
+                TraceAgc(
+                    $"agc.acquire_mem_skip_no_invalidate queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} packet=0x{packetAddress:X16} " +
+                    $"gcr=0x{acquire.GcrControl:X8}");
+            }
+
+            return;
+        }
+
+        var size = acquire.CoversAllGuestMemory ? ulong.MaxValue : acquire.SizeBytes;
+        NotePendingAcquireInvalidation(state, acquire.BaseAddress, size);
+
+        if (tracePacket)
+        {
+            TraceAgc(
+                $"agc.acquire_mem_coalesce queue={state.QueueName} " +
+                $"submission={state.ActiveSubmissionId} packet=0x{packetAddress:X16} " +
+                $"engine={acquire.Engine} cbdb=0x{acquire.CbDbControl:X8} " +
+                $"base=0x{acquire.BaseAddress:X16} size=0x{acquire.SizeBytes:X16} " +
+                $"scope={(acquire.CoversAllGuestMemory ? "all" : "range")} " +
+                $"poll={acquire.PollInterval} gcr=0x{acquire.GcrControl:X8} " +
+                $"pending_base=0x{state.PendingAcquireBase:X16} " +
+                $"pending_size=0x{state.PendingAcquireSize:X16}");
+        }
+    }
+
+    private static void NotePendingAcquireInvalidation(
+        SubmittedDcbState state,
+        ulong baseAddress,
+        ulong sizeBytes)
+    {
+        if (!state.PendingAcquireInvalidation)
+        {
+            state.PendingAcquireInvalidation = true;
+            state.PendingAcquireBase = baseAddress;
+            state.PendingAcquireSize = sizeBytes;
+            return;
+        }
+
+        if (state.PendingAcquireSize == ulong.MaxValue || sizeBytes == ulong.MaxValue)
+        {
+            state.PendingAcquireBase = 0;
+            state.PendingAcquireSize = ulong.MaxValue;
+            return;
+        }
+
+        var existingEnd = state.PendingAcquireBase > ulong.MaxValue - state.PendingAcquireSize
+            ? ulong.MaxValue
+            : state.PendingAcquireBase + state.PendingAcquireSize;
+        var newEnd = baseAddress > ulong.MaxValue - sizeBytes
+            ? ulong.MaxValue
+            : baseAddress + sizeBytes;
+        var mergedBase = Math.Min(state.PendingAcquireBase, baseAddress);
+        var mergedEnd = Math.Max(existingEnd, newEnd);
+        state.PendingAcquireBase = mergedBase;
+        state.PendingAcquireSize = mergedEnd == ulong.MaxValue
+            ? ulong.MaxValue
+            : mergedEnd - mergedBase;
+    }
+
+    private static void FlushPendingAcquireInvalidation(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        bool tracePacket)
+    {
+        if (!state.PendingAcquireInvalidation)
+        {
+            return;
+        }
+
+        var baseAddress = state.PendingAcquireBase;
+        var sizeBytes = state.PendingAcquireSize;
+        state.PendingAcquireInvalidation = false;
+        state.PendingAcquireBase = 0;
+        state.PendingAcquireSize = 0;
+
+        var queueName = state.QueueName;
+        var submissionId = state.ActiveSubmissionId;
+        var debugName =
+            $"acquire_mem_flush base=0x{baseAddress:X16} size=0x{sizeBytes:X16}";
+        void ApplyAcquire()
+        {
+            SyncCpuWrittenGuestImages(ctx, baseAddress, sizeBytes);
+            if (tracePacket)
+            {
+                TraceAgc(
+                    $"agc.acquire_mem_applied queue={queueName} " +
+                    $"submission={submissionId} " +
+                    $"work_sequence={GuestGpu.Current.CurrentGuestWorkSequenceForDiagnostics} " +
+                    $"base=0x{baseAddress:X16} size=0x{sizeBytes:X16}");
+            }
+        }
+
+        // V28.0.3: ACQUIRE_MEM is CPU-to-GPU visibility.
+        // Preserve queue order, but do not force unrelated GPU->CPU publication.
+        var sequence = GuestGpu.Current.SubmitOrderedGuestActionWithVisibility(
+            ApplyAcquire,
+            debugName,
+            requiresGpuToCpuVisibility: false);
+        if (sequence == 0)
+        {
+            ApplyAcquire();
+        }
+    }
+
+    private static bool TryDecodeSubmittedAcquireMem(
+        CpuContext ctx,
+        ulong packetAddress,
+        out SubmittedAcquireMem acquire)
+    {
+        if (!TryReadUInt32(ctx, packetAddress + 4, out var coherControl) ||
+            !TryReadUInt32(ctx, packetAddress + 8, out var sizeLow) ||
+            !TryReadUInt32(ctx, packetAddress + 12, out var sizeHigh) ||
+            !TryReadUInt32(ctx, packetAddress + 16, out var baseLow) ||
+            !TryReadUInt32(ctx, packetAddress + 20, out var baseHigh) ||
+            !TryReadUInt32(ctx, packetAddress + 24, out var pollInterval) ||
+            !TryReadUInt32(ctx, packetAddress + 28, out var gcrControl))
+        {
+            acquire = default;
+            return false;
+        }
+
+        acquire = DecodeSubmittedAcquireMem(
+            coherControl,
+            sizeLow,
+            sizeHigh,
+            baseLow,
+            baseHigh,
+            pollInterval,
+            gcrControl);
+        return true;
+    }
+
+    private static SubmittedAcquireMem DecodeSubmittedAcquireMem(
+        uint coherControl,
+        uint sizeLow,
+        uint sizeHigh,
+        uint baseLow,
+        uint baseHigh,
+        uint pollInterval,
+        uint gcrControl)
+    {
+        // GFX10 ACQUIRE_MEM expresses COHER_SIZE and COHER_BASE in 256-byte
+        // units. SIZE_HI is 8 bits and BASE_HI is 24 bits in the packet.
+        var sizeUnits = sizeLow | ((ulong)(sizeHigh & 0xFFu) << 32);
+        var baseUnits = baseLow | ((ulong)(baseHigh & 0x00FF_FFFFu) << 32);
+        return new SubmittedAcquireMem(
+            Engine: coherControl >> 31,
+            CbDbControl: coherControl & 0x7FFF_FFFFu,
+            BaseAddress: baseUnits << 8,
+            SizeBytes: sizeUnits << 8,
+            PollInterval: pollInterval & 0xFFFFu,
+            GcrControl: gcrControl & 0x7FFFFu);
+    }
+
+    private static void ResetSubmittedParserState(SubmittedDcbState state)
+    {
+        // Queue ownership, pending submissions and suspension bookkeeping are
+        // deliberately retained. Work emitted before this packet already owns
+        // immutable snapshots; clearing these fields affects only commands
+        // translated after RESET at this precise packet position.
+        state.CxRegisters.Clear();
+        state.ShRegisters.Clear();
+        state.UcRegisters.Clear();
+        state.PresenterTexture = null;
+        state.GuestDrawKind = GuestDrawKind.None;
+        state.TranslatedDraw = null;
+        state.RenderTargetWriters.Clear();
+        state.IndirectArgsAddress = 0;
+        state.SawIndexedDraw = false;
+        state.IndexBufferAddress = 0;
+        state.IndexBufferCount = 0;
+        state.IndexSize = 0;
+        state.InstanceCount = 1;
+        state.DrawIndexOffset = 0;
+    }
+
+    private static void ApplySubmittedPredication(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        uint packetLength,
+        bool tracePacket)
+    {
+        if (packetLength < 3 ||
+            !TryReadUInt32(ctx, packetAddress + 4, out var first) ||
+            !TryReadUInt32(ctx, packetAddress + 8, out var second))
+        {
+            return;
+        }
+
+        const uint flagsMask = 0x0007_1100u;
+        uint flags;
+        ulong predicateAddress;
+        if (packetLength >= 4 &&
+            (first & ~flagsMask) == 0 &&
+            TryReadUInt32(ctx, packetAddress + 12, out var third) &&
+            third <= 0xFFFFu)
+        {
+            flags = first;
+            predicateAddress = ((ulong)third << 32) | (second & 0xFFFF_FFF0u);
+        }
+        else
+        {
+            flags = second;
+            predicateAddress = (first & 0xFFFF_FFF0u) | ((ulong)(second & 0xFFu) << 32);
+        }
+
+        var operation = (flags >> 16) & 0x7u;
+        if (operation == 0)
+        {
+            state.PredicateSkip = false;
+            return;
+        }
+
+        if (operation != 3)
+        {
+            if (tracePacket)
+            {
+                TraceAgc(
+                    $"agc.dcb.predication_unsupported packet=0x{packetAddress:X16} " +
+                    $"op={operation} addr=0x{predicateAddress:X16}");
+            }
+
+            return;
+        }
+
+        var waitOperation = (flags >> 12) & 1u;
+        var value = 0UL;
+        var readSucceeded = false;
+        void ReadPredicate() =>
+            readSucceeded = ctx.TryReadUInt64(predicateAddress, out value);
+
+        if (waitOperation != 0)
+        {
+            var sequence = GuestGpu.Current.SubmitOrderedGuestAction(
+                ReadPredicate,
+                $"set_predication read 0x{predicateAddress:X16}");
+            if (sequence == 0)
+            {
+                ReadPredicate();
+            }
+            else if (!GuestGpu.Current.WaitForGuestWork(sequence))
+            {
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.dcb.predication_wait_failed packet=0x{packetAddress:X16} " +
+                        $"addr=0x{predicateAddress:X16} sequence={sequence}");
+                }
+
+                return;
+            }
+        }
+        else
+        {
+            ReadPredicate();
+        }
+
+        if (!readSucceeded)
+        {
+            if (tracePacket)
+            {
+                TraceAgc(
+                    $"agc.dcb.predication_read_failed packet=0x{packetAddress:X16} " +
+                    $"addr=0x{predicateAddress:X16}");
+            }
+
+            return;
+        }
+
+        var condition = (flags >> 8) & 1u;
+        state.PredicateSkip = condition == 0 ? value != 0 : value == 0;
+        if (tracePacket)
+        {
+            TraceAgc(
+                $"agc.dcb.predication packet=0x{packetAddress:X16} " +
+                $"addr=0x{predicateAddress:X16} value=0x{value:X16} " +
+                $"condition={condition} wait={waitOperation} skip={state.PredicateSkip}");
+        }
+    }
+
+    private static bool RangesOverlap(
+        ulong leftAddress,
+        ulong leftLength,
+        ulong rightAddress,
+        ulong rightLength)
+    {
+        var leftEnd = leftAddress > ulong.MaxValue - leftLength
+            ? ulong.MaxValue
+            : leftAddress + leftLength;
+        var rightEnd = rightAddress > ulong.MaxValue - rightLength
+            ? ulong.MaxValue
+            : rightAddress + rightLength;
+        return leftAddress < rightEnd && rightAddress < leftEnd;
+    }
+
+    /// <summary>
+    /// PS5 render targets alias guest memory, so a CP DMA fill or copy that
+    /// lands on an RT is visible to later GPU reads. Our render targets live
+    /// in Vulkan images, so mirror DMA writes into them: fills become
+    /// vkCmdClearColorImage, copies re-upload the guest bytes. Without this,
+    /// per-frame DMA clears never reach the image (the fog layer in Dreaming
+    /// Sarah accumulates until it saturates, washing the scene out).
+    /// </summary>
+    /// <summary>
+    /// PS5 render targets alias unified memory, so the game's CPU can rewrite a
+    /// surface (Chowdren memsets its fog-noise layer every frame) and the GPU
+    /// observes it. Our Vulkan guest images are separate storage, so re-upload
+    /// CPU-authored surfaces once per flip. Surfaces only the GPU writes keep
+    /// all-zero guest memory and are skipped, preserving their GPU content.
+    /// </summary>
+    private static void SyncCpuWrittenGuestImages(
+        CpuContext ctx,
+        ulong scopeAddress = 0,
+        ulong scopeByteCount = ulong.MaxValue)
+    {
+        // Uploads used to copy full planes here and SubmitGuestImageWrite on the
+        // AGC producer thread, which hit the payload guest-work caps and
+        // soft-locked titles (GTA). The presenter's render drain owns the
+        // read/upload/re-arm; this call is only a scoped wake.
+        _ = ctx;
+        if (!SharpEmu.HLE.GuestImageWriteTracker.Enabled || scopeByteCount == 0)
+        {
+            return;
+        }
+
+        GuestGpu.Current.RequestCpuWrittenGuestImageSync(scopeAddress, scopeByteCount);
+    }
+
+    private static long _dmaMirrorTraceCount;
+    private static readonly Dictionary<(uint Op, uint Register), long> _submittedOpcodeCounts = new();
+    private static long _submittedOpcodeTotal;
+
+    private static void CountSubmittedOpcode(uint op, uint register)
+    {
+        var key = (op, op == ItNop ? register : uint.MaxValue);
+        lock (_submittedOpcodeCounts)
+        {
+            _submittedOpcodeCounts[key] =
+                _submittedOpcodeCounts.TryGetValue(key, out var count) ? count + 1 : 1;
+            if (++_submittedOpcodeTotal % 500_000 == 0)
+            {
+                var summary = string.Join(
+                    ' ',
+                    _submittedOpcodeCounts
+                        .OrderByDescending(entry => entry.Value)
+                        .Select(entry => entry.Key.Register == uint.MaxValue
+                            ? $"0x{entry.Key.Op:X2}:{entry.Value}"
+                            : $"0x{entry.Key.Op:X2}/r{entry.Key.Register}:{entry.Value}"));
+                Console.Error.WriteLine($"[PKT] total={_submittedOpcodeTotal} {summary}");
+            }
+        }
+    }
+
+    private static void MirrorDmaWriteToGuestImage(
+        CpuContext ctx,
+        ulong destinationAddress,
+        ulong byteCount,
+        uint? fillValue,
+        ulong sourceAddress = 0)
+    {
+        var hasImage = GuestGpu.Current.TryGetGuestImageExtent(
+            destinationAddress,
+            out var width,
+            out var height,
+            out var imageBytes);
+        if (_traceDraws && Interlocked.Increment(ref _dmaMirrorTraceCount) <= 400)
+        {
+            Console.Error.WriteLine(
+                $"[DMA] src=0x{sourceAddress:X} dst=0x{destinationAddress:X} bytes={byteCount} " +
+                $"fill={(fillValue is { } f ? $"0x{f:X8}" : "copy")} image={hasImage}");
+        }
+
+        if (!hasImage)
+        {
+            return;
+        }
+
+        if (imageBytes == 0 || byteCount < imageBytes)
+        {
+            return;
+        }
+
+        if (fillValue is { } fill)
+        {
+            GuestGpu.Current.SubmitGuestImageFill(destinationAddress, fill);
+            return;
+        }
+
+        // PS5 render targets alias unified guest memory. When the DMA source is
+        // a live GPU image, guest RAM may still contain an older snapshot until
+        // writeback completes. Prefer a backend image-to-image mirror so later
+        // sampling observes the GPU-fresh contents; fall back to RAM below when
+        // no compatible live pair can be queued.
+        if (sourceAddress != 0 &&
+            GuestGpu.Current.TrySubmitGuestImageCopy(
+                sourceAddress,
+                destinationAddress))
+        {
+            return;
+        }
+
+        var pixels = new byte[imageBytes];
+        if (ctx.Memory.TryRead(destinationAddress, pixels))
+        {
+            GuestGpu.Current.SubmitGuestImageWrite(destinationAddress, pixels);
+        }
+    }
+
+    private static void ApplySubmittedStandardDmaData(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong packetAddress)
+    {
+        if (!TryReadUInt32(ctx, packetAddress + 4, out var control) ||
+            !TryReadUInt32(ctx, packetAddress + 8, out var sourceLow) ||
+            !TryReadUInt32(ctx, packetAddress + 12, out var sourceHigh) ||
+            !TryReadUInt32(ctx, packetAddress + 16, out var destinationLow) ||
+            !TryReadUInt32(ctx, packetAddress + 20, out var destinationHigh) ||
+            !TryReadUInt32(ctx, packetAddress + 24, out var command))
+        {
+            return;
+        }
+
+        var byteCount = command & 0x1F_FFFFu;
+        var destinationSelect = (control >> 20) & 0x3u;
+        var destinationSwap = (command >> 24) & 0x3u;
+        var destinationAddressSpace = (command >> 27) & 0x1u;
+        var destinationAddress = destinationLow | ((ulong)destinationHigh << 32);
+        var writesGuestMemory =
+            byteCount != 0 &&
+            destinationSwap == 0 &&
+            destinationSelect is 0 or 3 &&
+            (destinationSelect == 3 || destinationAddressSpace == 0);
+
+        if (writesGuestMemory &&
+            (OverlapsTarget45DRangeV74041(destinationAddress, byteCount) ||
+             IsTarget45DIdentityV74041(destinationAddress)))
+        {
+            TraceTarget45DProducerV74041(
+                "standard_dma",
+                $"packet=0x{packetAddress:X16} dst=0x{destinationAddress:X16} " +
+                $"src=0x{sourceHigh:X8}{sourceLow:X8} bytes={byteCount} " +
+                $"control=0x{control:X8} command=0x{command:X8}");
+        }
+
+        var copiedData = false;
+        SubmitOrderedGpuSideEffect(
+            ctx,
+            gpuState,
+            state,
+            () => copiedData = ApplySubmittedStandardDmaDataSnapshot(
+                ctx,
+                control,
+                sourceLow,
+                sourceHigh,
+                destinationLow,
+                destinationHigh,
+                command),
+            $"dma_data dst=0x{destinationHigh:X8}{destinationLow:X8} bytes={byteCount}",
+            packetAddress,
+            writesGuestMemory ? destinationAddress : 0,
+            writesGuestMemory ? byteCount : 0,
+            deferLabelCompletion: true,
+            producerCompletionAction: writesGuestMemory
+                ? () =>
+                {
+                    if (copiedData)
+                    {
+                        RecordProducedLabelsInRange(
+                            ctx,
+                            destinationAddress,
+                            byteCount);
+                    }
+                }
+                : null);
+    }
+
+    private static bool ApplySubmittedStandardDmaDataSnapshot(
+        CpuContext ctx,
+        uint control,
+        uint sourceLow,
+        uint sourceHigh,
+        uint destinationLow,
+        uint destinationHigh,
+        uint command)
+    {
+        var byteCount = command & 0x1F_FFFFu;
+        var sourceSelect = (control >> 29) & 0x3u;
+        var destinationSelect = (control >> 20) & 0x3u;
+        var destinationSwap = (command >> 24) & 0x3u;
+        var sourceAddressSpace = (command >> 26) & 0x1u;
+        var destinationAddressSpace = (command >> 27) & 0x1u;
+        var sourceAddressIncrement = (command >> 28) & 0x1u;
+        if (byteCount == 0 ||
+            destinationSwap != 0 ||
+            destinationSelect is not (0 or 3) ||
+            (destinationSelect == 0 && destinationAddressSpace != 0))
+        {
+            return false;
+        }
+
+        var destinationAddress =
+            destinationLow | ((ulong)destinationHigh << 32);
+        InvalidateDcbWindowIfOverlaps(destinationAddress, byteCount);
+        bool copied;
+        ulong sourceAddress;
+        if (sourceSelect is 0 or 3 &&
+            (sourceSelect == 3 || sourceAddressSpace == 0))
+        {
+            sourceAddress = sourceLow | ((ulong)sourceHigh << 32);
+            if (sourceAddressIncrement != 0)
+            {
+                copied =
+                    TryReadUInt32(ctx, sourceAddress, out var fillValue) &&
+                    TryFillGuestMemory(
+                        ctx,
+                        fillValue,
+                        destinationAddress,
+                        byteCount);
+                if (copied)
+                {
+                    MirrorDmaWriteToGuestImage(ctx, destinationAddress, byteCount, fillValue);
+                }
+            }
+            else
+            {
+                copied = TryCopyGuestMemory(
+                    ctx,
+                    sourceAddress,
+                    destinationAddress,
+                    byteCount);
+                if (copied)
+                {
+                    MirrorDmaWriteToGuestImage(
+                        ctx,
+                        destinationAddress,
+                        byteCount,
+                        fillValue: null,
+                        sourceAddress);
+                }
+            }
+        }
+        else if (sourceSelect == 2)
+        {
+            sourceAddress = 0;
+            copied = TryFillGuestMemory(
+                ctx,
+                sourceLow,
+                destinationAddress,
+                byteCount);
+            if (copied)
+            {
+                MirrorDmaWriteToGuestImage(ctx, destinationAddress, byteCount, sourceLow);
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        if (ShouldTraceHotPath(ref _standardDmaTraceCount))
+        {
+            TraceAgcShader(
+                $"agc.dma_packet dst=0x{destinationAddress:X16} " +
+                $"src=0x{sourceAddress:X16} bytes={byteCount} " +
+                $"src_sel={sourceSelect} fill={sourceAddressIncrement != 0 || sourceSelect == 2} " +
+                $"copied={copied}");
+        }
+
+        return copied;
+    }
+
+    private static void ApplySubmittedWriteData(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        uint packetLength,
+        bool standardPacket,
+        bool tracePacket)
+    {
+        if (!TryReadUInt32(ctx, packetAddress + 4, out var control) ||
+            !TryReadUInt64(ctx, packetAddress + 8, out var destinationAddress))
+        {
+            return;
+        }
+
+        var (destination, incrementAddress, writeConfirm, cachePolicy) = standardPacket
+            ? DecodeStandardWriteDataControl(control)
+            : DecodeAgcWriteDataControl(control);
+        var dwordCount = packetLength - 4;
+        var values = new uint[dwordCount];
+        for (uint index = 0; index < dwordCount; index++)
+        {
+            var sourceAddress = packetAddress + 16 + ((ulong)index * sizeof(uint));
+            if (!TryReadUInt32(ctx, sourceAddress, out values[index]))
+            {
+                return;
+            }
+        }
+
+        var v74041WriteDataLength = incrementAddress
+            ? (ulong)dwordCount * sizeof(uint)
+            : sizeof(uint);
+        if (OverlapsTarget45DRangeV74041(
+                destinationAddress,
+                v74041WriteDataLength) ||
+            IsTarget45DIdentityV74041(destinationAddress))
+        {
+            TraceTarget45DProducerV74041(
+                "write_data",
+                $"packet=0x{packetAddress:X16} dst=0x{destinationAddress:X16} " +
+                $"bytes={v74041WriteDataLength} dwords={dwordCount} " +
+                $"destination={destination} increment={(incrementAddress ? 1 : 0)}");
+        }
+
+        if (_traceLabelProvenanceV734)
+        {
+            var writeLength = incrementAddress
+                ? (ulong)dwordCount * sizeof(uint)
+                : sizeof(uint);
+            if (TraceLabelProvenanceRangeV734(
+                    ctx.Memory,
+                    destinationAddress,
+                    writeLength,
+                    $"write_data_packet control=0x{control:X8} " +
+                    $"increment={(incrementAddress ? 1 : 0)} " +
+                    $"confirm={(writeConfirm ? 1 : 0)} " +
+                    $"count={dwordCount}") != 0)
+            {
+                var firstValue = values.Length > 0 ? values[0] : 0u;
+                var secondValue = values.Length > 1 ? values[1] : 0u;
+                TraceLabelProvenanceV734(
+                    $"write_data_packet_detail addr=0x{destinationAddress:X16} " +
+                    $"dst={destination} cache={cachePolicy} " +
+                    $"v0=0x{firstValue:X8} v1=0x{secondValue:X8}");
+            }
+        }
+
+        SubmitOrderedGpuSideEffect(
+            ctx,
+            gpuState,
+            state,
+            () =>
+            {
+                InvalidateDcbWindowIfOverlaps(
+                    destinationAddress,
+                    incrementAddress ? (ulong)dwordCount * sizeof(uint) : sizeof(uint));
+                var wroteData = destination is 1 or 2 or 4 or 5;
+                for (uint index = 0; wroteData && index < dwordCount; index++)
+                {
+                    var targetAddress = destinationAddress +
+                        (incrementAddress ? (ulong)index * sizeof(uint) : 0);
+                    wroteData = TryWriteUInt32(ctx, targetAddress, values[index]);
+                    if (wroteData)
+                    {
+                        // Preserve transient label values even when a packet
+                        // writes the same address more than once.
+                        GpuWaitRegistry.RecordProduced(
+                            CanonicalMemory(ctx.Memory),
+                            targetAddress,
+                            values[index]);
+                    }
+                }
+
+                if (wroteData)
+                {
+                    RecordProducedLabelsInRange(
+                        ctx,
+                        destinationAddress,
+                        incrementAddress
+                            ? (ulong)dwordCount * sizeof(uint)
+                            : sizeof(uint));
+
+                    // V61.24.6 PRODUCER_LATCH_WAKE
+                    // RecordProduced/RecordProducedLabelsInRange can latch a
+                    // WAIT_REG_MEM at the exact real WRITE_DATA producer value.
+                    // Wake the event-driven wait monitor immediately after this
+                    // packet so the latched queue does not wait for an unrelated
+                    // later pulse/poll. This does not change guest memory and does
+                    // not resume a wait whose comparison was not satisfied.
+                    SignalGpuWaitMonitor(ctx.Memory);
+                }
+
+                if (_traceLabelProvenanceV734)
+                {
+                    var writeLength = incrementAddress
+                        ? (ulong)dwordCount * sizeof(uint)
+                        : sizeof(uint);
+                    foreach (var label in SnapshotLabelProvenanceTargetsV734(ctx.Memory))
+                    {
+                        if (!RangeContainsLabelV734(destinationAddress, writeLength, label))
+                        {
+                            continue;
+                        }
+
+                        var readable = TryReadUInt32(ctx, label, out var visible);
+                        var hasProduced = GpuWaitRegistry.TryGetLastProduced(
+                            CanonicalMemory(ctx.Memory),
+                            label,
+                            out var produced);
+                        TraceLabelProvenanceV734(
+                            $"write_data_applied label=0x{label:X16} " +
+                            $"wrote={(wroteData ? 1 : 0)} " +
+                            $"visible={(readable ? $"0x{visible:X8}" : "unreadable")} " +
+                            $"latched={(hasProduced ? $"0x{produced:X16}" : "none")} " +
+                            $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                            $"packet=0x{packetAddress:X16}");
+                    }
+                }
+
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.dcb.write_data dst={destination} " +
+                        $"addr=0x{destinationAddress:X16} count={dwordCount} " +
+                        $"increment={incrementAddress} confirm={writeConfirm} " +
+                        $"cache={cachePolicy} standard={standardPacket} wrote={wroteData}");
+                }
+            },
+            $"write_data dst=0x{destinationAddress:X16} count={dwordCount}",
+            packetAddress,
+            destination is 1 or 2 or 4 or 5 ? destinationAddress : 0,
+            destination is 1 or 2 or 4 or 5
+                ? incrementAddress ? (ulong)dwordCount * sizeof(uint) : sizeof(uint)
+                : 0,
+            requiresGpuBufferReadback: false);
+    }
+
+    private static (uint Destination, bool IncrementAddress, bool WriteConfirm, uint CachePolicy)
+        DecodeStandardWriteDataControl(uint control)
+    {
+        // GFX10 PKT3_WRITE_DATA is not byte-packed like sceAgcDcbWriteData's
+        // NOP wrapper: DST_SEL is 11:8, ADDR_INCR is bit 16 (0 increments),
+        // WR_CONFIRM is bit 20, and CACHE_POLICY is 26:25. In particular, the
+        // low byte is reserved and must never be interpreted as DST_SEL.
+        return (
+            Destination: (control >> 8) & 0xFu,
+            IncrementAddress: (control & (1u << 16)) == 0,
+            WriteConfirm: (control & (1u << 20)) != 0,
+            CachePolicy: (control >> 25) & 0x3u);
+    }
+
+    private static (uint Destination, bool IncrementAddress, bool WriteConfirm, uint CachePolicy)
+        DecodeAgcWriteDataControl(uint control) =>
+        (
+            Destination: control & 0xFFu,
+            IncrementAddress: ((control >> 16) & 0xFFu) == 0,
+            WriteConfirm: ((control >> 24) & 0xFFu) != 0,
+            CachePolicy: (control >> 8) & 0xFFu);
+
+#if DEBUG
+    private static void ValidateWriteDataControlDecoders()
+    {
+        // Regression vector: reserved low-byte noise previously decoded 0xA5
+        // as DST_SEL, causing a valid standard memory write to be discarded.
+        const uint standardControl = 0xA5u | (5u << 8) | (1u << 16) | (1u << 20) | (2u << 25);
+        var standard = DecodeStandardWriteDataControl(standardControl);
+        System.Diagnostics.Debug.Assert(standard.Destination == 5u);
+        System.Diagnostics.Debug.Assert(!standard.IncrementAddress);
+        System.Diagnostics.Debug.Assert(standard.WriteConfirm);
+        System.Diagnostics.Debug.Assert(standard.CachePolicy == 2u);
+
+        const uint agcControl = 4u | (3u << 8) | (1u << 24);
+        var agc = DecodeAgcWriteDataControl(agcControl);
+        System.Diagnostics.Debug.Assert(agc.Destination == 4u);
+        System.Diagnostics.Debug.Assert(agc.IncrementAddress);
+        System.Diagnostics.Debug.Assert(agc.WriteConfirm);
+        System.Diagnostics.Debug.Assert(agc.CachePolicy == 3u);
+    }
+
+    private static void ValidateDispatchInitiators()
+    {
+        const uint threadCount = 0x00F0_0100u;
+        const uint localSize = 64u;
+        var initiator = DirectDispatchInitiator(0);
+        System.Diagnostics.Debug.Assert((initiator & (1u << 5)) == 0);
+        System.Diagnostics.Debug.Assert((initiator & (1u << 6)) != 0);
+        System.Diagnostics.Debug.Assert(threadCount * localSize == 0x3C00_4000u);
+        System.Diagnostics.Debug.Assert(CeilDivide(20, 8) == 3);
+        System.Diagnostics.Debug.Assert(CeilDivide(12, 8) == 2);
+    }
+
+    private static void ValidateSubmittedQueueAndReleaseMemDecoders()
+    {
+        var nggRegisters = new Dictionary<uint, uint>
+        {
+            [GsUserDataRegister - 1] = 3u << 1,
+        };
+        System.Diagnostics.Debug.Assert(
+            SelectExportUserDataRegister(nggRegisters) == GsUserDataRegister);
+
+        var queue = new SubmittedDcbState();
+        queue.PendingSubmissions.Enqueue(new(0x1000, 8, 11, false));
+        queue.PendingSubmissions.Enqueue(new(0x2000, 16, 12, true));
+        System.Diagnostics.Debug.Assert(
+            queue.PendingSubmissions.Dequeue().SubmissionId == 11);
+        System.Diagnostics.Debug.Assert(
+            queue.PendingSubmissions.Dequeue().SubmissionId == 12);
+
+        var control = (1u << 16) | (2u << 29);
+        var decoded = DecodeStandardReleaseMemControl(control);
+        System.Diagnostics.Debug.Assert(decoded.Destination == 1u);
+        System.Diagnostics.Debug.Assert(decoded.DataSelection == 2u);
+        System.Diagnostics.Debug.Assert(
+            PatchUInt32Bits(0xABCD_1234u, 0x00FF_0000u, 3u << 16) ==
+            0xAB03_1234u);
+    }
+
+    private static void ValidateAcquireMemAndQueueResetDecoders()
+    {
+        var range = DecodeSubmittedAcquireMem(
+            0x8000_7FC0u,
+            0x0000_0123u,
+            0x45u,
+            0x89AB_CDEFu,
+            0x0012_3456u,
+            0x1_000Au,
+            0x0001_0388u);
+        System.Diagnostics.Debug.Assert(range.Engine == 1u);
+        System.Diagnostics.Debug.Assert(range.CbDbControl == 0x7FC0u);
+        System.Diagnostics.Debug.Assert(range.SizeBytes == 0x0000_4500_0001_2300UL);
+        System.Diagnostics.Debug.Assert(range.BaseAddress == 0x1234_5689_ABCD_EF00UL);
+        System.Diagnostics.Debug.Assert(range.PollInterval == 0xAu);
+        System.Diagnostics.Debug.Assert(range.InvalidatesGuestResources);
+        System.Diagnostics.Debug.Assert(!range.CoversAllGuestMemory);
+
+        var all = DecodeSubmittedAcquireMem(0, 0, 0, 0, 0, 0, 0x280u);
+        System.Diagnostics.Debug.Assert(all.CoversAllGuestMemory);
+        System.Diagnostics.Debug.Assert(all.InvalidatesGuestResources);
+        var explicitAll = DecodeSubmittedAcquireMem(0, 1, 0, 0, 0, 0, 0x103C0u);
+        System.Diagnostics.Debug.Assert(explicitAll.CoversAllGuestMemory);
+
+        var queue = new SubmittedDcbState
+        {
+            QueueName = "validator",
+            ActiveSubmissionId = 7,
+            HasActiveSubmission = true,
+            IsSuspended = true,
+            IndexBufferAddress = 0x1000,
+            IndexBufferCount = 12,
+            IndexSize = 1,
+            InstanceCount = 4,
+            DrawIndexOffset = 2,
+            IndirectArgsAddress = 0x2000,
+            SawIndexedDraw = true,
+            GuestDrawKind = GuestDrawKind.FullscreenBarycentric,
+        };
+        queue.CxRegisters.Add(1, 2);
+        queue.ShRegisters.Add(3, 4);
+        queue.UcRegisters.Add(5, 6);
+        queue.PendingSubmissions.Enqueue(new(0x3000, 2, 8, false));
+        ResetSubmittedParserState(queue);
+        System.Diagnostics.Debug.Assert(queue.CxRegisters.Count == 0);
+        System.Diagnostics.Debug.Assert(queue.ShRegisters.Count == 0);
+        System.Diagnostics.Debug.Assert(queue.UcRegisters.Count == 0);
+        System.Diagnostics.Debug.Assert(queue.IndexBufferAddress == 0);
+        System.Diagnostics.Debug.Assert(queue.IndexBufferCount == 0);
+        System.Diagnostics.Debug.Assert(queue.IndexSize == 0);
+        System.Diagnostics.Debug.Assert(queue.InstanceCount == 1);
+        System.Diagnostics.Debug.Assert(queue.DrawIndexOffset == 0);
+        System.Diagnostics.Debug.Assert(queue.IndirectArgsAddress == 0);
+        System.Diagnostics.Debug.Assert(!queue.SawIndexedDraw);
+        System.Diagnostics.Debug.Assert(queue.GuestDrawKind == GuestDrawKind.None);
+        System.Diagnostics.Debug.Assert(queue.QueueName == "validator");
+        System.Diagnostics.Debug.Assert(queue.ActiveSubmissionId == 7);
+        System.Diagnostics.Debug.Assert(queue.HasActiveSubmission);
+        System.Diagnostics.Debug.Assert(queue.IsSuspended);
+        System.Diagnostics.Debug.Assert(queue.PendingSubmissions.Count == 1);
+    }
+
+    private static void ValidateDepthTargetDecoder()
+    {
+        var registers = new Dictionary<uint, uint>
+        {
+            [DbDepthControl] = 0x2u | 0x4u | (1u << 4),
+            [DbDepthSizeXy] = 1919u | (1079u << 16),
+            [DbDepthClear] = BitConverter.SingleToUInt32Bits(1f),
+            [DbZInfo] = 3u | (24u << 4),
+            [DbZReadBase] = 0x0123_4567u,
+            [DbZWriteBase] = 0x0123_4567u,
+            [DbZReadBaseHi] = 2u,
+            [DbZWriteBaseHi] = 2u,
+        };
+        var depth = DecodeDepthTarget(registers);
+        System.Diagnostics.Debug.Assert(depth is not null);
+        System.Diagnostics.Debug.Assert(depth.Width == 1920 && depth.Height == 1080);
+        System.Diagnostics.Debug.Assert(depth.GuestFormat == 3u);
+        System.Diagnostics.Debug.Assert(depth.SwizzleMode == 24u);
+        System.Diagnostics.Debug.Assert(depth.Address == 0x0000_0201_2345_6700UL);
+        System.Diagnostics.Debug.Assert(depth.ClearDepth == 1f);
+    }
+#endif
+
+    // SHARPEMU_GPU_WAIT_MODE=force reverts to the legacy behaviour of faking a
+    // satisfying value at parse time. Default (suspend) properly suspends the
+    // DCB on an unmet WAIT_REG_MEM and resumes it once the awaited completion
+    // label is genuinely written by a later submit â€” preserving cross-submit
+    // ordering so the work after a wait (e.g. the final composite) does not run
+    // ahead of the compute it samples.
+    private static readonly bool _gpuWaitSuspendEnabled = !string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_GPU_WAIT_MODE"),
+        "force",
+        StringComparison.OrdinalIgnoreCase);
+
+    // Optional age for one-shot missing-producer diagnostics. Stale waits are
+    // never removed or force-satisfied in the default suspend mode: doing so
+    // advances a queue without its real cross-queue producer and can publish
+    // incomplete CPU/GPU state. Only SHARPEMU_GPU_WAIT_MODE=force retains the
+    // explicit legacy mutation path above. Default 0 disables age diagnostics.
+    private static readonly long _gpuWaitStaleTicks =
+        (long.TryParse(
+             Environment.GetEnvironmentVariable("SHARPEMU_GPU_WAIT_FALLBACK_MS"),
+             out var fallbackMs) && fallbackMs >= 0
+            ? fallbackMs
+            : 0L) * System.Diagnostics.Stopwatch.Frequency / 1000L;
+
+    // How long a suspended GPU wait may sit before the deadlock breaker may
+    // release it using the last value a real producer wrote to its label. Long
+    // enough that legitimate GPU work (which completes within a frame) never
+    // trips it; short enough that a wedged cross-queue cycle unblocks quickly.
+    private static readonly long _gpuDeadlockBreakTicks =
+        (long.TryParse(
+             Environment.GetEnvironmentVariable("SHARPEMU_GPU_DEADLOCK_BREAK_MS"),
+             out var deadlockMs) && deadlockMs > 0
+            ? deadlockMs
+            : 500L) * System.Diagnostics.Stopwatch.Frequency / 1000L;
+
+    // V61.10: WAIT_REG_MEM is queue-local synchronization. The old runtime
+    // correction placed a global CPU-visibility barrier behind every common
+    // 0->1 wait. On Vulkan that drains all guest queues and writes back every
+    // dirty guest buffer. Real cross-queue PM4 producers already wake through
+    // RecordProduced/LatchSatisfiedByValue, so the default probe is queue-local.
+    // The legacy global behavior remains opt-in only for controlled A/B tests.
+    private static readonly bool _gpuWaitGlobalVisibilityProbeEnabled =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_GPU_WAIT_GLOBAL_VISIBILITY_PROBE"),
+            "1",
+            StringComparison.Ordinal);
+
+    // SHARPEMU_V74_0_56_29_PRODUCERLESS_TWO_STAGE_VISIBILITY
+    // V56.27.1 measured thousands of ordered actions per five-second window
+    // while multiple NOP-form WAIT_REG_MEM labels were producer=none-observed.
+    // The old producerless correction immediately queued a GLOBAL ordered
+    // visibility action. That serializes all guest queues even though the
+    // write is frequently already visible after the waiting queue retires.
+    //
+    // Stage 1: retire/make only the waiting queue CPU-visible and re-read the
+    // real watched value.
+    // Stage 2: only if still unsatisfied and no producer appeared, queue the
+    // existing global visibility probe.
+    //
+    // No label value is fabricated and the explicit legacy global mode still
+    // overrides this path.
+    private static readonly bool _producerlessTwoStageVisibilityV7405629 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_PRODUCERLESS_TWO_STAGE_VISIBILITY"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _v7405629ProducerlessQueueStageCount;
+    private static long _v7405629ProducerlessQueueSatisfiedCount;
+    private static long _v7405629ProducerAppearedCount;
+    private static long _v7405629ProducerlessGlobalFallbackCount;
+    private static long _v7405629ProducerlessQueueSubmitFailedCount;
+
+    // SHARPEMU_V74_0_56_29_GBUFFER_LIGHTING_TRACE
+    private static readonly bool _traceGBufferLightingV7405629 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_GBUFFER_LIGHTING"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _v7405629MrtDrawCount;
+    private static long _v7405629MrtSlot0FallbackCount;
+
+    // SHARPEMU_V74_0_56_36_DS_GBUFFER_LIGHTING_CONTRACT
+    //
+    // Historical PPSA01341 command-stream evidence proves pixel shader
+    // 0x448639500 writes the 2560x1440 HDR/G-buffer MRT pair, including
+    // slot1 0x460890000 (fmt10/num0/tile27). The current failing runtime
+    // repeatedly samples that exact DCC surface but never materializes it.
+    //
+    // Keep recovery tied to the exact PS and exact slot1 allocation. Slot0 is
+    // also required to be the simultaneous 2560x1440 fmt12/num7 lighting
+    // target, preventing a generic export-mask override.
+    private static readonly bool _dsGBufferLightingContractV7405636 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_GBUFFER_LIGHTING_CONTRACT"),
+            "0",
+            StringComparison.Ordinal);
+
+    private static long _v7405636GBufferContractCount;
+    private static long _v7405636GBufferSlot1AddedCount;
+    private static long _v7405636GBufferMetadataRepairCount;
+
+    // SHARPEMU_V74_0_76_DS_GBUFFER_DCC_CORRECTNESS
+    // Historical traced command streams prove that this exact Demon's Souls
+    // lighting pass exports both CB_COLOR0 (0x45BC00000) and CB_COLOR1
+    // (0x460890000). Keep the recovery title/pass/shape-specific and opt-out.
+    private static readonly bool _dsGBufferMrtRecoveryV74076 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_GBUFFER_MRT_RECOVERY"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _v74076GBufferMrtRecoveryCount;
+    private static long _v74076GBufferDccProvenanceRepairCount;
+
+    // Reads the WAIT_REG_MEM watched address, reference, mask, and 3-bit compare
+    // function for both the AGC NOP-encapsulated (RWaitMem32/64) and the standard
+    // ItWaitRegMem packet layouts.
+    private static bool TryParseSubmittedWait(
+        CpuContext ctx,
+        ulong packetAddress,
+        uint packetLength,
+        bool is64Bit,
+        bool isStandard,
+        out ulong waitAddress,
+        out ulong reference,
+        out ulong mask,
+        out uint compareFunction,
+        out uint controlValue)
+    {
+        waitAddress = 0;
+        reference = 0;
+        mask = 0;
+        compareFunction = 0;
+        controlValue = 0;
+        if (isStandard)
+        {
+            if (!TryReadUInt32(ctx, packetAddress + 4, out var stdControl) ||
+                !TryReadUInt64(ctx, packetAddress + 8, out waitAddress) ||
+                !TryReadUInt32(ctx, packetAddress + 16, out var stdRef) ||
+                !TryReadUInt32(ctx, packetAddress + 20, out var stdMask))
+            {
+                return false;
+            }
+
+            compareFunction = stdControl & 0x7u;
+            controlValue = stdControl;
+            reference = stdRef;
+            mask = stdMask;
+            return true;
+        }
+
+        var legacyWait32 = !is64Bit && packetLength == 6;
+        var controlOffset = is64Bit ? 28u : legacyWait32 ? 16u : 20u;
+        if (!TryReadUInt64(ctx, packetAddress + 4, out waitAddress) ||
+            !TryReadUInt32(ctx, packetAddress + controlOffset, out var control))
+        {
+            return false;
+        }
+
+        compareFunction = control & 0x7u;
+        controlValue = control;
+        if (is64Bit)
+        {
+            return TryReadUInt64(ctx, packetAddress + 12, out mask) &&
+                   TryReadUInt64(ctx, packetAddress + 20, out reference);
+        }
+
+        var referenceOffset = legacyWait32 ? 20u : 16u;
+        if (!TryReadUInt32(ctx, packetAddress + 12, out var mask32) ||
+            !TryReadUInt32(ctx, packetAddress + referenceOffset, out var reference32))
+        {
+            return false;
+        }
+
+        mask = mask32;
+        reference = reference32;
+        return true;
+    }
+
+    // Upstream 0.0.3: park on a ring word the producer has not written yet.
+    private static bool SuspendOnUnwrittenRingWord(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        ulong wordAddress,
+        uint offset,
+        bool tracePacket)
+    {
+        var waiter = new GpuWaitRegistry.WaitingDcb
+        {
+            CommandBufferAddress = commandAddress,
+            ResumeAddress = wordAddress,
+            TotalDwords = offset + RingResumeWindowDwords,
+            ResumeOffset = offset,
+            ReferenceValue = 0,
+            Mask = 0xFFFF_FFFFu,
+            CompareFunction = 4,
+            ControlValue = 0,
+            Is64Bit = false,
+            IsStandard = false,
+            WaitAddress = wordAddress,
+            Memory = CanonicalMemory(ctx.Memory),
+            QueueName = state.QueueName,
+            SubmissionId = state.ActiveSubmissionId,
+            RegisteredTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+            State = state,
+        };
+        GpuWaitRegistry.Register(waiter.WaitAddress, waiter);
+        state.RingTailParkAddress = wordAddress;
+        var gpuState = _submittedGpuStates.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new SubmittedGpuState());
+        EnsureGpuWaitMonitor(ctx, gpuState);
+        if (tracePacket)
+        {
+            TraceAgc(
+                $"agc.dcb.ring_tail_pending addr=0x{wordAddress:X16} " +
+                $"queue={state.QueueName}");
+        }
+
+        return true;
+    }
+    // Returns true when the DCB should suspend parsing at this wait (its
+    // continuation was registered into GpuWaitRegistry); false to keep parsing
+    // (already satisfied, unreadable, or legacy force-satisfy mode).
+    // How long an indirect dispatch may wait for its producing dispatch to write
+    // non-zero dimensions before we give up and drop it (matching the pre-existing
+    // reject behavior). The producer runs on the render thread within a frame or
+    // two; this only bounds the pathological/legitimately-empty case.
+    // Stage 1: allow the renderer enough time to make all GPU work queued before
+    // the indirect packet CPU-visible. This specifically avoids dropping a valid
+    // 0/1/1 or 1/1/0 argument buffer while its producer is still compiling or in
+    // flight. After that ordered visibility point, a zero dimension is a legal
+    // no-op on the guest GPU;
+    // after prior queue work is CPU-visible, do not serialize an entire table of
+    // empty dispatches behind an arbitrary per-entry delay.
+    // V74.0.61 / upstream 0.0.3 parity.
+    // Upstream does not globally drain every guest GPU queue when an indirect
+    // argument tuple is still zero. It parks the PM4 cursor on the dimensions
+    // word and gives the producer a bounded 150 ms window.
+    //
+    // The accumulated V74 global visibility probe remains available only for
+    // controlled A/B diagnostics.
+    private const long IndirectDimsUpstreamRetryBudgetMsV74061 = 150;
+
+    // V74.0.62: the V74.0.61 default local-only 150 ms experiment regressed
+    // Demon's Souls UI from ~0.2 FPS to ~0.1 FPS. Restore the accumulated
+    // V74.0.60 global visibility path by default. The .61 local-only branch is
+    // retained strictly for A/B with SHARPEMU_GPU_INDIRECT_DIMS_GLOBAL_VISIBILITY=0.
+    private static readonly bool _indirectDimsGlobalVisibilityV74061 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_GPU_INDIRECT_DIMS_GLOBAL_VISIBILITY"),
+            "0",
+            StringComparison.Ordinal);
+
+    private static long _indirectDimsGlobalVisibilityElidedCountV74061;
+
+    private static readonly long _indirectDimsVisibilityTimeoutTicks =
+        (long.TryParse(
+             Environment.GetEnvironmentVariable("SHARPEMU_GPU_INDIRECT_DIMS_VISIBILITY_MS"),
+             out var indirectDimsVisibilityMs) && indirectDimsVisibilityMs > 0
+            ? indirectDimsVisibilityMs
+            : 120_000L) * System.Diagnostics.Stopwatch.Frequency / 1000L;
+
+    private static readonly long _indirectDimsPostVisibilityGraceTicks =
+        (long.TryParse(
+             Environment.GetEnvironmentVariable("SHARPEMU_GPU_INDIRECT_DIMS_GRACE_MS"),
+             out var indirectDimsGraceMs) && indirectDimsGraceMs >= 0
+            ? indirectDimsGraceMs
+            : 0L) * System.Diagnostics.Stopwatch.Frequency / 1000L;
+
+    private static readonly object _indirectDimsGate = new();
+    // Keys (memory, packetAddress) whose retry deadline elapsed. Added by
+    // DrainResumableDcbs when it resumes an expired retry, consumed by the very
+    // next re-parse of that packet so it drops instead of re-suspending. Never
+    // persists across frames â€” a fresh submit of the same packet retries anew.
+    private static readonly HashSet<(object, ulong)> _indirectDimsExpired = new();
+
+    // Suspends an indirect-dispatch DCB until the guest buffer holding its
+    // thread-group dimensions becomes non-zero (written by a prior GPU dispatch),
+    // then re-parses the dispatch. Returns false â€” so the caller drops the work â€”
+    // when the dims already expired once (genuinely empty dispatch).
+    private static bool HandleSubmittedIndirectDimsWait(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        ulong packetAddress,
+        uint offset,
+        uint dwordCount,
+        ulong dimsAddress,
+        bool tracePacket)
+    {
+        if (!_gpuWaitSuspendEnabled ||
+            dimsAddress == 0 ||
+            dimsAddress % sizeof(uint) != 0)
+        {
+            return false;
+        }
+
+        var canonicalMemory = CanonicalMemory(ctx.Memory);
+        var key = (canonicalMemory, packetAddress);
+        lock (_indirectDimsGate)
+        {
+            // This is the re-parse after the visibility probe still observed
+            // zero. Zero-sized indirect dispatches are legal no-ops: consume the
+            // packet without submitting Vulkan work or waiting another 500 ms.
+            if (_indirectDimsExpired.Remove(key))
+            {
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.dispatch_indirect_noop dims=0x{dimsAddress:X16} " +
+                        $"packet=0x{packetAddress:X16} queue={state.QueueName}");
+                }
+
+                return false;
+            }
+        }
+
+        var registeredTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        var waiter = new GpuWaitRegistry.WaitingDcb
+        {
+            CommandBufferAddress = commandAddress,
+            ResumeAddress = packetAddress, // re-parse this dispatch packet
+            ResumeOffset = offset,
+            TotalDwords = dwordCount,
+            WaitAddress = dimsAddress,
+            ReferenceValue = 0,
+            Mask = 0xFFFFFFFF,
+            CompareFunction = 4, // NOT_EQUAL: dims became available
+            Is64Bit = false,
+            IsStandard = false,
+            Memory = CanonicalMemory(ctx.Memory),
+            QueueName = state.QueueName,
+            SubmissionId = state.ActiveSubmissionId,
+            RegisteredTicks = registeredTicks,
+            RetryDeadlineTicks = registeredTicks +
+                ((_indirectDimsGlobalVisibilityV74061
+                    ? _indirectDimsVisibilityTimeoutTicks
+                    : IndirectDimsUpstreamRetryBudgetMsV74061 *
+                      System.Diagnostics.Stopwatch.Frequency / 1000L)),
+            State = state,
+        };
+
+        GpuWaitRegistry.Register(dimsAddress, waiter);
+        var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        EnsureGpuWaitMonitor(ctx, gpuState);
+
+        if (!_indirectDimsGlobalVisibilityV74061)
+        {
+            var elidedCount = Interlocked.Increment(
+                ref _indirectDimsGlobalVisibilityElidedCountV74061);
+            if (elidedCount <= 128 || (elidedCount & (elidedCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.61][INDIRECT_DIMS_GLOBAL_VISIBILITY_ELIDED] " +
+                    $"count={elidedCount} dims=0x{dimsAddress:X16} " +
+                    $"packet=0x{packetAddress:X16} queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} " +
+                    $"deadline_ms={IndirectDimsUpstreamRetryBudgetMsV74061}");
+            }
+
+            if (tracePacket)
+            {
+                TraceAgc(
+                    $"agc.dispatch_indirect_wait_local dims=0x{dimsAddress:X16} " +
+                    $"packet=0x{packetAddress:X16} queue={state.QueueName} " +
+                    $"deadline_ms={IndirectDimsUpstreamRetryBudgetMsV74061}");
+            }
+
+            return true;
+        }
+
+        // Accumulated V74 diagnostic A/B path. This is intentionally no longer
+        // the default because it serializes all prior guest GPU queues.
+        // V61.19.0_INDIRECT_GLOBAL_VISIBILITY
+        // Indirect argument buffers can be produced by compute work on another
+        // guest queue. Vulkan provides no implicit ordering between queues, so a
+        // queue-local CPU visibility action can still observe stale 0/1/1 or
+        // 1/1/0. Re-read only after all earlier guest GPU work is CPU-visible.
+        var visibilitySequence = GuestGpu.Current.SubmitGlobalOrderedGuestAction(
+            () =>
+            {
+                var visible = TryReadUInt32(ctx, dimsAddress, out var visibleValue);
+                TraceV26IndirectTuple(
+                    ctx,
+                    state,
+                    dimsAddress,
+                    packetAddress,
+                    phase: "post-visibility");
+                if (visible && visibleValue != 0)
+                {
+                    GpuWaitRegistry.RecordProduced(
+                        CanonicalMemory(ctx.Memory),
+                        dimsAddress,
+                        visibleValue);
+                    if (tracePacket)
+                    {
+                        TraceAgc(
+                            $"agc.dispatch_indirect_global_visible dims=0x{dimsAddress:X16} " +
+                            $"value=0x{visibleValue:X8} packet=0x{packetAddress:X16} " +
+                            $"queue={state.QueueName}");
+                    }
+                }
+                else
+                {
+                    var deadline = System.Diagnostics.Stopwatch.GetTimestamp() +
+                        _indirectDimsPostVisibilityGraceTicks;
+                    var updated = GpuWaitRegistry.UpdateRetryDeadline(
+                        CanonicalMemory(ctx.Memory),
+                        dimsAddress,
+                        packetAddress,
+                        deadline);
+                    if (tracePacket && updated)
+                    {
+                        if (_indirectDimsPostVisibilityGraceTicks == 0)
+                        {
+                            TraceAgc(
+                                $"agc.dispatch_indirect_confirmed_empty dims=0x{dimsAddress:X16} " +
+                                $"packet=0x{packetAddress:X16} queue={state.QueueName}");
+                        }
+                        else
+                        {
+                            TraceAgc(
+                                $"agc.dispatch_indirect_visibility_zero dims=0x{dimsAddress:X16} " +
+                                $"packet=0x{packetAddress:X16} queue={state.QueueName}");
+                        }
+                    }
+                }
+
+                SignalGpuWaitMonitor(ctx.Memory);
+            },
+            $"dispatch_indirect_dims_global_visibility 0x{dimsAddress:X16}");
+
+        if (visibilitySequence == 0)
+        {
+            _ = GpuWaitRegistry.UpdateRetryDeadline(
+                CanonicalMemory(ctx.Memory),
+                dimsAddress,
+                packetAddress,
+                registeredTicks + _indirectDimsPostVisibilityGraceTicks);
+        }
+
+        if (tracePacket)
+        {
+            TraceAgc(
+                $"agc.dispatch_indirect_wait dims=0x{dimsAddress:X16} " +
+                $"packet=0x{packetAddress:X16} queue={state.QueueName} " +
+                $"visibility_sequence={visibilitySequence}");
+        }
+
+        return true;
+    }
+
+    private static bool HandleSubmittedRewind(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        ulong packetAddress,
+        uint offset,
+        uint length,
+        uint dwordCount,
+        bool tracePacket)
+    {
+        var bodyAddress = packetAddress + sizeof(uint);
+        if (!TryReadUInt32(ctx, bodyAddress, out var body))
+        {
+            return false;
+        }
+
+        if ((body & RewindValidBit) != 0)
+        {
+            if (tracePacket)
+            {
+                TraceAgc(
+                    $"agc.dcb.rewind_valid queue={state.QueueName} " +
+                    $"packet=0x{packetAddress:X16} body=0x{body:X8}");
+            }
+
+            return false; // already valid â€” keep parsing
+        }
+
+        if (!_gpuWaitSuspendEnabled)
+        {
+            return false;
+        }
+
+        // Suspend until RewindPatchSetRewindState sets bit 31 on the body dword.
+        const uint compareEqual = 3;
+        var waiter = new GpuWaitRegistry.WaitingDcb
+        {
+            CommandBufferAddress = commandAddress,
+            ResumeAddress = packetAddress + ((ulong)length * sizeof(uint)),
+            TotalDwords = dwordCount,
+            ResumeOffset = offset + length,
+            ReferenceValue = RewindValidBit,
+            Mask = RewindValidBit,
+            CompareFunction = compareEqual,
+            ControlValue = 0,
+            Is64Bit = false,
+            IsStandard = true,
+            WaitAddress = bodyAddress,
+            Memory = CanonicalMemory(ctx.Memory),
+            QueueName = state.QueueName,
+            SubmissionId = state.ActiveSubmissionId,
+            RegisteredTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+            State = state,
+        };
+
+        GpuWaitRegistry.Register(bodyAddress, waiter);
+        var gpuState = _submittedGpuStates.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new SubmittedGpuState());
+        EnsureGpuWaitMonitor(ctx, gpuState);
+        TraceAgcShader(
+            $"agc.rewind_suspend queue={state.QueueName} " +
+            $"submission={state.ActiveSubmissionId} " +
+            $"packet=0x{packetAddress:X16} body=0x{bodyAddress:X16}");
+        if (tracePacket)
+        {
+            TraceAgc(
+                $"agc.dcb.rewind_suspend queue={state.QueueName} " +
+                $"packet=0x{packetAddress:X16} body=0x{body:X8}");
+        }
+
+        return true;
+    }
+
+    // SHARPEMU_STARTMENU_SAME_QUEUE_WRITEDATA_PROOF_V1_3_0
+    // A queued WRITE_DATA already parsed in this exact queue/submission
+    // precedes the wait in hardware order. Bypass only after decoding
+    // its packet and proving its final value satisfies this waiter.
+    private static bool TryProveQueuedSameQueueWriteData(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        in GpuWaitRegistry.WaitingDcb waiter,
+        out long producerSequence,
+        out ulong producerPacket,
+        out uint producedValue)
+    {
+        producerSequence = 0;
+        producerPacket = 0;
+        producedValue = 0;
+        LabelProducerTrace? producer = null;
+        var memory = CanonicalMemory(ctx.Memory);
+        var waitLength = waiter.Is64Bit ? (ulong)sizeof(ulong) : sizeof(uint);
+
+        lock (_labelProducerGate)
+        {
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var candidate = _labelProducers[index];
+                if (candidate.Planned ||
+                    candidate.Completed ||
+                    !ReferenceEquals(candidate.Memory, memory) ||
+                    candidate.QueueName != state.QueueName ||
+                    candidate.SubmissionId != state.ActiveSubmissionId ||
+                    !candidate.DebugName.StartsWith("write_data ", StringComparison.Ordinal) ||
+                    !RangesOverlap(
+                        candidate.Address,
+                        candidate.Length,
+                        waiter.WaitAddress,
+                        waitLength))
+                {
+                    continue;
+                }
+
+                producer = candidate;
+                break;
+            }
+        }
+
+        if (producer is null ||
+            waiter.Is64Bit ||
+            !TryReadUInt32(ctx, producer.PacketAddress, out var header) ||
+            header >> 30 != 3)
+        {
+            return false;
+        }
+
+        var packetLength = Pm4Length(header);
+        var op = (header >> 8) & 0xFFu;
+        var register = (header >> 2) & 0x3Fu;
+        var standardPacket = op == ItWriteData;
+        if ((!standardPacket && !(op == ItNop && register == RWriteData)) ||
+            packetLength < 5 ||
+            !TryReadUInt32(ctx, producer.PacketAddress + 4, out var control) ||
+            !TryReadUInt64(ctx, producer.PacketAddress + 8, out var destinationAddress))
+        {
+            return false;
+        }
+
+        var decoded = standardPacket
+            ? DecodeStandardWriteDataControl(control)
+            : DecodeAgcWriteDataControl(control);
+        if (decoded.Destination is not (1 or 2 or 4 or 5))
+        {
+            return false;
+        }
+
+        var valueCount = packetLength - 4;
+        uint valueIndex;
+        if (decoded.IncrementAddress)
+        {
+            if (waiter.WaitAddress < destinationAddress ||
+                (waiter.WaitAddress - destinationAddress) % sizeof(uint) != 0)
+            {
+                return false;
+            }
+
+            var index64 = (waiter.WaitAddress - destinationAddress) / sizeof(uint);
+            if (index64 >= valueCount)
+            {
+                return false;
+            }
+            valueIndex = (uint)index64;
+        }
+        else
+        {
+            if (waiter.WaitAddress != destinationAddress)
+            {
+                return false;
+            }
+            valueIndex = valueCount - 1;
+        }
+
+        if (!TryReadUInt32(
+                ctx,
+                producer.PacketAddress + 16 + ((ulong)valueIndex * sizeof(uint)),
+                out producedValue))
+        {
+            return false;
+        }
+
+        producerSequence = producer.Sequence;
+        producerPacket = producer.PacketAddress;
+        return GpuWaitRegistry.Compare(waiter, producedValue);
+    }
+    // SHARPEMU_STARTMENU_SAME_QUEUE_RELEASE_PROOF_V1_4_0
+    // Decode only a queued AGC RELEASE_MEM already parsed in this exact
+    // queue/submission. Immediate payload selections 1/2 are deterministic;
+    // timestamp selection 3 and every cross-queue producer stay suspended.
+    private static bool TryProveQueuedSameQueueReleaseMem(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        in GpuWaitRegistry.WaitingDcb waiter,
+        out long producerSequence,
+        out ulong producerPacket,
+        out uint producedValue)
+    {
+        producerSequence = 0;
+        producerPacket = 0;
+        producedValue = 0;
+        LabelProducerTrace? producer = null;
+        var memory = CanonicalMemory(ctx.Memory);
+
+        lock (_labelProducerGate)
+        {
+            for (var index = _labelProducers.Count - 1; index >= 0; index--)
+            {
+                var candidate = _labelProducers[index];
+                if (candidate.Planned ||
+                    candidate.Completed ||
+                    !ReferenceEquals(candidate.Memory, memory) ||
+                    candidate.QueueName != state.QueueName ||
+                    candidate.SubmissionId != state.ActiveSubmissionId ||
+                    !candidate.DebugName.StartsWith("release_mem ", StringComparison.Ordinal) ||
+                    !RangesOverlap(
+                        candidate.Address,
+                        candidate.Length,
+                        waiter.WaitAddress,
+                        sizeof(uint)))
+                {
+                    continue;
+                }
+
+                producer = candidate;
+                break;
+            }
+        }
+
+        if (producer is null ||
+            waiter.Is64Bit ||
+            !TryReadUInt32(ctx, producer.PacketAddress, out var header) ||
+            header >> 30 != 3 ||
+            Pm4Length(header) < 7 ||
+            ((header >> 8) & 0xFFu) != ItNop ||
+            ((header >> 2) & 0x3Fu) != RReleaseMem ||
+            !TryReadUInt32(ctx, producer.PacketAddress + 8, out var control) ||
+            !TryReadUInt32(ctx, producer.PacketAddress + 12, out var destinationLo) ||
+            !TryReadUInt32(ctx, producer.PacketAddress + 16, out var destinationHi) ||
+            !TryReadUInt32(ctx, producer.PacketAddress + 20, out var dataLo) ||
+            !TryReadUInt32(ctx, producer.PacketAddress + 24, out var dataHi))
+        {
+            return false;
+        }
+
+        var dataSelection = (control >> 16) & 0xFFu;
+        var destinationAddress = ((ulong)destinationHi << 32) | destinationLo;
+        if (dataSelection == 1 && waiter.WaitAddress == destinationAddress)
+        {
+            producedValue = dataLo;
+        }
+        else if (dataSelection == 2 && waiter.WaitAddress == destinationAddress)
+        {
+            producedValue = dataLo;
+        }
+        else if (dataSelection == 2 &&
+                 destinationAddress <= ulong.MaxValue - sizeof(uint) &&
+                 waiter.WaitAddress == destinationAddress + sizeof(uint))
+        {
+            producedValue = dataHi;
+        }
+        else
+        {
+            return false;
+        }
+
+        producerSequence = producer.Sequence;
+        producerPacket = producer.PacketAddress;
+        return GpuWaitRegistry.Compare(waiter, producedValue);
+    }
+    private static bool HandleSubmittedWaitRegMem(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong commandAddress,
+        ulong packetAddress,
+        uint offset,
+        uint length,
+        uint dwordCount,
+        bool is64Bit,
+        bool isStandard,
+        bool tracePacket)
+    {
+        if (!TryParseSubmittedWait(
+                ctx, packetAddress, length, is64Bit, isStandard,
+                out var waitAddress, out var reference, out var mask, out var compareFunction,
+                out var controlValue))
+        {
+            return false;
+        }
+
+        // COMPARE_FUNC=0 is the hardware "always" condition. Reserved 7 is
+        // also fail-open; neither condition may register a waiter. Validate
+        // the watched memory before any read so null/malformed packets cannot
+        // become permanent entries keyed by address zero.
+        if (compareFunction is 0 or 7)
+        {
+            TraceSubmittedWait(
+                waitAddress,
+                0,
+                mask,
+                reference,
+                compareFunction,
+                is64Bit ? 64 : 32,
+                tracePacket);
+            return false;
+        }
+
+        var requiredAlignment = is64Bit ? sizeof(ulong) : sizeof(uint);
+        if (waitAddress == 0 ||
+            mask == 0 ||
+            waitAddress % (ulong)requiredAlignment != 0)
+        {
+            TraceAgc(
+                $"agc.dcb.wait_reject addr=0x{waitAddress:X16} " +
+                $"mask=0x{mask:X16} compare={compareFunction} bits=" +
+                $"{(is64Bit ? 64 : 32)} standard={isStandard} " +
+                $"packet=0x{packetAddress:X16} reason=invalid-address-or-mask");
+            return false;
+        }
+
+        ulong currentValue = 0;
+        bool hasCurrent;
+        if (is64Bit)
+        {
+            hasCurrent = TryReadUInt64(ctx, waitAddress, out currentValue);
+        }
+        else if (TryReadUInt32(ctx, waitAddress, out var current32))
+        {
+            currentValue = current32;
+            hasCurrent = true;
+        }
+        else
+        {
+            hasCurrent = false;
+        }
+
+        TraceSubmittedWait(
+            waitAddress, currentValue, mask, reference, compareFunction,
+            is64Bit ? 64 : 32, tracePacket);
+
+        var waiter = new GpuWaitRegistry.WaitingDcb
+        {
+            CommandBufferAddress = commandAddress,
+            ResumeAddress = packetAddress + ((ulong)length * sizeof(uint)),
+            TotalDwords = dwordCount,
+            ResumeOffset = offset + length,
+            ReferenceValue = reference,
+            Mask = mask,
+            CompareFunction = compareFunction,
+            ControlValue = controlValue,
+            Is64Bit = is64Bit,
+            IsStandard = isStandard,
+            WaitAddress = waitAddress,
+            Memory = CanonicalMemory(ctx.Memory),
+            QueueName = state.QueueName,
+            SubmissionId = state.ActiveSubmissionId,
+            RegisteredTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+            State = state,
+        };
+
+        if (hasCurrent && GpuWaitRegistry.Compare(waiter, currentValue))
+        {
+            return false; // already satisfied â€” keep parsing
+        }
+
+        if (hasCurrent &&
+            TryProveQueuedSameQueueWriteData(
+                ctx,
+                state,
+                waiter,
+                out var sameQueueProducerSequence,
+                out var sameQueueProducerPacket,
+                out var sameQueueProducedValue))
+        {
+            TraceAgc(
+                $"agc.wait_same_queue_writedata_proof_bypass " +
+                $"label=0x{waitAddress:X16} queue={state.QueueName} " +
+                $"submission={state.ActiveSubmissionId} " +
+                $"producer_seq={sameQueueProducerSequence} " +
+                $"producer_packet=0x{sameQueueProducerPacket:X16} " +
+                $"current=0x{currentValue:X16} produced=0x{sameQueueProducedValue:X8}");
+            return false;
+        }
+
+        if (hasCurrent &&
+            TryProveQueuedSameQueueReleaseMem(
+                ctx,
+                state,
+                waiter,
+                out var sameQueueReleaseSequence,
+                out var sameQueueReleasePacket,
+                out var sameQueueReleaseValue))
+        {
+            TraceAgc(
+                $"agc.wait_same_queue_release_proof_bypass " +
+                $"label=0x{waitAddress:X16} queue={state.QueueName} " +
+                $"submission={state.ActiveSubmissionId} " +
+                $"producer_seq={sameQueueReleaseSequence} " +
+                $"producer_packet=0x{sameQueueReleasePacket:X16} " +
+                $"current=0x{currentValue:X16} produced=0x{sameQueueReleaseValue:X8}");
+            return false;
+        }
+
+        if (!_gpuWaitSuspendEnabled)
+        {
+            if (hasCurrent)
+            {
+                ForceSatisfyGpuWait(ctx, waiter, currentValue);
+            }
+
+            return false;
+        }
+
+        if (!hasCurrent)
+        {
+            return false; // cannot evaluate the label â€” do not stall the DCB
+        }
+
+        // [V72.4.3.2.17][WAIT_RANGE_CPU_VISIBILITY]
+        // V16 proved that late WAIT registration can miss the compute-publication callback.
+        // Before suspending a producerless boot/handoff wait, drain all prior GPU work once,
+        // write back dirty guest buffers, and re-read this exact label. No value is fabricated.
+        if (!_kytyNativeWaitSuspendV74032 &&
+            SharpEmu.Libs.Media.BinkHostPlaybackAssist.ShouldForceBootComputeLabelVisibility)
+        {
+            var canonicalVisibilityMemory = CanonicalMemory(ctx.Memory);
+            var producerKnownBeforeVisibility =
+                HasObservedLabelProducer(canonicalVisibilityMemory, waitAddress) ||
+                GpuWaitRegistry.TryGetLastProduced(
+                    canonicalVisibilityMemory,
+                    waitAddress,
+                    out _);
+
+            if (!producerKnownBeforeVisibility)
+            {
+                var visibilitySynchronized =
+                    GuestGpu.Current.SynchronizeGuestMemoryForCpu(timeoutMilliseconds: 1500);
+
+                ulong refreshedWaitValue = currentValue;
+                var refreshedReadable = waiter.Is64Bit
+                    ? TryReadUInt64(ctx, waitAddress, out refreshedWaitValue)
+                    : TryReadUInt32(ctx, waitAddress, out var refreshed32) &&
+                      ((refreshedWaitValue = refreshed32) >= 0);
+
+                Console.Error.WriteLine(
+                    $"[V72.4.3.2.17][WAIT_RANGE_CPU_VISIBILITY] " +
+                    $"label=0x{waitAddress:X16} queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} sync={(visibilitySynchronized ? 1 : 0)} " +
+                    $"readable={(refreshedReadable ? 1 : 0)} value=0x{refreshedWaitValue:X16}");
+
+                if (refreshedReadable)
+                {
+                    currentValue = refreshedWaitValue;
+                    if (GpuWaitRegistry.Compare(waiter, refreshedWaitValue))
+                    {
+                        GpuWaitRegistry.RecordProduced(
+                            canonicalVisibilityMemory,
+                            waitAddress,
+                            refreshedWaitValue);
+                        Console.Error.WriteLine(
+                            $"[LOADER][INFO] agc.wait_pre_suspend_visibility_satisfied " +
+                            $"label=0x{waitAddress:X16} value=0x{refreshedWaitValue:X16} " +
+                            $"queue={state.QueueName} submission={state.ActiveSubmissionId}");
+                        return false;
+                    }
+                }
+            }
+        }
+        GpuWaitRegistry.Register(waitAddress, waiter);
+        var gpuState = _submittedGpuStates.GetValue(
+            CanonicalMemory(ctx.Memory),
+            static _ => new SubmittedGpuState());
+        EnsureGpuWaitMonitor(ctx, gpuState);
+        if (_kytyNativeWaitSuspendV74032)
+        {
+            var nativeSuspendCount = Interlocked.Increment(
+                ref _v74032NativeWaitSuspendTraceCount);
+            if (nativeSuspendCount <= 128 ||
+                (nativeSuspendCount & (nativeSuspendCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.32.2][KYTY_NATIVE_WAIT_SUSPEND] count={nativeSuspendCount} " +
+                    $"label=0x{waitAddress:X16} queue={state.QueueName} " +
+                    $"submission={state.ActiveSubmissionId} current=0x{currentValue:X16} " +
+                    $"ref=0x{reference:X16} mask=0x{mask:X16} cmp={compareFunction}; " +
+                    "no pre-sync or synthetic visibility action");
+            }
+        }
+        else
+        {
+            ScheduleRuntimeCorrectionWaitVisibilityProbe(
+                ctx,
+                waiter,
+                currentValue,
+                tracePacket); // SHARPEMU_RUNTIME_CORRECTIONS_V33_0_4_WAIT
+        }
+        TraceWaitProducerState(
+            ctx.Memory,
+            waiter,
+            commandAddress,
+            packetAddress,
+            stale: false,
+            currentValue);
+        if (tracePacket)
+        {
+            TraceAgc(
+                $"agc.dcb.suspended addr=0x{waitAddress:X16} ref=0x{reference:X16} " +
+                $"mask=0x{mask:X16} cur=0x{currentValue:X16} cmp={compareFunction}");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Direct guest CPU stores can satisfy a GPU wait without crossing another
+    /// AGC import. Keep one low-frequency monitor per guest memory while waits
+    /// exist so those real stores wake their queues. The monitor never changes
+    /// a label: it uses the same masked comparison as submission-time parsing
+    /// and resumes only after the guest value genuinely satisfies the packet.
+    /// </summary>
+    /// <summary>
+    /// Evidence-matched visibility probe for the PS5 AGC NOP-form WAIT_REG_MEM.
+    /// Never fabricates a label: it re-reads the real guest value after earlier work
+    /// in the waiting queue is CPU-visible; cross-queue producers wake by label.
+    /// </summary>
+    private static void ScheduleRuntimeCorrectionWaitVisibilityProbe(
+        CpuContext ctx,
+        GpuWaitRegistry.WaitingDcb waiter,
+        ulong currentValue,
+        bool tracePacket)
+    {
+        if (waiter.IsStandard ||
+            waiter.Is64Bit ||
+            waiter.CompareFunction != 3 ||
+            waiter.Mask == 0 ||
+            (waiter.ReferenceValue & waiter.Mask) != 1 ||
+            (currentValue & waiter.Mask) != 0)
+        {
+            return;
+        }
+
+        var waitAddress = waiter.WaitAddress;
+        var queueName = waiter.QueueName;
+        var submissionId = waiter.SubmissionId;
+
+        void ProbeVisibleValue()
+        {
+            if (!TryReadUInt32(ctx, waitAddress, out var visible32))
+            {
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.wait_visibility_probe_unreadable label=0x{waitAddress:X16} " +
+                        $"queue={queueName} submission={submissionId}");
+                }
+                return;
+            }
+
+            var visibleValue = (ulong)visible32;
+            if (!GpuWaitRegistry.Compare(waiter, visibleValue))
+            {
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.wait_visibility_probe_pending label=0x{waitAddress:X16} " +
+                        $"value=0x{visibleValue:X8} queue={queueName} submission={submissionId}");
+                }
+                return;
+            }
+
+            if (GpuWaitRegistry.LatchSatisfiedByValue(ctx.Memory, waitAddress, visibleValue))
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][INFO] agc.wait_visibility_probe_satisfied " +
+                    $"label=0x{waitAddress:X16} value=0x{visibleValue:X8} " +
+                    $"queue={queueName} submission={submissionId}");
+                SignalGpuWaitMonitor(ctx.Memory);
+            }
+        }
+
+        // V61.10: make only the waiting queue CPU-visible. Cross-queue
+        // WRITE_DATA/RELEASE_MEM/DMA producers wake GpuWaitRegistry when
+        // their real ordered side effect completes; they do not require a
+        // global Vulkan drain at wait-registration time.
+                // V61.24.4 REFERENCE_PROGRESS_PRODUCERLESS_VISIBILITY
+        // Queue-local visibility is sufficient when SharpEmu has already
+        // observed a real producer for this label. When there is no recorded
+        // producer, however, the write may live on another guest GPU queue
+        // (notably compute storage/global output). In that case perform one
+        // global ordered visibility probe. This never fabricates the reference
+        // value: ProbeVisibleValue still reads guest memory and latches only
+        // when the actual WAIT_REG_MEM comparison is satisfied.
+        var canonicalWaitMemory = CanonicalMemory(ctx.Memory);
+        var hasObservedProducer =
+            HasObservedLabelProducer(canonicalWaitMemory, waitAddress) ||
+            GpuWaitRegistry.TryGetLastProduced(
+                canonicalWaitMemory,
+                waitAddress,
+                out _);
+
+        if (_skipKnownProducerWaitVisibilityV740291 &&
+            HasPendingExplicitLabelProducerV740291(canonicalWaitMemory, waiter))
+        {
+            var elidedCount = Interlocked.Increment(
+                ref _v740291KnownProducerVisibilityElidedCount);
+            if (elidedCount <= 256 || (elidedCount & (elidedCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.29.1][KNOWN_PRODUCER_VISIBILITY_ELIDED] count={elidedCount} " +
+                    $"label=0x{waitAddress:X16} queue={queueName} submission={submissionId}; " +
+                    "real explicit producer completion owns wake");
+            }
+
+            return;
+        }
+
+        if (!hasObservedProducer)
+        {
+            RegisterLabelProvenanceTargetV734(
+                canonicalWaitMemory,
+                waiter,
+                currentValue,
+                hasObservedProducer);
+        }
+        // SHARPEMU_V74_0_56_29_PRODUCERLESS_TWO_STAGE_VISIBILITY
+        if (!hasObservedProducer &&
+            !_gpuWaitGlobalVisibilityProbeEnabled &&
+            _producerlessTwoStageVisibilityV7405629)
+        {
+            void ProbeProducerlessQueueStageV7405629()
+            {
+                var queueStageCount = Interlocked.Increment(
+                    ref _v7405629ProducerlessQueueStageCount);
+
+                if (!TryReadUInt32(
+                        ctx,
+                        waitAddress,
+                        out var queueVisible32))
+                {
+                    return;
+                }
+
+                var queueVisibleValue = (ulong)queueVisible32;
+                if (GpuWaitRegistry.Compare(
+                        waiter,
+                        queueVisibleValue))
+                {
+                    if (GpuWaitRegistry.LatchSatisfiedByValue(
+                            ctx.Memory,
+                            waitAddress,
+                            queueVisibleValue))
+                    {
+                        Interlocked.Increment(
+                            ref _v7405629ProducerlessQueueSatisfiedCount);
+                        SignalGpuWaitMonitor(ctx.Memory);
+                    }
+
+                    if (queueStageCount <= 128 ||
+                        (queueStageCount & (queueStageCount - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.56.29][WAIT_TWO_STAGE] " +
+                            $"action=queue-satisfied count={queueStageCount} " +
+                            $"label=0x{waitAddress:X16} value=0x{queueVisibleValue:X8} " +
+                            $"queue={queueName} submission={submissionId}");
+                    }
+
+                    return;
+                }
+
+                // A producer may have become known while this queue-local
+                // visibility action was waiting to retire. In that case its
+                // real completion owns the wake; adding a global drain is
+                // redundant.
+                var producerAppeared =
+                    HasObservedLabelProducer(
+                        canonicalWaitMemory,
+                        waitAddress) ||
+                    GpuWaitRegistry.TryGetLastProduced(
+                        canonicalWaitMemory,
+                        waitAddress,
+                        out _) ||
+                    HasPendingExplicitLabelProducerV740291(
+                        canonicalWaitMemory,
+                        waiter);
+
+                if (producerAppeared)
+                {
+                    var appearedCount = Interlocked.Increment(
+                        ref _v7405629ProducerAppearedCount);
+
+                    if (appearedCount <= 128 ||
+                        (appearedCount & (appearedCount - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.56.29][WAIT_TWO_STAGE] " +
+                            $"action=producer-appeared count={appearedCount} " +
+                            $"label=0x{waitAddress:X16} " +
+                            $"queue={queueName} submission={submissionId}");
+                    }
+
+                    return;
+                }
+
+                var fallbackCount = Interlocked.Increment(
+                    ref _v7405629ProducerlessGlobalFallbackCount);
+
+                var globalSequence =
+                    GuestGpu.Current.SubmitGlobalOrderedGuestAction(
+                        ProbeVisibleValue,
+                        $"wait_reg_mem_global_fallback_v5629 0x{waitAddress:X16}");
+
+                if (fallbackCount <= 128 ||
+                    (fallbackCount & (fallbackCount - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.29][WAIT_TWO_STAGE] " +
+                        $"action=global-fallback count={fallbackCount} " +
+                        $"label=0x{waitAddress:X16} " +
+                        $"queued={(globalSequence != 0 ? 1 : 0)} " +
+                        $"queue={queueName} submission={submissionId}");
+                }
+            }
+
+            var queueSequence =
+                GuestGpu.Current.SubmitOrderedGuestActionWithVisibility(
+                    ProbeProducerlessQueueStageV7405629,
+                    $"wait_reg_mem_queue_first_v5629 0x{waitAddress:X16}",
+                    requiresGpuToCpuVisibility: true);
+
+            if (queueSequence == 0)
+            {
+                Interlocked.Increment(
+                    ref _v7405629ProducerlessQueueSubmitFailedCount);
+
+                // Preserve the old correctness fallback if a queue-local
+                // action cannot be scheduled at all.
+                GuestGpu.Current.SubmitGlobalOrderedGuestAction(
+                    ProbeVisibleValue,
+                    $"wait_reg_mem_global_submit_fallback_v5629 0x{waitAddress:X16}");
+            }
+
+            return;
+        }
+
+        var useGlobalVisibilityProbe =
+            _gpuWaitGlobalVisibilityProbeEnabled ||
+            !hasObservedProducer;
+
+        if (useGlobalVisibilityProbe &&
+            !_gpuWaitGlobalVisibilityProbeEnabled &&
+            tracePacket)
+        {
+            TraceAgc(
+                $"agc.wait_truly_producerless_global_probe label=0x{waitAddress:X16} " +
+                $"queue={queueName} submission={submissionId}");
+        }
+        else if (!useGlobalVisibilityProbe &&
+                 tracePacket)
+        {
+            TraceAgc(
+                $"agc.wait_known_producer_queue_probe label=0x{waitAddress:X16} " +
+                $"queue={queueName} submission={submissionId}");
+        }
+
+        var visibilitySequence = useGlobalVisibilityProbe
+            ? GuestGpu.Current.SubmitGlobalOrderedGuestAction(
+                ProbeVisibleValue,
+                $"wait_reg_mem_global_visibility 0x{waitAddress:X16}")
+            : GuestGpu.Current.SubmitOrderedGuestActionWithVisibility(
+                ProbeVisibleValue,
+                $"wait_reg_mem_queue_visibility 0x{waitAddress:X16}",
+                requiresGpuToCpuVisibility: true);
+
+        if (visibilitySequence == 0 && tracePacket)
+        {
+            TraceAgc(
+                $"agc.wait_visibility_probe_not_queued label=0x{waitAddress:X16} " +
+                $"scope={(useGlobalVisibilityProbe ? "global" : "queue")} " +
+                $"queue={queueName} submission={submissionId}");
+        }
+    }
+
+    private static void EnsureGpuWaitMonitor(
+        CpuContext submitContext,
+        SubmittedGpuState gpuState)
+    {
+        if (gpuState.WaitMonitorRunning)
+        {
+            return;
+        }
+
+        gpuState.WaitMonitorRunning = true;
+        var monitorContext = new CpuContext(
+            submitContext.Memory,
+            submitContext.TargetGeneration);
+        ThreadPool.UnsafeQueueUserWorkItem(
+            static state => MonitorGpuWaits(state.Context, state.GpuState),
+            (Context: monitorContext, GpuState: gpuState),
+            preferLocal: false);
+    }
+
+    private static void MonitorGpuWaits(
+        CpuContext ctx,
+        SubmittedGpuState gpuState)
+    {
+        var delayMilliseconds = 1;
+        long observedSignal;
+        lock (gpuState.WaitMonitorSignalGate)
+        {
+            observedSignal = gpuState.WaitMonitorSignalVersion;
+        }
+
+        while (true)
+        {
+            int resumed;
+            int remaining;
+            lock (gpuState.Gate)
+            {
+                resumed = DrainResumableDcbs(ctx, gpuState, tracePackets: _traceAgc);
+                remaining = GpuWaitRegistry.CountForMemory(CanonicalMemory(ctx.Memory));
+                if (_traceAgc && resumed != 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][TRACE] agc.wait_monitor_resumed count={resumed} " +
+                        $"remaining={remaining}");
+                }
+
+                SharpEmu.Libs.Diagnostics.LoadProgressDiagnostics.TraceGpuWaitSnapshot(
+                    ctx.Memory);
+                GpuWaitProfile.RecordMonitorPoll(resumed != 0);
+                GpuWaitProfile.ReportIfDue(remaining);
+                if (remaining == 0)
+                {
+                    gpuState.WaitMonitorRunning = false;
+                    return;
+                }
+            }
+
+            delayMilliseconds = resumed != 0
+                ? 1
+                : Math.Min(delayMilliseconds * 2, 16);
+            lock (gpuState.WaitMonitorSignalGate)
+            {
+                if (gpuState.WaitMonitorSignalVersion == observedSignal)
+                {
+                    Monitor.Wait(gpuState.WaitMonitorSignalGate, delayMilliseconds);
+                }
+
+                observedSignal = gpuState.WaitMonitorSignalVersion;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes a value that satisfies the waiter's comparison. This deliberately
+    /// exists only behind SHARPEMU_GPU_WAIT_MODE=force for legacy A/B testing;
+    /// normal and stale waits must never mutate their watched label.
+    /// </summary>
+    private static void ForceSatisfyGpuWait(
+        CpuContext ctx,
+        in GpuWaitRegistry.WaitingDcb waiter,
+        ulong value)
+    {
+        var address = waiter.WaitAddress;
+        var mask = waiter.Mask;
+        if (address == 0 || mask == 0)
+        {
+            return;
+        }
+
+        var maskedRef = waiter.ReferenceValue & mask;
+        ulong? satisfyMasked = waiter.CompareFunction switch
+        {
+            1 => maskedRef == 0 ? null : (maskedRef - 1) & mask,            // <
+            2 => maskedRef,                                                 // <=
+            3 => maskedRef,                                                 // ==
+            4 => (~maskedRef) & mask,                                       // !=
+            5 => maskedRef,                                                 // >=
+            6 => maskedRef == mask ? null : (maskedRef + 1) & mask,         // >
+            _ => null,
+        };
+
+        if (satisfyMasked is not { } satisfy)
+        {
+            return;
+        }
+
+        var newValue = (value & ~mask) | (satisfy & mask);
+        if (waiter.Is64Bit)
+        {
+            ctx.TryWriteUInt64(address, newValue);
+        }
+        else
+        {
+            TryWriteUInt32(ctx, address, unchecked((uint)newValue));
+        }
+    }
+
+    // WAIT_REG_MEM packets whose condition is not met suspend their DCB into
+    // GpuWaitRegistry. Each submit re-checks every suspended DCB against current
+    // guest memory (labels are advanced by ReleaseMem/WriteData/DmaData packets
+    // or direct CPU writes) and resumes the ones now satisfied. A resumed DCB
+    // can itself write labels that unblock others, so loop to a fixed point.
+    // V54: V53 queue-level cycle resolver removed. Runtime evidence showed
+    // every detected V53 cycle was same-queue cycle_length=1.
+
+    private static int DrainResumableDcbs(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        bool tracePackets)
+    {
+        if (!_gpuWaitSuspendEnabled)
+        {
+            return 0;
+        }
+
+        var resumedCount = 0;
+        for (var pass = 0; pass < 256; pass++)
+        {
+            var woken = GpuWaitRegistry.CollectSatisfied(CanonicalMemory(ctx.Memory), (address, is64Bit) =>
+                is64Bit
+                    ? TryReadUInt64(ctx, address, out var value64) ? value64 : (ulong?)null
+                    : TryReadUInt32(ctx, address, out var value32) ? value32 : (ulong?)null);
+
+            // V55: if a real producer wrote a satisfying value after this
+            // waiter was registered, resume it as normal synchronization.
+            // This preserves transient fence signals even if guest memory was
+            // reset before the monitor observed the label directly.
+            var producedWoken = GpuWaitRegistry.CollectProducedSatisfiedAfterRegistration(
+                CanonicalMemory(ctx.Memory));
+            if (producedWoken is not null)
+            {
+                foreach (var waiter in producedWoken)
+                {
+                    if (tracePackets)
+                    {
+                        TraceAgc(
+                            $"agc.produced_generation_wake label=0x{waiter.WaitAddress:X16} " +
+                            $"queue={waiter.QueueName} submission={waiter.SubmissionId}");
+                    }
+
+                    ResumeSuspendedDcb(ctx, gpuState, waiter, tracePackets);
+                    resumedCount++;
+                }
+            }
+
+            // Indirect-dispatch dimension retries whose deadline elapsed are
+            // resumed so they drop instead of stalling. Flag each so its immediate
+            // re-parse drops the dispatch rather than suspending again.
+            var expiredRetries = GpuWaitRegistry.CollectExpiredRetries(
+                CanonicalMemory(ctx.Memory), System.Diagnostics.Stopwatch.GetTimestamp());
+            if (expiredRetries is not null)
+            {
+                lock (_indirectDimsGate)
+                {
+                    foreach (var retry in expiredRetries)
+                    {
+                        _indirectDimsExpired.Add((
+                            CanonicalMemory(ctx.Memory),
+                            retry.ResumeAddress));
+                    }
+                }
+
+                foreach (var retry in expiredRetries)
+                {
+                    ResumeSuspendedDcb(ctx, gpuState, retry, tracePackets);
+                }
+            }
+
+            // Break cross-queue deadlocks: a waiter stuck past the deadline whose
+            // label a real producer already signalled (but guest memory has since
+            // been reset for reuse) is released using that produced value. Only
+            // fires for genuinely wedged waits, so fast-resolving ones on working
+            // titles are untouched.
+            var deadlockBroken = GpuWaitRegistry.CollectDeadlockBroken(
+                CanonicalMemory(ctx.Memory), System.Diagnostics.Stopwatch.GetTimestamp(), _gpuDeadlockBreakTicks);
+            if (deadlockBroken is not null)
+            {
+                foreach (var waiter in deadlockBroken)
+                {
+if (tracePackets)
+                    {
+                        TraceAgc(
+                            $"agc.deadlock_generation_break label=0x{waiter.WaitAddress:X16} " +
+                            $"queue={waiter.QueueName} submission={waiter.SubmissionId}");
+                    }
+
+                    ResumeSuspendedDcb(ctx, gpuState, waiter, tracePackets);
+                }
+            }
+
+            if (woken is null && producedWoken is null && expiredRetries is null && deadlockBroken is null)
+            {
+                if (_gpuWaitStaleTicks > 0 &&
+                    GpuWaitRegistry.CollectUnreportedStale(
+                        CanonicalMemory(ctx.Memory),
+                        System.Diagnostics.Stopwatch.GetTimestamp(),
+                        _gpuWaitStaleTicks) is { } stale)
+                {
+                    foreach (var waiter in stale)
+                    {
+                        ulong? currentValue = waiter.Is64Bit
+                            ? TryReadUInt64(ctx, waiter.WaitAddress, out var value64)
+                                ? value64
+                                : null
+                            : TryReadUInt32(ctx, waiter.WaitAddress, out var value32)
+                                ? value32
+                                : null;
+                        TraceWaitProducerState(
+                            ctx.Memory,
+                            waiter,
+                            waiter.CommandBufferAddress,
+                            waiter.ResumeAddress,
+                            stale: true,
+                            currentValue);
+                    }
+                }
+
+                return resumedCount;
+            }
+
+            if (woken is not null)
+            {
+                foreach (var waiter in woken)
+                {
+                    ResumeSuspendedDcb(ctx, gpuState, waiter, tracePackets);
+                    resumedCount++;
+                }
+            }
+        }
+
+        return resumedCount;
+    }
+
+    private static void ResumeSuspendedDcb(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        in GpuWaitRegistry.WaitingDcb waiter,
+        bool tracePackets)
+    {
+        var state = waiter.State as SubmittedDcbState ?? gpuState.Graphics;
+        // Any successful wake ends a synthetic ring-tail park. If parsing
+        // reaches another unwritten word it will arm a fresh waiter.
+        state.RingTailParkAddress = 0;
+        var remainingDwords = waiter.TotalDwords - waiter.ResumeOffset;
+        var waitedMilliseconds = waiter.RegisteredTicks == 0
+            ? 0.0
+            : (System.Diagnostics.Stopwatch.GetTimestamp() - waiter.RegisteredTicks) *
+              1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        if (_writeDataPacketPositionV74025)
+        {
+            var resumeCount = Interlocked.Increment(ref _v74025WaitResumeTraceCount);
+            if (resumeCount <= 256 || (resumeCount & (resumeCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.25][WAIT_RESUME] count={resumeCount} " +
+                    $"queue={waiter.QueueName} submission={waiter.SubmissionId} " +
+                    $"label=0x{waiter.WaitAddress:X16} waited_ms={waitedMilliseconds:F3} " +
+                    $"remaining_dwords={remainingDwords}");
+            }
+        }
+        TraceSlowWaitProducerV74027(
+            ctx,
+            waiter,
+            waitedMilliseconds);
+        TraceAgcShader(
+            $"agc.queue_resumed queue={waiter.QueueName} " +
+            $"submission={waiter.SubmissionId} label=0x{waiter.WaitAddress:X16} " +
+            $"resume=0x{waiter.ResumeAddress:X16} remaining_dwords={remainingDwords} " +
+            $"waited_ms={waitedMilliseconds:F3}");
+        GpuWaitProfile.RecordResume(waiter.WaitAddress, waitedMilliseconds);
+        if (_traceLabelProvenanceV734)
+        {
+            TraceLabelProvenanceV734(
+                $"wait_resumed label=0x{waiter.WaitAddress:X16} " +
+                $"queue={waiter.QueueName} submission={waiter.SubmissionId} " +
+                $"waited_ms={waitedMilliseconds:F3}");
+        }
+        if (remainingDwords == 0)
+        {
+            state.IsSuspended = false;
+            state.HasActiveSubmission = false;
+            NotifySubmittedDcbCompleted(gpuState, state, waiter.SubmissionId);
+            PumpSubmittedQueueOrSchedulerV74030(ctx, gpuState, state);
+            return;
+        }
+
+        if (tracePackets)
+        {
+            TraceAgc(
+                $"agc.dcb.resumed addr=0x{waiter.WaitAddress:X16} " +
+                $"resume=0x{waiter.ResumeAddress:X16} dwords={remainingDwords} forced=False");
+        }
+
+        System.Diagnostics.Debug.Assert(state.HasActiveSubmission);
+        System.Diagnostics.Debug.Assert(state.IsSuspended);
+        state.QueueName = waiter.QueueName ?? state.QueueName;
+        state.ActiveSubmissionId = waiter.SubmissionId;
+        state.IsSuspended = false;
+        if (ParseSubmittedDcb(
+                ctx,
+                gpuState,
+                state,
+                waiter.ResumeAddress,
+                remainingDwords,
+                tracePackets))
+        {
+            state.IsSuspended = true;
+            return;
+        }
+
+        state.HasActiveSubmission = false;
+        NotifySubmittedDcbCompleted(gpuState, state, waiter.SubmissionId);
+        PumpSubmittedQueueOrSchedulerV74030(ctx, gpuState, state);
+    }
+
+    private static void TraceSubmittedWait(
+        ulong address,
+        ulong value,
+        ulong mask,
+        ulong reference,
+        uint compareFunction,
+        int bits,
+        bool tracePacket)
+    {
+        var maskedValue = value & mask;
+        var satisfied = compareFunction switch
+        {
+            0 => true,
+            1 => maskedValue < reference,
+            2 => maskedValue <= reference,
+            3 => maskedValue == reference,
+            4 => maskedValue != reference,
+            5 => maskedValue >= reference,
+            6 => maskedValue > reference,
+            _ => true,
+        };
+        if (!tracePacket && (satisfied || !ShouldTraceHotPath(ref _unsatisfiedWaitTraceCount)))
+        {
+            return;
+        }
+
+        TraceAgc(
+            $"agc.dcb.wait_reg_mem bits={bits} addr=0x{address:X16} " +
+            $"value=0x{value:X16} mask=0x{mask:X16} ref=0x{reference:X16} " +
+            $"compare={compareFunction} satisfied={satisfied}");
+    }
+
+    private static void ApplySubmittedStandardReleaseMem(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        bool tracePacket)
+    {
+        if (!TryReadUInt32(ctx, packetAddress + 8, out var control) ||
+            !TryReadUInt32(ctx, packetAddress + 12, out var destinationLo) ||
+            !TryReadUInt32(ctx, packetAddress + 16, out var destinationHi) ||
+            !TryReadUInt32(ctx, packetAddress + 20, out var dataLo) ||
+            !TryReadUInt32(ctx, packetAddress + 24, out var dataHi))
+        {
+            return;
+        }
+
+        var (destination, dataSelection) = DecodeStandardReleaseMemControl(control);
+        var interruptSelection = (control >> 24) & 0x7u;
+        var destinationAddress = ((ulong)destinationHi << 32) | destinationLo;
+        var data = ((ulong)dataHi << 32) | dataLo;
+        var writeLength = dataSelection switch
+        {
+            1 => (ulong)sizeof(uint),
+            2 or 3 or 4 => (ulong)sizeof(ulong),
+            _ => 0UL,
+        };
+        var writesGuestMemory = destination is 0 or 1 &&
+                                destinationAddress != 0 &&
+                                writeLength != 0;
+
+        if (writesGuestMemory &&
+            (OverlapsTarget45DRangeV74041(destinationAddress, writeLength) ||
+             IsTarget45DIdentityV74041(destinationAddress)))
+        {
+            TraceTarget45DProducerV74041(
+                "release_mem_standard",
+                $"packet=0x{packetAddress:X16} dst=0x{destinationAddress:X16} " +
+                $"bytes={writeLength} data_sel={dataSelection} data=0x{data:X16}");
+        }
+
+        SubmitOrderedGpuSideEffect(
+            ctx,
+            gpuState,
+            state,
+            () =>
+            {
+                if (writesGuestMemory)
+                {
+                    InvalidateDcbWindowIfOverlaps(destinationAddress, writeLength);
+                }
+
+                var producedValue = data;
+                var wroteData = false;
+                if (writesGuestMemory)
+                {
+                    switch (dataSelection)
+                    {
+                        case 1:
+                            producedValue = dataLo;
+                            wroteData = TryWriteUInt32(
+                                ctx,
+                                destinationAddress,
+                                dataLo);
+                            break;
+                        case 2:
+                            wroteData = ctx.TryWriteUInt64(
+                                destinationAddress,
+                                data);
+                            break;
+                        case 3:
+                        case 4:
+                            // Hardware counter writes are timing values sampled
+                            // at the release point, not the immediate payload.
+                            producedValue = unchecked((ulong)
+                                System.Diagnostics.Stopwatch.GetTimestamp());
+                            wroteData = ctx.TryWriteUInt64(
+                                destinationAddress,
+                                producedValue);
+                            break;
+                    }
+                }
+
+                // Record every supported data selection. Timestamp labels are
+                // synchronization producers too and must not be invisible to a
+                // WAIT_REG_MEM that races with a guest reset.
+                if (wroteData && dataSelection is 1 or 2 or 3 or 4)
+                {
+                    GpuWaitRegistry.RecordProduced(
+                        CanonicalMemory(ctx.Memory),
+                        destinationAddress,
+                        producedValue);
+                }
+                else if (writesGuestMemory &&
+                         !wroteData &&
+                         dataSelection is 1 or 2 or 3 or 4)
+                {
+                    ReportLabelWriteFailure(
+                        "release_mem_standard",
+                        destinationAddress,
+                        producedValue,
+                        dataSelection);
+                }
+
+                if (wroteData)
+                {
+                    // A 64-bit release can satisfy a 32-bit waiter on either
+                    // dword. Re-read every watched overlap so the upper half is
+                    // latched too, including transient timestamp values.
+                    RecordProducedLabelsInRange(
+                        ctx,
+                        destinationAddress,
+                        writeLength);
+                }
+
+                // Upstream 0.0.3: RELEASE_MEM only raises an equeue event
+                // when int_sel requests one. This restores frame-graph kicks
+                // without generating spurious completion refcount decrements.
+                var wokenQueues = interruptSelection != 0
+                    ? KernelEventQueueCompatExports.TriggerRegisteredEventsByFilter(
+                        KernelEventQueueCompatExports.KernelEventFilterGraphics,
+                        data)
+                    : 0;
+
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.dcb.release_mem_standard dst_sel={destination} " +
+                        $"dst=0x{destinationAddress:X16} data_sel={dataSelection} " +
+                        $"data=0x{data:X16} wrote={wroteData} " +
+                        $"int={interruptSelection} woken={wokenQueues}");
+                }
+            },
+            $"release_mem_standard dst=0x{destinationAddress:X16} data=0x{data:X16}",
+            packetAddress,
+            writesGuestMemory ? destinationAddress : 0,
+            writesGuestMemory ? writeLength : 0,
+            requiresGpuBufferReadback: !_releaseMemQueueCompletionOnlyV74085);
+    }
+
+    // V74.0.60 / upstream 0.0.3 hot-path parity:
+    // scalar-pointer fallback is a compatibility result, not proof that a
+    // global GPU->CPU drain is required. The accumulated V74 retry used the
+    // backend's 5000 ms default timeout and could serialize every repeated UI
+    // draw that hit the fallback. Upstream 0.0.3 evaluates directly.
+    //
+    // Keep the old global retry only as an explicit diagnostic A/B switch.
+    private static readonly bool _shaderResourceGlobalVisibilityRetryV74060 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_SHADER_RESOURCE_GLOBAL_VISIBILITY_RETRY"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _shaderResourceVisibilityRetryElidedCountV74060;
+
+    private static long _labelWriteFailureCount;
+
+    /// <summary>
+    /// Reports a GPU release-label write that could not reach guest memory.
+    /// Rate-limited (first 16, then powers of two) because a wedged queue can
+    /// retry, but never silenced: this is the difference between a diagnosable
+    /// fault and a permanently suspended graphics queue with no explanation.
+    /// </summary>
+    private static void ReportLabelWriteFailure(
+        string packet,
+        ulong destinationAddress,
+        ulong data,
+        uint dataSelection)
+    {
+        var count = Interlocked.Increment(ref _labelWriteFailureCount);
+        if (count > 16 && (count & (count - 1)) != 0)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[LOADER][ERROR] agc.label_write_failed packet={packet} " +
+            $"dst=0x{destinationAddress:X16} data=0x{data:X16} " +
+            $"data_sel={dataSelection} count={count} â€” a suspended WAIT_REG_MEM " +
+            $"on this label can no longer be satisfied or deadlock-broken.");
+    }
+
+    private static (uint Destination, uint DataSelection)
+        DecodeStandardReleaseMemControl(uint control) =>
+        (
+            Destination: (control >> 16) & 0x3u,
+            DataSelection: (control >> 29) & 0x7u);
+
+    private static void ApplySubmittedReleaseMem(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        bool tracePacket)
+    {
+        if (!TryReadUInt32(ctx, packetAddress + 8, out var control) ||
+            !TryReadUInt32(ctx, packetAddress + 12, out var destinationLo) ||
+            !TryReadUInt32(ctx, packetAddress + 16, out var destinationHi) ||
+            !TryReadUInt32(ctx, packetAddress + 20, out var dataLo) ||
+            !TryReadUInt32(ctx, packetAddress + 24, out var dataHi))
+        {
+            return;
+        }
+
+        var dataSelection = (control >> 16) & 0xFFu;
+        var interrupt = (control >> 24) & 0xFFu;
+        var destinationAddress = ((ulong)destinationHi << 32) | destinationLo;
+        var data = ((ulong)dataHi << 32) | dataLo;
+        var writeLength = dataSelection switch
+        {
+            1 => (ulong)sizeof(uint),
+            2 or 3 => (ulong)sizeof(ulong),
+            _ => 0UL,
+        };
+        if (writeLength != 0 &&
+            (OverlapsTarget45DRangeV74041(destinationAddress, writeLength) ||
+             IsTarget45DIdentityV74041(destinationAddress)))
+        {
+            TraceTarget45DProducerV74041(
+                "release_mem_agc",
+                $"packet=0x{packetAddress:X16} dst=0x{destinationAddress:X16} " +
+                $"bytes={writeLength} data_sel={dataSelection} data=0x{data:X16}");
+        }
+
+        SubmitOrderedGpuSideEffect(
+            ctx,
+            gpuState,
+            state,
+            () =>
+            {
+                InvalidateDcbWindowIfOverlaps(destinationAddress, writeLength);
+                var producedValue = data;
+                var wroteData = false;
+                switch (dataSelection)
+                {
+                    case 1:
+                        producedValue = dataLo;
+                        wroteData = TryWriteUInt32(ctx, destinationAddress, dataLo);
+                        break;
+                    case 2:
+                        wroteData = ctx.TryWriteUInt64(destinationAddress, data);
+                        break;
+                    case 3:
+                        // Data selection 3 samples the GPU clock at the release
+                        // point. Preserve that exact sampled value in producer
+                        // history; the packet payload itself is not the label.
+                        producedValue = unchecked((ulong)
+                            System.Diagnostics.Stopwatch.GetTimestamp());
+                        wroteData = ctx.TryWriteUInt64(
+                            destinationAddress,
+                            producedValue);
+                        break;
+                }
+
+                // Latch all real release producers, including timestamp labels.
+                // The guest can reset them before the monitor's next memory read.
+                if (wroteData && dataSelection is 1 or 2 or 3)
+                {
+                    GpuWaitRegistry.RecordProduced(
+                        CanonicalMemory(ctx.Memory),
+                        destinationAddress,
+                        producedValue);
+                    RecordProducedLabelsInRange(
+                        ctx,
+                        destinationAddress,
+                        writeLength);
+                }
+                else if (!wroteData && dataSelection is 1 or 2 or 3)
+                {
+                    ReportLabelWriteFailure(
+                        "release_mem",
+                        destinationAddress,
+                        producedValue,
+                        dataSelection);
+                }
+
+                var wokenQueues = interrupt != 0
+                    ? KernelEventQueueCompatExports.TriggerRegisteredEventsByFilter(
+                        KernelEventQueueCompatExports.KernelEventFilterGraphics,
+                        data)
+                    : 0;
+
+                if (tracePacket)
+                {
+                    TraceAgc(
+                        $"agc.dcb.release_mem dst=0x{destinationAddress:X16} " +
+                        $"data_sel={dataSelection} data=0x{data:X16} wrote={wroteData} " +
+                        $"int={interrupt} woken={wokenQueues}");
+                }
+            },
+            $"release_mem dst=0x{destinationAddress:X16} data=0x{data:X16}",
+            packetAddress,
+            dataSelection is 1 or 2 or 3 ? destinationAddress : 0,
+            writeLength,
+            requiresGpuBufferReadback: !_releaseMemQueueCompletionOnlyV74085);
+    }
+
+    private static void ApplySubmittedRegisters(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        uint packetLength,
+        uint op,
+        uint register)
+    {
+        if (op is ItSetShReg or ItSetContextReg or ItSetUconfigReg)
+        {
+            if (packetLength < 3 ||
+                !TryReadUInt32(ctx, packetAddress + sizeof(uint), out var startRegister))
+            {
+                return;
+            }
+
+            var directDestination = op switch
+            {
+                ItSetShReg => state.ShRegisters,
+                ItSetContextReg => state.CxRegisters,
+                _ => state.UcRegisters,
+            };
+            for (uint index = 0; index < packetLength - 2; index++)
+            {
+                if (!TryReadUInt32(
+                        ctx,
+                        packetAddress + 8 + ((ulong)index * sizeof(uint)),
+                        out var value))
+                {
+                    return;
+                }
+
+                directDestination[startRegister + index] = value;
+                if (op == ItSetUconfigReg)
+                {
+                    ApplyUcIndexTypeIfNeeded(state, startRegister + index, value);
+                }
+            }
+
+            return;
+        }
+
+        if (op != ItNop ||
+            register is not (RCxRegsIndirect or RShRegsIndirect or RUcRegsIndirect) ||
+            packetLength < 4 ||
+            !TryReadUInt32(ctx, packetAddress + sizeof(uint), out var registerCount) ||
+            !TryReadUInt64(ctx, packetAddress + 8, out var registersAddress))
+        {
+            return;
+        }
+
+        var destination = register switch
+        {
+            RCxRegsIndirect => state.CxRegisters,
+            RShRegsIndirect => state.ShRegisters,
+            _ => state.UcRegisters,
+        };
+        for (uint index = 0; index < registerCount; index++)
+        {
+            var entryAddress = registersAddress + ((ulong)index * 8);
+            if (!TryReadUInt32(ctx, entryAddress, out var registerOffset) ||
+                !TryReadUInt32(ctx, entryAddress + sizeof(uint), out var value))
+            {
+                return;
+            }
+
+            // The indirect table has an explicit count; offset zero is a real
+            // context-register index (DB_RENDER_CONTROL), not a terminator.
+            // Dropping it leaves stale depth/render-control state active in
+            // later passes.
+            destination[registerOffset] = value;
+            if (register == RUcRegsIndirect)
+            {
+                ApplyUcIndexTypeIfNeeded(state, registerOffset, value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test-only view of a parsed graphics context register. False when the
+    /// register was never written.
+    /// </summary>
+    internal static bool TryGetGraphicsContextRegisterForTests(
+        CpuContext ctx,
+        uint registerOffset,
+        out uint value)
+    {
+        value = 0;
+        if (!_submittedGpuStates.TryGetValue(CanonicalMemory(ctx.Memory), out var gpuState))
+        {
+            return false;
+        }
+
+        lock (gpuState.Gate)
+        {
+            return gpuState.Graphics.CxRegisters.TryGetValue(registerOffset, out value);
+        }
+    }
+
+    /// <summary>
+    /// SH-register counterpart of <see cref="TryGetGraphicsContextRegisterForTests"/>;
+    /// the shader stage addresses live here.
+    /// </summary>
+    internal static bool TryGetGraphicsShRegisterForTests(
+        CpuContext ctx,
+        uint registerOffset,
+        out uint value)
+    {
+        value = 0;
+        if (!_submittedGpuStates.TryGetValue(CanonicalMemory(ctx.Memory), out var gpuState))
+        {
+            return false;
+        }
+
+        lock (gpuState.Gate)
+        {
+            return gpuState.Graphics.ShRegisters.TryGetValue(registerOffset, out value);
+        }
+    }
+
+    /// <summary>
+    /// GraphicsDcbSetIndexSize writes VGT_INDEX_TYPE via SET_UCONFIG_REG.
+    /// Mirror that into <see cref="SubmittedDcbState.IndexSize"/>.
+    /// </summary>
+    private static void ApplyUcIndexTypeIfNeeded(
+        SubmittedDcbState state,
+        uint registerOffset,
+        uint value)
+    {
+        if (registerOffset == VgtIndexType)
+        {
+            state.IndexSize = value & 0x3;
+        }
+    }
+
+    private const int IndirectArgsFlushTimeoutMilliseconds = 250;
+
+    private static void FlushGpuWorkForIndirectArgs(SubmittedGpuState gpuState)
+    {
+        var pending = gpuState.WorkSequence;
+        if (pending == 0 || pending > long.MaxValue)
+        {
+            return;
+        }
+
+        GuestGpu.Current.WaitForGuestWork(
+            (long)pending,
+            IndirectArgsFlushTimeoutMilliseconds);
+    }
+
+    private static bool IsGeometryDrawOpcode(uint op) =>
+        op is ItDrawIndirect or
+            ItDrawIndexIndirect or
+            ItDrawIndex2 or
+            ItDrawIndexAuto or
+            ItDrawIndexMultiAuto or
+            ItDrawIndexOffset2 or
+            ItDrawIndexIndirectMulti;
+
+    private static void TraceGeometryDrawCandidate(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        uint packetLength,
+        uint op,
+        uint register,
+        bool resolved,
+        uint drawCount,
+        bool indexed)
+    {
+        if (!_traceGeometryDraws)
+        {
+            return;
+        }
+
+        var trace = Interlocked.Increment(ref _v25GeometryDrawTraceCount);
+        if (trace > 4096 && trace % 1000 != 0)
+        {
+            return;
+        }
+
+        var hasExportShader = TryGetShaderAddress(
+            state.ShRegisters,
+            SpiShaderPgmLoEs,
+            SpiShaderPgmHiEs,
+            out var exportShaderAddress);
+        var hasPixelShader = TryGetShaderAddress(
+            state.ShRegisters,
+            SpiShaderPgmLoPs,
+            SpiShaderPgmHiPs,
+            out var pixelShaderAddress);
+        state.UcRegisters.TryGetValue(VgtPrimitiveType, out var primitiveType);
+        var targetCount = GetRenderTargets(state.CxRegisters).Count;
+        var words = string.Empty;
+        var wordsToRead = Math.Min(packetLength, 10u);
+        for (var word = 0u; word < wordsToRead; word++)
+        {
+            words += TryReadUInt32(ctx, packetAddress + ((ulong)word * 4), out var rawWord)
+                ? (word == 0 ? $"{rawWord:X8}" : $"/{rawWord:X8}")
+                : (word == 0 ? "????????" : "/????????");
+        }
+
+        Console.Error.WriteLine(
+            $"[V25][DRAW] agc.draw_candidate#{trace} queue={state.QueueName} " +
+            $"submission={state.ActiveSubmissionId} packet=0x{packetAddress:X16} " +
+            $"op=0x{op:X2} reg=0x{register:X2} len={packetLength} " +
+            $"resolved={resolved} count={drawCount} indexed={indexed} " +
+            $"prim=0x{primitiveType:X} instances={state.InstanceCount} " +
+            $"index_base=0x{state.IndexBufferAddress:X16} index_count={state.IndexBufferCount} " +
+            $"index_size={state.IndexSize} index_offset={state.DrawIndexOffset} " +
+            $"indirect_base=0x{state.IndirectArgsAddress:X16} " +
+            $"es=0x{(hasExportShader ? exportShaderAddress : 0):X16} " +
+            $"ps=0x{(hasPixelShader ? pixelShaderAddress : 0):X16} " +
+            $"targets={targetCount} words={words}");
+    }
+    private static void TracePrimitivePipelineDraw(
+        SubmittedDcbState state,
+        ulong drawSequence,
+        uint vertexCount,
+        bool indexed,
+        bool hasExportShader,
+        ulong exportShaderAddress,
+        bool hasPixelShader,
+        ulong pixelShaderAddress)
+    {
+        if (!_tracePrimitivePipelineV180)
+        {
+            return;
+        }
+
+        var trace = Interlocked.Increment(ref _primitivePipelineTraceCountV180);
+
+        // SHARPEMU_V74_0_56_27_BOUNDED_PRIMITIVE_TRACE
+        // Keep the provenance diagnostic cheap enough to leave enabled through
+        // the title boot: first 128 draws, then powers of two only.
+        if (trace > 128 &&
+            (trace & (trace - 1)) != 0)
+        {
+            return;
+        }
+
+        var hasGeometryShader = TryGetShaderAddress(
+            state.ShRegisters,
+            SpiShaderPgmLoGs,
+            SpiShaderPgmHiGs,
+            out var geometryShaderAddress);
+        state.ShRegisters.TryGetValue(SpiShaderPgmRsrc1Gs, out var gsRsrc1);
+        state.ShRegisters.TryGetValue(SpiShaderPgmRsrc1Gs + 1, out var gsRsrc2);
+        var stagesOffset = unchecked((uint)Volatile.Read(ref _primitiveStagesOffsetV180));
+        var gsOutOffset = unchecked((uint)Volatile.Read(ref _primitiveGsOutOffsetV180));
+        var geCntlOffset = unchecked((uint)Volatile.Read(ref _primitiveGeCntlOffsetV180));
+        var geUserVgprOffset = unchecked((uint)Volatile.Read(ref _primitiveGeUserVgprOffsetV180));
+        uint stagesEn = 0;
+        uint gsOutPrimType = 0;
+        uint geCntl = 0;
+        uint geUserVgpr = 0;
+        var hasStages = stagesOffset != uint.MaxValue &&
+            state.CxRegisters.TryGetValue(stagesOffset, out stagesEn);
+        var hasGsOut = gsOutOffset != uint.MaxValue &&
+            state.CxRegisters.TryGetValue(gsOutOffset, out gsOutPrimType);
+        var hasGeCntl = geCntlOffset != uint.MaxValue &&
+            state.UcRegisters.TryGetValue(geCntlOffset, out geCntl);
+        var hasGeUserVgpr = geUserVgprOffset != uint.MaxValue &&
+            state.UcRegisters.TryGetValue(geUserVgprOffset, out geUserVgpr);
+        state.UcRegisters.TryGetValue(VgtPrimitiveType, out var primitiveType);
+        Console.Error.WriteLine(
+            $"[V180][PRIM] agc.primitive_draw_state#{trace} seq={drawSequence} " +
+            $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+            $"vertices={vertexCount} indexed={(indexed ? 1 : 0)} prim=0x{primitiveType:X8} " +
+            $"es=0x{(hasExportShader ? exportShaderAddress : 0):X16} " +
+            $"gs=0x{(hasGeometryShader ? geometryShaderAddress : 0):X16} " +
+            $"ps=0x{(hasPixelShader ? pixelShaderAddress : 0):X16} " +
+            $"stages_present={(hasStages ? 1 : 0)} stages=0x{stagesOffset:X4}:0x{stagesEn:X8} " +
+            $"gs_out_present={(hasGsOut ? 1 : 0)} gs_out=0x{gsOutOffset:X4}:0x{gsOutPrimType:X8} " +
+            $"ge_cntl_present={(hasGeCntl ? 1 : 0)} ge_cntl=0x{geCntlOffset:X4}:0x{geCntl:X8} " +
+            $"ge_user_vgpr_present={(hasGeUserVgpr ? 1 : 0)} ge_user_vgpr=0x{geUserVgprOffset:X4}:0x{geUserVgpr:X8} " +
+            $"gs_rsrc1=0x{gsRsrc1:X8} gs_rsrc2=0x{gsRsrc2:X8}");
+    }
+
+    private static void TracePrimitiveNoPsProgram(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong drawSequence,
+        ulong exportShaderAddress)
+    {
+        if (!_tracePrimitivePipelineV180)
+        {
+            return;
+        }
+
+        ulong exportShaderHeader;
+        lock (_submitTraceGate)
+        {
+            _shaderHeadersByCode.TryGetValue(exportShaderAddress, out exportShaderHeader);
+        }
+
+        if (Gen5ShaderTranslator.TryCreateState(
+                ctx,
+                exportShaderAddress,
+                exportShaderHeader,
+                state.ShRegisters,
+                SelectExportUserDataRegister(state.ShRegisters),
+                out var exportState,
+                out var decodeError,
+                userDataScalarRegisterBase: NggUserDataScalarRegisterBase))
+        {
+            var opcodes = exportState.Program.Instructions
+                .Select(instruction => instruction.Opcode)
+                .Distinct()
+                .Take(64)
+                .ToArray();
+            var sideEffect = opcodes.Any(IsPrimitivePipelineSideEffectOpcode);
+            Console.Error.WriteLine(
+                $"[V180][PRIM] agc.primitive_no_ps_program seq={drawSequence} " +
+                $"es=0x{exportShaderAddress:X16} decoded=1 side_effect={(sideEffect ? 1 : 0)} " +
+                $"instruction_count={exportState.Program.Instructions.Count} " +
+                $"opcodes=[{string.Join(',', opcodes)}]");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                $"[V180][PRIM] agc.primitive_no_ps_program seq={drawSequence} " +
+                $"es=0x{exportShaderAddress:X16} decoded=0 side_effect=unknown " +
+                $"error={decodeError.Replace('\r', ' ').Replace('\n', ' ')}");
+        }
+    }
+
+    private static bool IsPrimitivePipelineSideEffectOpcode(string opcode) =>
+        opcode.StartsWith("BufferStore", StringComparison.Ordinal) ||
+        opcode.StartsWith("ImageStore", StringComparison.Ordinal) ||
+        opcode.Contains("Atomic", StringComparison.Ordinal);
+
+    private static bool TryReadSubmittedDrawCount(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        uint packetLength,
+        uint op,
+        out uint drawCount)
+    {
+        drawCount = 0;
+        switch (op)
+        {
+            case ItDrawIndexAuto when packetLength >= 3:
+                return TryReadUInt32(ctx, packetAddress + 4, out drawCount);
+            case ItDrawIndex2 when packetLength >= 6:
+                state.DrawIndexOffset = 0;
+                return TryReadUInt32(ctx, packetAddress + 16, out drawCount);
+            case ItDrawIndexOffset2 when packetLength >= 5:
+                if (!TryReadUInt32(ctx, packetAddress + 8, out var indexOffset))
+                {
+                    return false;
+                }
+
+                state.DrawIndexOffset = indexOffset;
+                return TryReadUInt32(ctx, packetAddress + 12, out drawCount);
+            case ItDrawIndexMultiAuto when packetLength >= 4:
+                if (!TryReadUInt32(ctx, packetAddress + 12, out var control))
+                {
+                    return false;
+                }
+
+                drawCount = (control >> 21) & 0x7FFu;
+                return true;
+            case ItDrawIndexIndirectMulti when packetLength >= 8 &&
+                state.IndirectArgsAddress != 0:
+                if (!TryReadUInt32(ctx, packetAddress + 4, out var multiOffset) ||
+                    !TryReadUInt32(ctx, packetAddress + 20, out var multiDraws) ||
+                    !TryReadUInt32(ctx, packetAddress + 24, out var multiStride))
+                {
+                    return false;
+                }
+
+
+                if (multiStride < DrawIndexedIndirectArgsSize)
+                {
+                    multiStride = DrawIndexedIndirectArgsSize;
+                }
+
+                var multiTotal = 0UL;
+                var multiCapped = multiDraws == 0
+                    ? DrawIndexedIndirectMaxScan
+                    : Math.Min(multiDraws, 4096u);
+                for (var draw = 0u; draw < multiCapped; draw++)
+                {
+                    if (!TryReadUInt32(
+                            ctx,
+                            state.IndirectArgsAddress + multiOffset + ((ulong)draw * multiStride),
+                            out var subCount))
+                    {
+                        break;
+                    }
+
+                    if (subCount == 0 && multiDraws == 0)
+                    {
+                        break;
+                    }
+
+                    multiTotal += subCount;
+                }
+
+                var multiProbe = Interlocked.Increment(ref _indirectMultiProbeCount);
+                if (multiProbe <= 12 || multiProbe % 250 == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][WARN] agc.draw_multi#{multiProbe} args=0x{state.IndirectArgsAddress:X} " +
+                        $"off=0x{multiOffset:X} draws={multiDraws} stride={multiStride} " +
+                        $"total={multiTotal}");
+                }
+
+                drawCount = (uint)Math.Min(multiTotal, uint.MaxValue);
+                return drawCount != 0;
+            case ItDrawIndirect or ItDrawIndexIndirect:
+                var probe = Interlocked.Increment(ref _indirectDrawProbeCount);
+                if (!TryReadUInt32(ctx, packetAddress + 4, out var dataOffset))
+                {
+                    dataOffset = 0xFFFFFFFFu;
+                }
+
+                var readable = packetLength >= 5 &&
+                    state.IndirectArgsAddress != 0 &&
+                    dataOffset != 0xFFFFFFFFu;
+                var resolved = readable &&
+                    TryReadUInt32(
+                        ctx,
+                        state.IndirectArgsAddress + dataOffset,
+                        out drawCount);
+                if (probe <= 12 || probe % 100 == 0)
+                {
+                    var dump = string.Empty;
+                    for (var word = 0; word < 8; word++)
+                    {
+                        dump += TryReadUInt32(
+                            ctx,
+                            state.IndirectArgsAddress + dataOffset + ((ulong)word * 4),
+                            out var raw)
+                            ? $" {raw}"
+                            : " ?";
+                    }
+
+                    Console.Error.WriteLine(
+                        $"[LOADER][WARN] agc.draw_indirect#{probe} op=0x{op:X} len={packetLength} " +
+                        $"args=0x{state.IndirectArgsAddress:X} off=0x{dataOffset:X} " +
+                        $"resolved={resolved} count={drawCount} words:{dump}");
+                }
+
+                return resolved;
+            default:
+                return false;
+        }
+    }
+
+    private static void TryTranslateGuestDraw(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        uint vertexCount,
+        bool indexed)
+    {
+        var hasExportShader = TryGetShaderAddress(
+            state.ShRegisters,
+            SpiShaderPgmLoEs,
+            SpiShaderPgmHiEs,
+            out var exportShaderAddress);
+        var hasPixelShader = TryGetShaderAddress(
+            state.ShRegisters,
+            SpiShaderPgmLoPs,
+            SpiShaderPgmHiPs,
+            out var pixelShaderAddress);
+        var hasPsInputEna = state.CxRegisters.TryGetValue(SpiPsInputEna, out var psInputEna);
+        var hasPsInputAddr = state.CxRegisters.TryGetValue(SpiPsInputAddr, out var psInputAddr);
+        state.UcRegisters.TryGetValue(VgtPrimitiveType, out var primitiveType);
+        // SHARPEMU_V73_17_MASKED_RT_IDENTITY
+        // Preserve every programmed CB_COLORn surface as a resource identity.
+        // CB_TARGET_MASK decides whether the current draw writes the surface; it
+        // must not erase the surface from DCC/alias provenance.
+        var allBoundRenderTargets = GetRenderTargets(
+            state.CxRegisters,
+            includeMaskedTargets: true);
+        IReadOnlyList<RenderTargetDescriptor> renderTargets = allBoundRenderTargets;
+        if (state.CxRegisters.TryGetValue(CbTargetMask, out var activeTargetMask))
+        {
+            renderTargets = allBoundRenderTargets
+                .Where(target =>
+                    ((activeTargetMask >> ((int)target.Slot * 4)) & 0xFu) != 0)
+                .ToArray();
+        }
+        var drawSequence = ++gpuState.WorkSequence;
+        TracePrimitivePipelineDraw(
+            state,
+            drawSequence,
+            vertexCount,
+            indexed,
+            hasExportShader,
+            exportShaderAddress,
+            hasPixelShader,
+            pixelShaderAddress);
+        state.TranslatedDraw = null;
+        state.GuestDrawKind = GuestDrawKind.None;
+
+        // CB modes EliminateFastClear / FmaskDecompress / DccDecompress run
+        // colour-buffer metadata ops. The bound shader is only a vehicle and
+        // must not be applied as a normal colour draw.
+        //
+        // V61.6: these operations are still resource writes. Older code returned
+        // here before publishing their CB_COLORn identity into KnownRenderTargets,
+        // so a later SRD carrying the same DCC metadata VA could only fall back
+        // to a stale/zero CPU snapshot. Track masked CB targets as well because
+        // metadata operations do not require the ordinary colour write mask.
+        if (TryGetCbColorControlMode(state.CxRegisters, out var cbMode) &&
+            IsCbMetadataColorMode(cbMode))
+        {
+            var trackedTargets = TrackCbMetadataColorTargets(
+                state,
+                drawSequence,
+                cbMode,
+                hasExportShader ? exportShaderAddress : 0,
+                hasPixelShader ? pixelShaderAddress : 0,
+                vertexCount,
+                primitiveType);
+
+            if (_traceAgcShader || ShouldTraceHotPath(ref _cbMetadataSkipTraceCount))
+            {
+                TraceAgcShader(
+                    $"agc.cb_metadata_skip seq={drawSequence} mode={cbMode} " +
+                    $"tracked_targets={trackedTargets} " +
+                    $"es=0x{(hasExportShader ? exportShaderAddress : 0):X16} " +
+                    $"ps=0x{(hasPixelShader ? pixelShaderAddress : 0):X16} " +
+                    $"vertices={vertexCount}");
+            }
+
+            return;
+        }
+
+        // V61.12: binding a CB_COLORn register does not make that surface a
+        // writer.  Pixel export filtering happens later, after the shader has
+        // been decoded.  Keep the bound surfaces discoverable as resource
+        // identities here, but publish RenderTargetWriters only after the
+        // translated draw has selected the MRTs that are actually submitted.
+        foreach (var target in allBoundRenderTargets)
+        {
+            state.KnownRenderTargets[target.Address] = target;
+            var activeForWrite = renderTargets.Any(active =>
+                active.Slot == target.Slot &&
+                active.Address == target.Address);
+
+            if (IsTarget45DIdentityV74041(
+                    target.Address,
+                    target.MetadataAddress))
+            {
+                TraceTarget45DProducerV74041(
+                    "rt_bound",
+                    $"seq={drawSequence} slot={target.Slot} " +
+                    $"addr=0x{target.Address:X16} meta=0x{target.MetadataAddress:X16} " +
+                    $"size={target.Width}x{target.Height} " +
+                    $"fmt={target.Format}/{target.NumberType} tile={target.TileMode} " +
+                    $"active={(activeForWrite ? 1 : 0)} mask=0x{activeTargetMask:X8} " +
+                    $"ps=0x{(hasPixelShader ? pixelShaderAddress : 0):X16}");
+            }
+
+            if (!activeForWrite &&
+                target.DccEnabled &&
+                target.MetadataAddress != 0 &&
+                (_traceDccAlias || _traceAgcShader) &&
+                Interlocked.Increment(ref _v7317MaskedRtIdentityTraceCount) <= 1024)
+            {
+                Console.Error.WriteLine(
+                    "[V73.17][DCC] agc.rt_bound_identity_masked " +
+                    $"seq={drawSequence} slot={target.Slot} " +
+                    $"target=0x{target.Address:X16} meta=0x{target.MetadataAddress:X16} " +
+                    $"fmt={target.Format}/{target.NumberType} tile={target.TileMode} " +
+                    $"size={target.Width}x{target.Height}");
+            }
+
+            if (activeForWrite &&
+                (_traceAgcShader ||
+                 _tracePixelShaderAddress == pixelShaderAddress ||
+                 _traceRenderTargetAddress == target.Address))
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][TRACE] " +
+                    $"agc.rt_bound seq={drawSequence} slot={target.Slot} " +
+                    $"target=0x{target.Address:X16} fmt={target.Format} " +
+                    $"tile={target.TileMode} size={target.Width}x{target.Height} " +
+                    $"vertices={vertexCount} prim=0x{primitiveType:X} " +
+                    $"indexed={indexed} " +
+                    $"es=0x{(hasExportShader ? exportShaderAddress : 0):X16} " +
+                    $"ps=0x{(hasPixelShader ? pixelShaderAddress : 0):X16}");
+            }
+        }
+
+        if (vertexCount == 0 || vertexCount > 1_048_576)
+        {
+            return;
+        }
+
+        var translationError = string.Empty;
+        var depthState = DecodeDepthState(state.CxRegisters);
+        var depthTarget = DecodeDepthTarget(state.CxRegisters);
+        var hasDepthOnlyCandidate = hasExportShader &&
+            !hasPixelShader &&
+            depthTarget is not null &&
+            (depthState.TestEnable || depthState.WriteEnable || depthState.ClearEnable);
+
+        // RootFix V5.1: ES-only draw with no pixel stage and no active depth
+        // target has no color/depth/storage sink. Treat it as a legal no-op,
+        // not as a shader translation failure.
+        if (hasExportShader &&
+            !hasPixelShader &&
+            !hasDepthOnlyCandidate)
+        {
+            TracePrimitiveNoPsProgram(ctx, state, drawSequence, exportShaderAddress);
+            if (_traceAgcShader || ShouldTraceHotPath(ref _shaderTranslationMissTraceCount))
+            {
+                TraceAgcShader(
+                    $"agc.shader_no_output_noop vertices={vertexCount} " +
+                    $"es=0x{exportShaderAddress:X16} ps=missing");
+            }
+
+            return;
+        }
+
+        if (hasDepthOnlyCandidate &&
+            TryCreateTranslatedDepthOnlyGuestDraw(
+                ctx,
+                state,
+                exportShaderAddress,
+                vertexCount,
+                indexed,
+                depthTarget!,
+                out var depthOnlyDraw,
+                out translationError))
+        {
+            state.TranslatedDraw = depthOnlyDraw;
+            var activeDepthTarget = depthOnlyDraw.DepthTarget!;
+            var textures = CreateGuestDrawTextures(
+                ctx,
+                depthOnlyDraw.Textures,
+                out _,
+                gpuState,
+                state);
+            var globalMemoryBuffers =
+                CreateTranslatedDrawGlobalBuffers(depthOnlyDraw);
+            var vertexBuffers =
+                CreateGuestVertexBuffers(depthOnlyDraw.VertexInputs);
+            var renderState = depthOnlyDraw.RenderState;
+            if (activeDepthTarget.ReadOnly && renderState.Depth.WriteEnable)
+            {
+                renderState = renderState with
+                {
+                    Depth = renderState.Depth with { WriteEnable = false },
+                };
+            }
+
+            TraceDrawCompact(
+                drawSequence,
+                depthOnlyDraw,
+                textures,
+                vertexBuffers);
+            GuestGpu.Current.SubmitDepthOnlyTranslatedDraw(
+                depthOnlyDraw.PixelShader,
+                textures,
+                globalMemoryBuffers,
+                depthOnlyDraw.AttributeCount,
+                activeDepthTarget,
+                depthOnlyDraw.VertexShader,
+                depthOnlyDraw.VertexCount,
+                depthOnlyDraw.InstanceCount,
+                depthOnlyDraw.PrimitiveType,
+                depthOnlyDraw.IndexBuffer,
+                vertexBuffers,
+                renderState,
+                depthOnlyDraw.PixelShaderAddress,
+                depthOnlyDraw.BaseVertex);
+
+            if (_traceAgcShader)
+            {
+                TraceAgcShader(
+                    $"agc.depth_only_draw seq={drawSequence} " +
+                    $"es=0x{exportShaderAddress:X16} " +
+                    $"depth=0x{activeDepthTarget.Address:X16}:" +
+                    $"{activeDepthTarget.Width}x{activeDepthTarget.Height}:" +
+                    $"fmt{activeDepthTarget.GuestFormat}/sw{activeDepthTarget.SwizzleMode} " +
+                    $"test={(renderState.Depth.TestEnable ? 1 : 0)} " +
+                    $"write={(renderState.Depth.WriteEnable ? 1 : 0)} " +
+                    $"func={renderState.Depth.CompareOp} ro={(activeDepthTarget.ReadOnly ? 1 : 0)}");
+            }
+
+            return;
+        }
+
+        if (hasExportShader &&
+            hasPixelShader &&
+            hasPsInputEna &&
+            hasPsInputAddr &&
+            TryCreateTranslatedGuestDraw(
+                ctx,
+                state,
+                exportShaderAddress,
+                pixelShaderAddress,
+                psInputEna,
+                psInputAddr,
+                vertexCount,
+                indexed,
+                out var translatedDraw,
+                out translationError))
+        {
+            state.TranslatedDraw = translatedDraw;
+            if (TryGetHardwareColorResolveTargets(
+                    state.CxRegisters,
+                    out var resolveSource,
+                    out var resolveDestination))
+            {
+                state.KnownRenderTargets[resolveSource.Address] = resolveSource;
+                state.KnownRenderTargets[resolveDestination.Address] = resolveDestination;
+                if (IsTarget45DIdentityV74041(
+                        resolveSource.Address,
+                        resolveSource.MetadataAddress) ||
+                    IsTarget45DIdentityV74041(
+                        resolveDestination.Address,
+                        resolveDestination.MetadataAddress))
+                {
+                    TraceTarget45DProducerV74041(
+                        "hardware_resolve",
+                        $"seq={drawSequence} " +
+                        $"src=0x{resolveSource.Address:X16}/meta=0x{resolveSource.MetadataAddress:X16}/" +
+                        $"{resolveSource.Width}x{resolveSource.Height}/f{resolveSource.Format}/n{resolveSource.NumberType} " +
+                        $"dst=0x{resolveDestination.Address:X16}/meta=0x{resolveDestination.MetadataAddress:X16}/" +
+                        $"{resolveDestination.Width}x{resolveDestination.Height}/f{resolveDestination.Format}/n{resolveDestination.NumberType} " +
+                        $"ps=0x{pixelShaderAddress:X16}");
+                }
+                ProvideRenderTargetInitialData(ctx, resolveSource);
+                if (GuestGpu.Current.TrySubmitGuestImageBlit(
+                        resolveSource.Address,
+                        resolveSource.Width,
+                        resolveSource.Height,
+                        resolveSource.Format,
+                        resolveSource.NumberType,
+                        resolveDestination.Address,
+                        resolveDestination.Width,
+                        resolveDestination.Height,
+                        resolveDestination.Format,
+                        resolveDestination.NumberType))
+                {
+                    state.RenderTargetWriters[resolveDestination.Address] =
+                        new RenderTargetWriter(
+                            drawSequence,
+                            exportShaderAddress,
+                            pixelShaderAddress,
+                            vertexCount,
+                            primitiveType);
+                    TraceAgcShader(
+                        $"agc.hardware_color_resolve seq={drawSequence} " +
+                        $"src=0x{resolveSource.Address:X16}:" +
+                        $"{resolveSource.Width}x{resolveSource.Height}:" +
+                        $"fmt{resolveSource.Format}/num{resolveSource.NumberType} " +
+                        $"dst=0x{resolveDestination.Address:X16}:" +
+                        $"{resolveDestination.Width}x{resolveDestination.Height}:" +
+                        $"fmt{resolveDestination.Format}/num{resolveDestination.NumberType}");
+                    ReturnPooledDrawArrays(
+                        translatedDraw,
+                        globals: true,
+                        vertex: true,
+                        index: true);
+                    state.TranslatedDraw = null;
+                    return;
+                }
+
+                TraceAgcShader(
+                    $"agc.hardware_color_resolve_unavailable seq={drawSequence} " +
+                    $"src=0x{resolveSource.Address:X16} " +
+                    $"dst=0x{resolveDestination.Address:X16}");
+            }
+
+            // A DCC fast clear writes metadata only; the colour block discards
+            // the quad's shaded output. Reset the attachment and drop the draw,
+            // which reproduces the observable effect of a clear to zero without
+            // modelling DCC block state.
+            if (translatedDraw.IsDccFastClear)
+            {
+                // SHARPEMU_V74_0_56_35_DCC_FASTCLEAR_IMMEDIATE_MATERIALIZATION
+                //
+                // RequestGuestColorClear alone only changes the load-op of a
+                // future render pass. DCC fast-clear is itself the producer:
+                // if the target is sampled before another draw binds it, the
+                // Vulkan image may not exist and V56.32 has nothing to alias.
+                //
+                // Materialize the exact zero result now, in ordered guest work.
+                // Keep RequestGuestColorClear afterwards so a subsequent pass
+                // retains the established LoadOp.Clear behavior as well.
+                if (_dccFastClearImmediateMaterializeV7405635 &&
+                    translatedDraw.GuestTargets.Count != 0)
+                {
+                    VulkanVideoPresenter.SubmitOffscreenColorClear(
+                        translatedDraw.GuestTargets,
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        exportShaderAddress);
+
+                    var materializeCountV7405635 =
+                        Interlocked.Increment(
+                            ref _v7405635FastClearMaterializeCount);
+
+                    if (materializeCountV7405635 <= 128 ||
+                        (materializeCountV7405635 &
+                         (materializeCountV7405635 - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.56.35][DCC_FASTCLEAR] " +
+                            $"action=materialize " +
+                            $"count={materializeCountV7405635} " +
+                            $"seq={drawSequence} " +
+                            $"targets={translatedDraw.GuestTargets.Count} " +
+                            $"es=0x{exportShaderAddress:X16} " +
+                            $"ps=0x{pixelShaderAddress:X16}");
+                    }
+
+                    foreach (var target in translatedDraw.GuestTargets)
+                    {
+                        if (target.Address == 0)
+                        {
+                            continue;
+                        }
+
+                        var targetCountV7405635 =
+                            Interlocked.Increment(
+                                ref _v7405635FastClearTargetCount);
+
+                        if (targetCountV7405635 <= 256 ||
+                            (targetCountV7405635 &
+                             (targetCountV7405635 - 1)) == 0)
+                        {
+                            Console.Error.WriteLine(
+                                $"[V74.0.56.35][DCC_FASTCLEAR] " +
+                                $"action=target " +
+                                $"count={targetCountV7405635} " +
+                                $"seq={drawSequence} " +
+                                $"addr=0x{target.Address:X16} " +
+                                $"meta=0x{target.MetadataAddress:X16} " +
+                                $"size={target.Width}x{target.Height} " +
+                                $"fmt={target.Format}/{target.NumberType} " +
+                                $"tile={target.TileMode}");
+                        }
+                    }
+                }
+
+                foreach (var target in translatedDraw.GuestTargets)
+                {
+                    if (target.Address != 0)
+                    {
+                        VulkanVideoPresenter.RequestGuestColorClear(target.Address);
+                    }
+                }
+
+                PublishTranslatedColorWriters(
+                    state,
+                    drawSequence,
+                    renderTargets,
+                    translatedDraw.RenderTargets,
+                    exportShaderAddress,
+                    pixelShaderAddress,
+                    vertexCount,
+                    primitiveType,
+                    indexed,
+                    writerKind: "dcc-fast-clear");
+
+                ReturnPooledDrawArrays(
+                    translatedDraw,
+                    globals: true,
+                    vertex: true,
+                    index: true);
+                state.TranslatedDraw = null;
+                return;
+            }
+
+            var firstTarget = translatedDraw.RenderTargets.FirstOrDefault();
+            if (firstTarget.Address != 0)
+            {
+                // Render every bound color target. A deferred G-buffer draw
+                // writes several targets in one guest pass; we render one bound
+                // target per Vulkan pass, each with the pixel variant that
+                // routes that target's MRT export slot to the fragment output.
+                // Every pass is enqueued in order on the same guest render
+                // queue. Share the immutable snapshots between those passes
+                // and let only the final pass return pooled arrays after its
+                // host upload. Copying the full vertex/global payload for each
+                // secondary target made deferred G-buffer draws allocate
+                // hundreds of MiB per second on the managed large-object heap.
+                var drawRenderTargets = translatedDraw.RenderTargets;
+                var lastTargetIndex = 0;
+                for (var targetIndex = 1; targetIndex < drawRenderTargets.Count; targetIndex++)
+                {
+                    if (drawRenderTargets[targetIndex].Address != 0)
+                    {
+                        lastTargetIndex = targetIndex;
+                    }
+                }
+
+                var sharedTextures = CreateGuestDrawTextures(
+                    ctx,
+                    translatedDraw.Textures,
+                    out _,
+                    gpuState,
+                    state);
+                var sharedGlobalMemoryBuffers =
+                    CreateTranslatedDrawGlobalBuffers(translatedDraw);
+                var sharedVertexBuffers =
+                    CreateGuestVertexBuffers(translatedDraw.VertexInputs);
+                TraceRectListVertices(translatedDraw, sharedVertexBuffers);
+                TraceGrassDrawVertices(translatedDraw, sharedTextures, sharedVertexBuffers);
+                TraceDrawCompact(
+                    drawSequence,
+                    translatedDraw,
+                    sharedTextures,
+                    sharedVertexBuffers);
+                foreach (var renderTarget in drawRenderTargets)
+                {
+                    if (renderTarget.Address != 0)
+                    {
+                        ProvideRenderTargetInitialData(ctx, renderTarget);
+                    }
+                }
+
+                if (translatedDraw.IsFullscreenColorClear)
+                {
+                    VulkanVideoPresenter.SubmitOffscreenColorClear(
+                        translatedDraw.GuestTargets,
+                        translatedDraw.ClearRed,
+                        translatedDraw.ClearGreen,
+                        translatedDraw.ClearBlue,
+                        translatedDraw.ClearAlpha,
+                        translatedDraw.PixelShaderAddress);
+                }
+                else
+                {
+                    GuestGpu.Current.SubmitOffscreenTranslatedDraw(
+                        translatedDraw.PixelShader,
+                        sharedTextures,
+                        sharedGlobalMemoryBuffers,
+                        translatedDraw.AttributeCount,
+                        translatedDraw.GuestTargets,
+                        translatedDraw.VertexShader,
+                        translatedDraw.VertexCount,
+                        translatedDraw.InstanceCount,
+                        translatedDraw.PrimitiveType,
+                        translatedDraw.IndexBuffer,
+                        sharedVertexBuffers,
+                        translatedDraw.RenderState,
+                        translatedDraw.DepthTarget,
+                        translatedDraw.PixelShaderAddress,
+                        translatedDraw.BaseVertex);
+                }
+
+                PublishTranslatedColorWriters(
+                    state,
+                    drawSequence,
+                    renderTargets,
+                    translatedDraw.RenderTargets,
+                    exportShaderAddress,
+                    pixelShaderAddress,
+                    vertexCount,
+                    primitiveType,
+                    indexed,
+                    writerKind: translatedDraw.IsFullscreenColorClear
+                        ? "fullscreen-clear"
+                        : "color-draw");
+            }
+            else
+            {
+                if (translatedDraw.DepthTarget is { } translatedDepthTarget)
+                {
+                    var textures = CreateGuestDrawTextures(
+                        ctx,
+                        translatedDraw.Textures,
+                        out _,
+                        gpuState,
+                        state);
+                    var globalMemoryBuffers =
+                        CreateTranslatedDrawGlobalBuffers(translatedDraw);
+                    var vertexBuffers =
+                        CreateGuestVertexBuffers(translatedDraw.VertexInputs);
+                    var renderState = translatedDraw.RenderState;
+                    if (translatedDepthTarget.ReadOnly && renderState.Depth.WriteEnable)
+                    {
+                        renderState = renderState with
+                        {
+                            Depth = renderState.Depth with { WriteEnable = false },
+                        };
+                    }
+
+                    TraceDrawCompact(
+                        drawSequence,
+                        translatedDraw,
+                        textures,
+                        vertexBuffers);
+                    GuestGpu.Current.SubmitDepthOnlyTranslatedDraw(
+                        translatedDraw.PixelShader,
+                        textures,
+                        globalMemoryBuffers,
+                        translatedDraw.AttributeCount,
+                        translatedDepthTarget,
+                        translatedDraw.VertexShader,
+                        translatedDraw.VertexCount,
+                        translatedDraw.InstanceCount,
+                        translatedDraw.PrimitiveType,
+                        translatedDraw.IndexBuffer,
+                        vertexBuffers,
+                        renderState,
+                        translatedDraw.PixelShaderAddress,
+                        translatedDraw.BaseVertex);
+                }
+                else
+                {
+                    var storageTarget = translatedDraw.Textures
+                        .FirstOrDefault(binding => binding.IsStorage);
+                    if (storageTarget is not null)
+                    {
+                        var textures = CreateGuestDrawTextures(
+                            ctx,
+                            translatedDraw.Textures,
+                            out _,
+                            gpuState,
+                            state);
+                        var globalMemoryBuffers =
+                            CreateTranslatedDrawGlobalBuffers(translatedDraw);
+                        TraceDrawCompact(drawSequence, translatedDraw, textures, []);
+                        if (IsTarget45DIdentityV74041(
+                                storageTarget.Descriptor.Address,
+                                storageTarget.Descriptor.MetadataAddress))
+                        {
+                            TraceTarget45DProducerV74041(
+                                "storage_draw",
+                                $"seq={drawSequence} addr=0x{storageTarget.Descriptor.Address:X16} " +
+                                $"meta=0x{storageTarget.Descriptor.MetadataAddress:X16} " +
+                                $"size={storageTarget.Descriptor.Width}x{storageTarget.Descriptor.Height} " +
+                                $"fmt={storageTarget.Descriptor.Format}/{storageTarget.Descriptor.NumberType} " +
+                                $"ps=0x{translatedDraw.PixelShaderAddress:X16}");
+                        }
+                        GuestGpu.Current.SubmitStorageTranslatedDraw(
+                            translatedDraw.PixelShader,
+                            textures,
+                            globalMemoryBuffers,
+                            translatedDraw.AttributeCount,
+                            storageTarget.Descriptor.Width,
+                            storageTarget.Descriptor.Height,
+                            translatedDraw.PixelShaderAddress);
+                        // The storage submit consumes the global buffers (the
+                        // presenter returns them) but never the vertex/index
+                        // arrays; return those here so they don't leak the pool.
+                        ReturnPooledDrawArrays(
+                            translatedDraw,
+                            globals: false,
+                            vertex: true,
+                            index: true);
+                    }
+                    else
+                    {
+                        if (translatedDraw.Textures.Count != 0)
+                        {
+                            // Unity's PS5 final blit can omit CB registers and
+                            // rely on the following AGC flip to name the scanout
+                            // target. Retain that sampled draw until RFlip, then
+                            // enqueue it against the known display surface before
+                            // the ordered capture.
+                            state.PendingTargetlessDraws.Enqueue(translatedDraw);
+                        }
+                        else
+                        {
+                            // No render target, storage sink or sampled source:
+                            // nothing can consume this draw.
+                            ReturnPooledDrawArrays(
+                                translatedDraw,
+                                globals: true,
+                                vertex: true,
+                                index: true);
+                        }
+                    }
+                }
+            }
+
+            if (ShouldTraceHotPath(ref _translatedDrawTraceCount))
+            {
+                TraceAgcShader(
+                    $"agc.shader_draw_seen seq={drawSequence} " +
+                    $"es=0x{exportShaderAddress:X16} ps=0x{pixelShaderAddress:X16} " +
+                    $"target=0x{firstTarget.Address:X16}:{firstTarget.Width}x{firstTarget.Height}:fmt{firstTarget.Format}/tile{firstTarget.TileMode} " +
+                    $"textures={translatedDraw.Textures.Count}");
+            }
+
+            // Trace-only: gated on the flag so the dedup set and the dump â€”
+            // which reads pooled buffer data the presenter may already have
+            // recycled (harmless for diagnostics, garbage bytes at worst) â€”
+            // cost nothing in normal runs.
+            if (_traceAgcShader)
+            {
+                lock (_submitTraceGate)
+                {
+                    var firstTextureAddress = translatedDraw.Textures.FirstOrDefault()?.Descriptor.Address ?? 0;
+                    if (_tracedShaderDraws.Add(
+                            (exportShaderAddress, pixelShaderAddress, firstTarget.Address, firstTextureAddress, vertexCount)))
+                    {
+                        TraceTranslatedGuestDraw(
+                            ctx,
+                            gpuState,
+                            state,
+                            translatedDraw,
+                            psInputEna,
+                            psInputAddr);
+                    }
+                }
+            }
+
+            return;
+        }
+
+        TraceDrawCompactMiss(
+            drawSequence,
+            vertexCount,
+            hasExportShader && hasPixelShader
+                ? translationError
+                : hasDepthOnlyCandidate && !string.IsNullOrEmpty(translationError)
+                    ? $"depth-only: {translationError}"
+                : $"missing-shaders es={hasExportShader} ps={hasPixelShader} ena={hasPsInputEna} addr={hasPsInputAddr}");
+        TraceShaderTranslationMiss(
+            ctx,
+            state,
+            vertexCount,
+            hasExportShader,
+            exportShaderAddress,
+            hasPixelShader,
+            pixelShaderAddress,
+            hasPsInputEna,
+            psInputEna,
+            hasPsInputAddr,
+            psInputAddr,
+            hasExportShader && hasPixelShader || hasDepthOnlyCandidate
+                ? translationError
+                : null);
+    }
+
+    /// <summary>
+    /// V61.12: publishes colour-writer provenance only for MRTs that survived
+    /// pixel-export filtering and were actually submitted to the host GPU.
+    /// Bound-but-unexported CB_COLOR slots remain KnownRenderTargets, but they
+    /// must not suppress targetless composites or masquerade as GPU producers.
+    /// </summary>
+    private static void PublishTranslatedColorWriters(
+        SubmittedDcbState state,
+        ulong drawSequence,
+        IReadOnlyList<RenderTargetDescriptor> boundTargets,
+        IReadOnlyList<RenderTargetDescriptor> translatedTargets,
+        ulong exportShaderAddress,
+        ulong pixelShaderAddress,
+        uint vertexCount,
+        uint primitiveType,
+        bool indexed,
+        string writerKind)
+    {
+        foreach (var target in translatedTargets)
+        {
+            if (target.Address == 0)
+            {
+                continue;
+            }
+
+            if (IsTarget45DIdentityV74041(
+                    target.Address,
+                    target.MetadataAddress))
+            {
+                TraceTarget45DProducerV74041(
+                    "rt_writer",
+                    $"seq={drawSequence} slot={target.Slot} " +
+                    $"addr=0x{target.Address:X16} meta=0x{target.MetadataAddress:X16} " +
+                    $"size={target.Width}x{target.Height} " +
+                    $"fmt={target.Format}/{target.NumberType} tile={target.TileMode} " +
+                    $"ps=0x{pixelShaderAddress:X16} kind={writerKind}");
+            }
+
+            state.KnownRenderTargets[target.Address] = target;
+            state.RenderTargetWriters[target.Address] = new RenderTargetWriter(
+                drawSequence,
+                exportShaderAddress,
+                pixelShaderAddress,
+                vertexCount,
+                primitiveType);
+
+            // SHARPEMU_V74_0_56_26_GRAPHICS_DCC_PRODUCER_SEED
+            // Capture the descriptor at producer publication time. The
+            // address-keyed KnownRenderTargets map can later be overwritten by
+            // another view of the same storage allocation.
+            RememberDccProducerV7405626(
+                target,
+                drawSequence,
+                "graphics");
+
+            if (_traceAgcShader ||
+                _tracePixelShaderAddress == pixelShaderAddress ||
+                _traceRenderTargetAddress == target.Address)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][TRACE] " +
+                    $"agc.rt_writer_filtered seq={drawSequence} slot={target.Slot} " +
+                    $"target=0x{target.Address:X16} fmt={target.Format} " +
+                    $"tile={target.TileMode} size={target.Width}x{target.Height} " +
+                    $"vertices={vertexCount} prim=0x{primitiveType:X} " +
+                    $"indexed={indexed} es=0x{exportShaderAddress:X16} " +
+                    $"ps=0x{pixelShaderAddress:X16} kind={writerKind}");
+            }
+        }
+
+        foreach (var boundTarget in boundTargets)
+        {
+            var selected = false;
+            foreach (var translatedTarget in translatedTargets)
+            {
+                if (translatedTarget.Slot == boundTarget.Slot &&
+                    translatedTarget.Address == boundTarget.Address)
+                {
+                    selected = true;
+                    break;
+                }
+            }
+
+            if (selected)
+            {
+                continue;
+            }
+
+            if (_traceAgcShader ||
+                _tracePixelShaderAddress == pixelShaderAddress ||
+                _traceRenderTargetAddress == boundTarget.Address)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][TRACE] " +
+                    $"agc.rt_writer_rejected seq={drawSequence} slot={boundTarget.Slot} " +
+                    $"target=0x{boundTarget.Address:X16} fmt={boundTarget.Format} " +
+                    $"tile={boundTarget.TileMode} size={boundTarget.Width}x{boundTarget.Height} " +
+                    $"es=0x{exportShaderAddress:X16} ps=0x{pixelShaderAddress:X16} " +
+                    $"reason=not-in-translated-mrt");
+            }
+        }
+    }
+
+    private static bool TryCreateTranslatedDepthOnlyGuestDraw(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong exportShaderAddress,
+        uint vertexCount,
+        bool indexed,
+        GuestDepthTarget depthTarget,
+        out TranslatedGuestDraw draw,
+        out string error)
+    {
+        draw = default!;
+        error = string.Empty;
+        ulong exportShaderHeader;
+        lock (_submitTraceGate)
+        {
+            _shaderHeadersByCode.TryGetValue(exportShaderAddress, out exportShaderHeader);
+        }
+
+        if (!Gen5ShaderTranslator.TryCreateState(
+                ctx,
+                exportShaderAddress,
+                exportShaderHeader,
+                state.ShRegisters,
+                SelectExportUserDataRegister(state.ShRegisters),
+                out var exportState,
+                out error,
+                userDataScalarRegisterBase: NggUserDataScalarRegisterBase) ||
+            !TryEvaluateShaderWithResourceVisibilityRetry(
+                ctx,
+                exportState,
+                out var exportEvaluation,
+                out error,
+                resolveVertexInputs: true,
+                requiredVertexRecordCount: TryGetRequiredVertexRecordCount(
+                    ctx,
+                    state,
+                    vertexCount,
+                    indexed,
+                    out var depthVertexRecords)
+                        ? depthVertexRecords
+                        : null))
+        {
+            return false;
+        }
+
+        var exportFingerprint = _bakeScalars
+            ? ComputeShaderStateFingerprint(exportEvaluation)
+            : ComputeShaderStructuralFingerprint(exportEvaluation);
+        var cacheKey = (
+            exportShaderAddress,
+            exportFingerprint,
+            _storageBufferOffsetAlignment);
+        _depthOnlyVertexShaderCache.TryGetValue(cacheKey, out var vertexShader);
+
+        if (vertexShader is null)
+        {
+            var guestGlobalBufferCount = exportEvaluation.GlobalMemoryBindings.Count;
+            // CreateTranslatedDrawGlobalBuffers appends both stage scalar
+            // blocks.  The pixel block is unused by the fixed fragment stage;
+            // the vertex block remains at guestCount+1, matching this layout.
+            var totalGlobalBufferCount = _bakeScalars
+                ? guestGlobalBufferCount
+                : guestGlobalBufferCount + 2;
+            if (!GuestGpu.Current.TryCompileVertexShader(
+                    exportState,
+                    exportEvaluation,
+                    out vertexShader,
+                    out error,
+                    globalBufferBase: 0,
+                    totalGlobalBufferCount: totalGlobalBufferCount,
+                    imageBindingBase: 0,
+                    scalarRegisterBufferIndex: _bakeScalars
+                        ? -1
+                        : guestGlobalBufferCount + 1,
+                    requiredVertexOutputCount: 0,
+                    storageBufferOffsetAlignment:
+                        _storageBufferOffsetAlignment))
+            {
+                ReturnPooledEvaluationArrays(exportEvaluation);
+                return false;
+            }
+
+            DumpCompiledShader(
+                "depth-vs",
+                exportShaderAddress,
+                exportFingerprint,
+                vertexShader!,
+                exportState.Program);
+            GuestGpu.Current.CountShaderCompilation();
+            if (_depthOnlyVertexShaderCache.Count < _maxDepthShaderCacheEntries)
+            {
+                _depthOnlyVertexShaderCache.TryAdd(cacheKey, vertexShader!);
+            }
+        }
+
+        var textures = new List<TranslatedImageBinding>(
+            exportEvaluation.ImageBindings.Count);
+        foreach (var binding in exportEvaluation.ImageBindings)
+        {
+            if (!TryDecodeTextureDescriptor(binding.ResourceDescriptor, out var texture))
+            {
+                if (_strictShaderDescriptors)
+                {
+                    error = $"invalid export texture descriptor at pc=0x{binding.Pc:X}";
+                    ReturnPooledEvaluationArrays(exportEvaluation);
+                    return false;
+                }
+
+                texture = new TextureDescriptor(
+                    0,
+                    1,
+                    1,
+                    Gen5TextureFormatR8G8B8A8Unorm,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0xFAC);
+            }
+
+            textures.Add(new TranslatedImageBinding(
+                texture,
+                Gen5ShaderTranslator.RequiresStorageImage(
+                    binding,
+                    exportEvaluation.ImageBindings),
+                binding.MipLevel ?? 0,
+                binding.SamplerDescriptor,
+                Gen5ShaderTranslator.IsArrayedImageBinding(binding)));
+        }
+
+        IReadOnlyList<Gen5VertexInputBinding> vertexInputs =
+            exportEvaluation.VertexInputs ?? [];
+        state.UcRegisters.TryGetValue(VgtPrimitiveType, out var primitiveType);
+        var syntheticTarget = new RenderTargetDescriptor(
+            Slot: 0,
+            Address: 0,
+            depthTarget.Width,
+            depthTarget.Height,
+            Format: 0,
+            NumberType: 0,
+            TileMode: 0);
+        var renderState = CreateRenderState(state.CxRegisters, syntheticTarget) with
+        {
+            // A guest pass without a pixel shader has no colour exports.  The
+            // presenter uses a private compatibility attachment, so disable
+            // all writes to it and expose only the persistent DB result.
+            Blends = [GuestBlendState.Default with { WriteMask = 0 }],
+        };
+        if (depthTarget.Width == 1 &&
+            depthTarget.Height == 1 &&
+            renderState.Viewport is { } depthViewport)
+        {
+            var inferredWidth = (uint)Math.Clamp(
+                MathF.Ceiling(MathF.Abs(depthViewport.Width)),
+                1f,
+                16384f);
+            var inferredHeight = (uint)Math.Clamp(
+                MathF.Ceiling(MathF.Abs(depthViewport.Height)),
+                1f,
+                16384f);
+            if (inferredWidth > 1 || inferredHeight > 1)
+            {
+                depthTarget = depthTarget with
+                {
+                    Width = inferredWidth,
+                    Height = inferredHeight,
+                };
+                syntheticTarget = syntheticTarget with
+                {
+                    Width = inferredWidth,
+                    Height = inferredHeight,
+                };
+                renderState = CreateRenderState(state.CxRegisters, syntheticTarget) with
+                {
+                    Blends = [GuestBlendState.Default with { WriteMask = 0 }],
+                };
+            }
+        }
+        draw = new TranslatedGuestDraw(
+            exportShaderAddress,
+            PixelShaderAddress: 0,
+            primitiveType,
+            vertexShader!,
+            GuestGpu.Current.GetDepthOnlyFragmentShader(),
+            AttributeCount: 0,
+            vertexCount,
+            state.InstanceCount,
+            GetBaseVertex(state),
+            indexed ? CreateGuestIndexBuffer(ctx, state, vertexCount) : null,
+            textures,
+            exportEvaluation.GlobalMemoryBindings,
+            vertexInputs,
+            RenderTargets: [],
+            depthTarget,
+            GuestTargets: [],
+            renderState,
+            PixelUserData: [],
+            RawBlendControl: 0,
+            RawColorInfo: 0,
+            PixelInitialScalars: [],
+            exportEvaluation.InitialScalarRegisters);
+        return true;
+    }
+
+    private static bool TryCreateTranslatedGuestDraw(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong exportShaderAddress,
+        ulong pixelShaderAddress,
+        uint psInputEna,
+        uint psInputAddr,
+        uint vertexCount,
+        bool indexed,
+        out TranslatedGuestDraw draw,
+        out string error)
+    {
+        draw = default!;
+        error = string.Empty;
+        ulong exportShaderHeader;
+        ulong pixelShaderHeader;
+        lock (_submitTraceGate)
+        {
+            _shaderHeadersByCode.TryGetValue(exportShaderAddress, out exportShaderHeader);
+            _shaderHeadersByCode.TryGetValue(pixelShaderAddress, out pixelShaderHeader);
+        }
+
+        // Sequential (not short-circuited into one condition) so a failure
+        // after an evaluation succeeded can return that evaluation's pooled
+        // buffer arrays to the pool instead of leaking them.
+        if (!Gen5ShaderTranslator.TryCreateState(
+                ctx,
+                exportShaderAddress,
+                exportShaderHeader,
+                state.ShRegisters,
+                SelectExportUserDataRegister(state.ShRegisters),
+                out var exportState,
+                out error,
+                userDataScalarRegisterBase: NggUserDataScalarRegisterBase))
+        {
+            return false;
+        }
+
+        if (!TryEvaluateShaderWithResourceVisibilityRetry(
+                ctx,
+                exportState,
+                out var exportEvaluation,
+                out error,
+                resolveVertexInputs: true,
+                requiredVertexRecordCount: TryGetRequiredVertexRecordCount(
+                    ctx,
+                    state,
+                    vertexCount,
+                    indexed,
+                    out var vertexRecords)
+                        ? vertexRecords
+                        : null))
+        {
+            return false;
+        }
+
+        if (!Gen5ShaderTranslator.TryCreateState(
+                ctx,
+                pixelShaderAddress,
+                pixelShaderHeader,
+                state.ShRegisters,
+                PsTextureUserDataRegister,
+                out var pixelState,
+                out error))
+        {
+            ReturnPooledEvaluationArrays(exportEvaluation);
+            return false;
+        }
+
+        if (!TryEvaluateShaderWithResourceVisibilityRetry(
+                ctx,
+                pixelState,
+                out var pixelEvaluation,
+                out error))
+        {
+            ReturnPooledEvaluationArrays(exportEvaluation);
+            return false;
+        }
+
+        // Empty SRT/EUD is fine for clears/passthroughs that bind nothing
+        // (Astro title PS 0x808E88000 is a procedural fullscreen clear).
+        // Reject only when evaluation produced image/global slots that
+        // collapsed to Address-0 â€” that layout mismatches SPIR-V and loses
+        // the device on QueueSubmit.
+        if (pixelState.Metadata is
+            {
+                ShaderResourceTableSizeDwords: 0,
+                ExtendedUserDataSizeDwords: 0,
+            } ||
+            Gen5ShaderScalarEvaluator.WasEmptySrtScalarPointerFallback(
+                pixelShaderAddress))
+        {
+            var hasAnyImageSlot = pixelEvaluation.ImageBindings.Count > 0;
+            var hasUsablePixelImage = false;
+            foreach (var binding in pixelEvaluation.ImageBindings)
+            {
+                if (TryDecodeTextureDescriptor(binding.ResourceDescriptor, out var texture) &&
+                    texture.Address != 0)
+                {
+                    hasUsablePixelImage = true;
+                    break;
+                }
+            }
+
+            var hasUsablePixelGlobal = pixelEvaluation.GlobalMemoryBindings.Any(
+                static binding => binding.BaseAddress != 0);
+            var hasPoisonImageSlots = hasAnyImageSlot && !hasUsablePixelImage;
+            if (hasPoisonImageSlots && !hasUsablePixelGlobal)
+            {
+                error = Gen5ShaderScalarEvaluator.WasEmptySrtScalarPointerFallback(
+                    pixelShaderAddress)
+                    ? "empty-srt-scalar-pointer-fallback"
+                    : "empty-srt-no-usable-resources";
+                lock (_submitTraceGate)
+                {
+                    if (_tracedEmptySrtDrawRejects.Add(pixelShaderAddress))
+                    {
+                        Console.Error.WriteLine(
+                            $"[LOADER][WARN] agc.draw_reject ps=0x{pixelShaderAddress:X16} " +
+                            $"es=0x{exportShaderAddress:X16} reason={error}");
+                        Console.Error.WriteLine(
+                            $"[LOADER][WARN] agc.draw_reject_state ps=0x{pixelShaderAddress:X16} " +
+                            $"header=0x{pixelShaderHeader:X16} " +
+                            Gen5ShaderTranslator.DescribeState(pixelState));
+                        var shDump = new List<string>(16);
+                        for (uint reg = 0x8; reg <= 0x1C; reg++)
+                        {
+                            if (state.ShRegisters.TryGetValue(reg, out var value))
+                            {
+                                shDump.Add($"0x{reg:X}={value:X8}");
+                            }
+                        }
+
+                        Console.Error.WriteLine(
+                            $"[LOADER][WARN] agc.draw_reject_sh ps=0x{pixelShaderAddress:X16} " +
+                            $"[{string.Join(',', shDump)}]");
+                        var bindingIndex = 0;
+                        foreach (var binding in pixelEvaluation.ImageBindings)
+                        {
+                            Console.Error.WriteLine(
+                                $"[LOADER][WARN] agc.draw_reject_binding ps=0x{pixelShaderAddress:X16} " +
+                                $"[{bindingIndex++}] pc=0x{binding.Pc:X} op={binding.Opcode} " +
+                                $"resource={FormatShaderDwords(binding.ResourceDescriptor)} " +
+                                $"sampler={FormatShaderDwords(binding.SamplerDescriptor)}");
+                        }
+
+                        foreach (var binding in pixelEvaluation.GlobalMemoryBindings)
+                        {
+                            Console.Error.WriteLine(
+                                $"[LOADER][WARN] agc.draw_reject_global ps=0x{pixelShaderAddress:X16} " +
+                                $"s{binding.ScalarAddress} base=0x{binding.BaseAddress:X16} " +
+                                $"bytes={binding.DataLength}");
+                        }
+                    }
+                }
+
+                ReturnPooledEvaluationArrays(exportEvaluation);
+                ReturnPooledEvaluationArrays(pixelEvaluation);
+                return false;
+            }
+        }
+
+        if (pixelShaderAddress == 0x0000000500781200 &&
+            Environment.GetEnvironmentVariable("SHARPEMU_TRACE_TITLE_GLOBALS") == "1")
+        {
+            TraceAstroTitlePixelGlobals(pixelEvaluation);
+        }
+
+        if (pixelShaderAddress == 0x0000000500781200 &&
+            Environment.GetEnvironmentVariable("SHARPEMU_TRACE_TITLE_GLOBALS_LIVE") == "1")
+        {
+            TraceAstroTitlePixelGlobalProbe(pixelEvaluation);
+        }
+
+        // Patch BufferFormat from the attrib table onto the V# before host
+        // vertex input. IR discovery often keeps a stale float format from the
+        // unpatched sharp â€” that turns UI glyphs into gradient triangles.
+        // Match by stride+offset (not bare base address) so interleaved streams
+        // keep loading-video bindings intact.
+        if (exportEvaluation.VertexInputs is { Count: > 0 } discoveredInputs &&
+            AgcVertexMetadata.TryGetVertexTableRegisters(
+                ctx,
+                exportShaderAddress,
+                exportShaderHeader,
+                out var vertexTables))
+        {
+            var merged = AgcVertexMetadata.MergeVertexInputsFromMetadata(
+                ctx,
+                exportEvaluation.ScalarRegisters,
+                vertexTables,
+                discoveredInputs);
+            if (!ReferenceEquals(merged, discoveredInputs))
+            {
+                TraceAgcShader(
+                    $"agc.vertex_metadata_format es=0x{exportShaderAddress:X16} " +
+                    $"count={merged.Count}");
+                exportEvaluation = exportEvaluation with { VertexInputs = merged };
+            }
+        }
+
+        // Every bound color target the shader exports to. Deferred renderers
+        // draw a multi-render-target G-buffer (up to eight slots) in one pass.
+        // Fall back to slot 0 if we cannot match any export to a bound target.
+        var pixelColorExportMasks = pixelState.Program.PixelColorExportMasks;
+        var allBoundTargets = GetRenderTargets(state.CxRegisters);
+        // At most 8 slots; a manual filter avoids the per-draw LINQ iterator/
+        // closure allocations. Slots are distinct, so sorting by slot is stable.
+        var selectedTargets = new List<RenderTargetDescriptor>(allBoundTargets.Count);
+        foreach (var target in allBoundTargets)
+        {
+            if (GetPixelColorExportMask(pixelColorExportMasks, target.Slot) != 0)
+            {
+                selectedTargets.Add(target);
+            }
+        }
+
+        if (selectedTargets.Count == 0)
+        {
+            foreach (var target in allBoundTargets)
+            {
+                if (target.Slot == 0)
+                {
+                    selectedTargets.Add(target);
+                }
+            }
+        }
+
+        // SHARPEMU_V74_0_76_DS_GBUFFER_DCC_CORRECTNESS
+        // Do not generically override shader export masks. Recover only the
+        // exact PPSA01341 pass already proven by historical command-stream
+        // traces:
+        //   ES 0x44858A300 / PS 0x448639500
+        //   slot0 = 0x45BC00000 2560x1440 fmt12/7
+        //   slot1 = 0x460890000 2560x1440 fmt10/0
+        // The old trace explicitly reports exp1 for both slots and kept=2.
+        if (_dsGBufferMrtRecoveryV74076 &&
+            exportShaderAddress == 0x000000044858A300UL &&
+            pixelShaderAddress == 0x0000000448639500UL)
+        {
+            RenderTargetDescriptor? slot0V74076 = null;
+            RenderTargetDescriptor? slot1V74076 = null;
+
+            foreach (var targetV74076 in allBoundTargets)
+            {
+                if (targetV74076.Slot == 0 &&
+                    targetV74076.Address == 0x000000045BC00000UL &&
+                    targetV74076.Width == 2560 &&
+                    targetV74076.Height == 1440 &&
+                    targetV74076.Format == 12 &&
+                    targetV74076.NumberType == 7)
+                {
+                    slot0V74076 = targetV74076;
+                }
+                else if (targetV74076.Slot == 1 &&
+                         targetV74076.Address == 0x0000000460890000UL &&
+                         targetV74076.Width == 2560 &&
+                         targetV74076.Height == 1440 &&
+                         targetV74076.Format == 10 &&
+                         targetV74076.NumberType == 0 &&
+                         targetV74076.TileMode == 27)
+                {
+                    slot1V74076 = targetV74076;
+                }
+            }
+
+            if (slot0V74076.HasValue && slot1V74076.HasValue)
+            {
+                var recoveredSlot1V74076 = slot1V74076.Value;
+                var provenanceRepairedV74076 = false;
+
+                // Partial CB state can preserve INFO.DCC_ENABLE while omitting
+                // a re-emit of DCC_BASE. The later image SRD for this exact
+                // allocation is repeatedly observed with metadata
+                // 0x486B13000. Restore only the missing metadata identity when
+                // DCC is already enabled by the live CB_COLOR_INFO.
+                if (recoveredSlot1V74076.DccEnabled &&
+                    recoveredSlot1V74076.MetadataAddress == 0)
+                {
+                    recoveredSlot1V74076 = recoveredSlot1V74076 with
+                    {
+                        MetadataAddress = 0x0000000486B13000UL,
+                    };
+                    provenanceRepairedV74076 = true;
+                    Interlocked.Increment(
+                        ref _v74076GBufferDccProvenanceRepairCount);
+                }
+
+                var selectedSlot1IndexV74076 = -1;
+                for (var indexV74076 = 0;
+                     indexV74076 < selectedTargets.Count;
+                     indexV74076++)
+                {
+                    if (selectedTargets[indexV74076].Slot == 1 &&
+                        selectedTargets[indexV74076].Address ==
+                            0x0000000460890000UL)
+                    {
+                        selectedSlot1IndexV74076 = indexV74076;
+                        break;
+                    }
+                }
+
+                var addedSlot1V74076 = false;
+                if (selectedSlot1IndexV74076 < 0)
+                {
+                    selectedTargets.Add(recoveredSlot1V74076);
+                    addedSlot1V74076 = true;
+                }
+                else if (!selectedTargets[selectedSlot1IndexV74076]
+                             .Equals(recoveredSlot1V74076))
+                {
+                    selectedTargets[selectedSlot1IndexV74076] =
+                        recoveredSlot1V74076;
+                }
+
+                var recoveryCountV74076 = Interlocked.Increment(
+                    ref _v74076GBufferMrtRecoveryCount);
+
+                if (addedSlot1V74076 ||
+                    provenanceRepairedV74076 ||
+                    recoveryCountV74076 <= 64 ||
+                    (recoveryCountV74076 &
+                     (recoveryCountV74076 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.76][DS_GBUFFER_MRT_RECOVERY] " +
+                        $"count={recoveryCountV74076} " +
+                        $"action={(addedSlot1V74076 ? "added-slot1" : "already-selected")} " +
+                        $"provenance_repaired={(provenanceRepairedV74076 ? 1 : 0)} " +
+                        $"dcc={(recoveredSlot1V74076.DccEnabled ? 1 : 0)} " +
+                        $"meta=0x{recoveredSlot1V74076.MetadataAddress:X16} " +
+                        $"masks=0x{pixelColorExportMasks:X8}");
+                }
+            }
+        }
+
+        // SHARPEMU_V74_0_56_36_DS_GBUFFER_LIGHTING_CONTRACT
+        //
+        // Proven historical contract:
+        //   PS    0x448639500
+        //   slot0 2560x1440 fmt12/num7
+        //   slot1 0x460890000 2560x1440 fmt10/num0 tile27
+        //
+        // In the current failing run slot1 is still sampled as DCC but has no
+        // matching GPU producer/image. Recover only this exact MRT contract
+        // before the ordinary translated-draw path creates Vulkan RTs and
+        // publishes writer provenance.
+        if (_dsGBufferLightingContractV7405636 &&
+            pixelShaderAddress == 0x0000000448639500UL)
+        {
+            var hasLightingSlot0V7405636 = false;
+            RenderTargetDescriptor? gbufferSlot1V7405636 = null;
+
+            foreach (var targetV7405636 in allBoundTargets)
+            {
+                if (targetV7405636.Slot == 0 &&
+                    targetV7405636.Width == 2560 &&
+                    targetV7405636.Height == 1440 &&
+                    targetV7405636.Format == 12 &&
+                    targetV7405636.NumberType == 7)
+                {
+                    hasLightingSlot0V7405636 = true;
+                }
+
+                if (targetV7405636.Slot == 1 &&
+                    targetV7405636.Address == 0x0000000460890000UL &&
+                    targetV7405636.Width == 2560 &&
+                    targetV7405636.Height == 1440 &&
+                    targetV7405636.Format == 10 &&
+                    targetV7405636.NumberType == 0 &&
+                    targetV7405636.TileMode == 27)
+                {
+                    gbufferSlot1V7405636 = targetV7405636;
+                }
+            }
+
+            if (hasLightingSlot0V7405636 &&
+                gbufferSlot1V7405636.HasValue)
+            {
+                var recoveredSlot1V7405636 =
+                    gbufferSlot1V7405636.Value;
+                var metadataRepairedV7405636 = false;
+
+                // The sampled SRD consistently carries this exact metadata VA.
+                // Partial CB state can omit DCC_BASE while preserving the real
+                // allocation, dimensions, format and tile mode.
+                if (recoveredSlot1V7405636.MetadataAddress == 0)
+                {
+                    recoveredSlot1V7405636 =
+                        recoveredSlot1V7405636 with
+                        {
+                            MetadataAddress =
+                                0x0000000486B13000UL,
+                        };
+
+                    metadataRepairedV7405636 = true;
+                    Interlocked.Increment(
+                        ref _v7405636GBufferMetadataRepairCount);
+                }
+
+                var selectedSlot1IndexV7405636 = -1;
+
+                for (var indexV7405636 = 0;
+                     indexV7405636 < selectedTargets.Count;
+                     indexV7405636++)
+                {
+                    if (selectedTargets[indexV7405636].Slot == 1 &&
+                        selectedTargets[indexV7405636].Address ==
+                            0x0000000460890000UL)
+                    {
+                        selectedSlot1IndexV7405636 =
+                            indexV7405636;
+                        break;
+                    }
+                }
+
+                var addedSlot1V7405636 = false;
+
+                if (selectedSlot1IndexV7405636 < 0)
+                {
+                    selectedTargets.Add(
+                        recoveredSlot1V7405636);
+                    addedSlot1V7405636 = true;
+
+                    Interlocked.Increment(
+                        ref _v7405636GBufferSlot1AddedCount);
+                }
+                else if (!selectedTargets[
+                                 selectedSlot1IndexV7405636]
+                             .Equals(recoveredSlot1V7405636))
+                {
+                    selectedTargets[
+                        selectedSlot1IndexV7405636] =
+                        recoveredSlot1V7405636;
+                }
+
+                var contractCountV7405636 =
+                    Interlocked.Increment(
+                        ref _v7405636GBufferContractCount);
+
+                if (addedSlot1V7405636 ||
+                    metadataRepairedV7405636 ||
+                    contractCountV7405636 <= 128 ||
+                    (contractCountV7405636 &
+                     (contractCountV7405636 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.36][GBUFFER_LIGHTING] " +
+                        $"count={contractCountV7405636} " +
+                        $"ps=0x{pixelShaderAddress:X16} " +
+                        $"action={(addedSlot1V7405636 ? "added-slot1" : "slot1-present")} " +
+                        $"metadata_repaired={(metadataRepairedV7405636 ? 1 : 0)} " +
+                        $"slot1=0x{recoveredSlot1V7405636.Address:X16} " +
+                        $"meta=0x{recoveredSlot1V7405636.MetadataAddress:X16} " +
+                        $"dcc={(recoveredSlot1V7405636.DccEnabled ? 1 : 0)} " +
+                        $"export_masks=0x{pixelColorExportMasks:X8}");
+                }
+            }
+        }
+
+        selectedTargets.Sort(static (left, right) => left.Slot.CompareTo(right.Slot));
+        var renderTargets = selectedTargets.ToArray();
+
+        // SHARPEMU_V74_0_56_29_GBUFFER_OUTPUT_CONTRACT
+        // Assets are already proven to reach the guest. Measure the actual
+        // deferred-renderer contract here: bound CB_COLOR slots, decoded EXP
+        // masks and the targets that survive into one Vulkan MRT draw.
+        if (_traceGBufferLightingV7405629 &&
+            allBoundTargets.Count > 1)
+        {
+            var mrtCount = Interlocked.Increment(
+                ref _v7405629MrtDrawCount);
+
+            var usedSlot0Fallback =
+                renderTargets.Length == 1 &&
+                renderTargets[0].Slot == 0 &&
+                allBoundTargets.Count > 1 &&
+                pixelColorExportMasks == 0;
+
+            if (usedSlot0Fallback)
+            {
+                Interlocked.Increment(
+                    ref _v7405629MrtSlot0FallbackCount);
+            }
+
+            if (mrtCount <= 128 ||
+                (mrtCount & (mrtCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.29][GBUFFER] " +
+                    $"count={mrtCount} " +
+                    $"ps=0x{pixelShaderAddress:X16} " +
+                    $"es=0x{exportShaderAddress:X16} " +
+                    $"bound={allBoundTargets.Count} " +
+                    $"selected={renderTargets.Length} " +
+                    $"export_masks=0x{pixelColorExportMasks:X8} " +
+                    $"slot0_fallback={(usedSlot0Fallback ? 1 : 0)} " +
+                    $"targets=[{string.Join(',', renderTargets.Select(t => "s" + t.Slot + ":0x" + t.Address.ToString("X16") + ":" + t.Width + "x" + t.Height + ":f" + t.Format + "/n" + t.NumberType))}]");
+            }
+        }
+
+        if (_traceAgcShader && allBoundTargets.Count > 1)
+        {
+            TraceAgcShader(
+                $"agc.mrt_filter ps=0x{pixelShaderAddress:X16} " +
+                $"bound=[{string.Join(",", allBoundTargets.Select(t => $"s{t.Slot}:0x{t.Address:X}:exp{(GetPixelColorExportMask(pixelColorExportMasks, t.Slot) != 0 ? 1 : 0)}"))}] " +
+                 $"kept={renderTargets.Length}");
+        }
+
+        var renderTargetOutputKinds = new Gen5PixelOutputKind[renderTargets.Length];
+        for (var index = 0; index < renderTargets.Length; index++)
+        {
+            var target = renderTargets[index];
+            if (!GuestGpu.Current.TryGetRenderTargetOutputKind(
+                    target.Format,
+                    target.NumberType,
+                    out renderTargetOutputKinds[index]))
+            {
+                error =
+                    $"unsupported color target format={target.Format} number_type={target.NumberType}";
+                ReturnPooledEvaluationArrays(exportEvaluation);
+                ReturnPooledEvaluationArrays(pixelEvaluation);
+                return false;
+            }
+        }
+
+        // Exact packed encoding of the output layout â€” guest slot (6 bits, CB targets are
+        // 0-7) plus output kind (2 bits) per target, host locations being the sequential
+        // byte positions. Replaces a per-draw LINQ + string build that allocated on every
+        // draw, cache hit or not; the target count disambiguates trailing zero bytes.
+        var outputLayout = 0UL;
+        for (var index = 0; index < renderTargets.Length; index++)
+        {
+            outputLayout |= (ulong)(((renderTargets[index].Slot & 0x3Fu) << 2) |
+                (uint)renderTargetOutputKinds[index]) << (index * 8);
+        }
+
+        var attributeCount = GetInterpolatedAttributeCount(pixelState);
+        var exportStateFingerprint = _bakeScalars
+            ? ComputeShaderStateFingerprint(exportEvaluation)
+            : ComputeShaderStructuralFingerprint(exportEvaluation);
+        var pixelStateFingerprint = _bakeScalars
+            ? ComputeShaderStateFingerprint(pixelEvaluation)
+            : ComputeShaderStructuralFingerprint(pixelEvaluation);
+        var psInputCntl = ReadPsInputCntlRegisters(state.CxRegisters);
+        var requiredVertexOutputCount =
+            GetRequiredVertexOutputCount(pixelState, psInputCntl);
+        var psInputCntlFingerprint = ComputePsInputCntlFingerprint(psInputCntl);
+        var shaderKey = (
+            exportShaderAddress,
+            exportStateFingerprint,
+            pixelShaderAddress,
+            pixelStateFingerprint,
+            outputLayout,
+            (uint)renderTargets.Length,
+            attributeCount,
+            psInputEna,
+            psInputAddr,
+            psInputCntlFingerprint,
+            _storageBufferOffsetAlignment);
+
+        var guestGlobalBuffers =
+            pixelEvaluation.GlobalMemoryBindings.Count +
+            exportEvaluation.GlobalMemoryBindings.Count;
+        // Two per-draw initial-scalar buffers ride after the guest buffers:
+        // [pixel guest][vertex guest][pixel sgprs][vertex sgprs].
+        var totalGlobalBuffers = _bakeScalars
+            ? guestGlobalBuffers
+            : guestGlobalBuffers + 2;
+        _graphicsShaderCache.TryGetValue(shaderKey, out var compiled);
+        var usedFixedFullscreenClear = false;
+        (float Red, float Green, float Blue, float Alpha) fullscreenClearColor = default;
+
+        if (compiled.Vertex is null || compiled.Pixel is null)
+        {
+            if (IsProceduralFullscreenClearPair(
+                    exportState,
+                    exportEvaluation,
+                    pixelState,
+                    pixelEvaluation))
+            {
+                // Title ES/PS clear (0x808E88D00/0x808E88000): empty SRT/EUD.
+                // Gen5â†’SPIR-V and even fixed fragment pipelines have lost the
+                // device on the 2432x1368 offscreen submit. Apply the solid
+                // clear via CmdClearColorImage so the pass still runs without
+                // Address-0 descriptors or a graphics pipeline.
+                usedFixedFullscreenClear = true;
+                fullscreenClearColor = DecodeSolidClearColor(pixelEvaluation);
+                lock (_submitTraceGate)
+                {
+                    if (_tracedFixedFullscreenClears.Add(
+                            (exportShaderAddress, pixelShaderAddress)))
+                    {
+                        Console.Error.WriteLine(
+                            $"[LOADER][WARN] agc.shader_color_clear " +
+                            $"es=0x{exportShaderAddress:X16} " +
+                            $"ps=0x{pixelShaderAddress:X16} " +
+                            $"rgba=({fullscreenClearColor.Red:0.###}," +
+                            $"{fullscreenClearColor.Green:0.###}," +
+                            $"{fullscreenClearColor.Blue:0.###}," +
+                            $"{fullscreenClearColor.Alpha:0.###})");
+                    }
+                }
+
+                compiled = (
+                    GuestGpu.Current.GetDepthOnlyFragmentShader(),
+                    GuestGpu.Current.GetDepthOnlyFragmentShader());
+                if (_graphicsShaderCache.Count < _maxGraphicsShaderCacheEntries)
+                {
+                    _graphicsShaderCache.TryAdd(shaderKey, compiled);
+                }
+            }
+            else
+            {
+                var pixelOutputs = new Gen5PixelOutputBinding[renderTargets.Length];
+                for (var location = 0; location < renderTargets.Length; location++)
+                {
+                    pixelOutputs[location] = new Gen5PixelOutputBinding(
+                        renderTargets[location].Slot,
+                        (uint)location,
+                        renderTargetOutputKinds[location]);
+                }
+
+                if (!GuestGpu.Current.TryCompilePixelShader(
+                        pixelState,
+                        pixelEvaluation,
+                        pixelOutputs,
+                        out var pixelShader,
+                        out error,
+                        globalBufferBase: 0,
+                        totalGlobalBufferCount: totalGlobalBuffers,
+                        imageBindingBase: 0,
+                        scalarRegisterBufferIndex: _bakeScalars ? -1 : guestGlobalBuffers,
+                        pixelInputEnable: psInputEna,
+                        pixelInputAddress: psInputAddr,
+                        pixelInputCntl: psInputCntl,
+                        storageBufferOffsetAlignment:
+                            _storageBufferOffsetAlignment) ||
+                    !GuestGpu.Current.TryCompileVertexShader(
+                        exportState,
+                        exportEvaluation,
+                        out var vertexShader,
+                        out error,
+                        globalBufferBase: pixelEvaluation.GlobalMemoryBindings.Count,
+                        totalGlobalBufferCount: totalGlobalBuffers,
+                        imageBindingBase: pixelEvaluation.ImageBindings.Count,
+                        scalarRegisterBufferIndex: _bakeScalars ? -1 : guestGlobalBuffers + 1,
+                        requiredVertexOutputCount: (int)requiredVertexOutputCount,
+                        storageBufferOffsetAlignment:
+                            _storageBufferOffsetAlignment))
+                {
+                    ReturnPooledEvaluationArrays(exportEvaluation);
+                    ReturnPooledEvaluationArrays(pixelEvaluation);
+                    return false;
+                }
+
+                compiled = (vertexShader!, pixelShader!);
+                DumpCompiledShader(
+                    "vs",
+                    exportShaderAddress,
+                    exportStateFingerprint,
+                    compiled.Vertex,
+                    exportState.Program);
+                DumpCompiledShader(
+                    "ps",
+                    pixelShaderAddress,
+                    pixelStateFingerprint,
+                    compiled.Pixel,
+                    pixelState.Program);
+                GuestGpu.Current.CountShaderCompilation();
+                if (_graphicsShaderCache.Count < _maxGraphicsShaderCacheEntries)
+                {
+                    _graphicsShaderCache.TryAdd(shaderKey, compiled);
+                }
+            }
+        }
+        else if (IsCachedFixedFullscreenClearPair(
+                     exportState,
+                     exportEvaluation,
+                     pixelState,
+                     pixelEvaluation))
+        {
+            usedFixedFullscreenClear = true;
+            fullscreenClearColor = DecodeSolidClearColor(pixelEvaluation);
+        }
+
+        var useFixedFullscreenClear = usedFixedFullscreenClear;
+
+        List<TranslatedImageBinding> textures;
+        Gen5GlobalMemoryBinding[] globalMemoryBindings;
+        IReadOnlyList<Gen5VertexInputBinding> vertexInputs;
+        if (useFixedFullscreenClear)
+        {
+            textures = [];
+            globalMemoryBindings = [];
+            vertexInputs = [];
+        }
+        else
+        {
+            var imageBindings = pixelEvaluation.ImageBindings
+                .Concat(exportEvaluation.ImageBindings)
+                .ToArray();
+            textures = new List<TranslatedImageBinding>(
+                pixelEvaluation.ImageBindings.Count +
+                exportEvaluation.ImageBindings.Count);
+            if (!TryAppendTranslatedImageBindings(
+                    pixelEvaluation.ImageBindings,
+                    imageBindings,
+                    textures,
+                    pixelShaderAddress,
+                    exportShaderAddress,
+                    out error) ||
+                !TryAppendTranslatedImageBindings(
+                    exportEvaluation.ImageBindings,
+                    imageBindings,
+                    textures,
+                    pixelShaderAddress,
+                    exportShaderAddress,
+                    out error))
+            {
+                ReturnPooledEvaluationArrays(exportEvaluation);
+                ReturnPooledEvaluationArrays(pixelEvaluation);
+                return false;
+            }
+
+            globalMemoryBindings = new Gen5GlobalMemoryBinding[
+                pixelEvaluation.GlobalMemoryBindings.Count +
+                exportEvaluation.GlobalMemoryBindings.Count];
+            for (var index = 0; index < pixelEvaluation.GlobalMemoryBindings.Count; index++)
+            {
+                globalMemoryBindings[index] = pixelEvaluation.GlobalMemoryBindings[index];
+            }
+            for (var index = 0; index < exportEvaluation.GlobalMemoryBindings.Count; index++)
+            {
+                globalMemoryBindings[pixelEvaluation.GlobalMemoryBindings.Count + index] =
+                    exportEvaluation.GlobalMemoryBindings[index];
+            }
+
+            vertexInputs = exportEvaluation.VertexInputs ?? [];
+        }
+
+        state.UcRegisters.TryGetValue(VgtPrimitiveType, out var primitiveType);
+        var guestTargets = new GuestRenderTarget[renderTargets.Length];
+        for (var index = 0; index < renderTargets.Length; index++)
+        {
+            guestTargets[index] = new GuestRenderTarget(
+                renderTargets[index].Address,
+                renderTargets[index].Width,
+                renderTargets[index].Height,
+                renderTargets[index].Format,
+                renderTargets[index].NumberType,
+                TileMode: renderTargets[index].TileMode,
+                TileModeKnown: renderTargets[index].TileModeKnown,
+                ComponentSwap: renderTargets[index].ComponentSwap,
+                MetadataAddress: renderTargets[index].MetadataAddress);
+        }
+
+        var pixelUserDataCount = Math.Min(pixelEvaluation.InitialScalarRegisters.Count, 8);
+        var pixelUserData = new uint[pixelUserDataCount];
+        for (var index = 0; index < pixelUserDataCount; index++)
+        {
+            pixelUserData[index] = pixelEvaluation.InitialScalarRegisters[index];
+        }
+
+        var renderState = ApplyTransparentPremultipliedFillClear(
+            CreateRenderState(state.CxRegisters, renderTargets, pixelColorExportMasks),
+            textures,
+            vertexInputs,
+            pixelEvaluation.InitialScalarRegisters);
+
+        draw = new TranslatedGuestDraw(
+            exportShaderAddress,
+            pixelShaderAddress,
+            primitiveType,
+            compiled.Vertex,
+            compiled.Pixel,
+            GetInterpolatedAttributeCount(pixelState),
+            vertexCount,
+            state.InstanceCount,
+            GetBaseVertex(state),
+            indexed ? CreateGuestIndexBuffer(ctx, state, vertexCount) : null,
+            textures,
+            globalMemoryBindings,
+            vertexInputs,
+            renderTargets,
+            DecodeDepthTarget(state.CxRegisters),
+            guestTargets,
+            renderState,
+            pixelUserData,
+            state.CxRegisters.TryGetValue(CbBlend0Control, out var rawBlend) ? rawBlend : 0,
+            state.CxRegisters.TryGetValue(
+                CbColor0Info + renderTargets.FirstOrDefault().Slot * CbColorRegisterStride,
+                out var rawInfo)
+                ? rawInfo
+                : 0,
+            pixelEvaluation.InitialScalarRegisters,
+            exportEvaluation.InitialScalarRegisters,
+            useFixedFullscreenClear,
+            fullscreenClearColor.Red,
+            fullscreenClearColor.Green,
+            fullscreenClearColor.Blue,
+            fullscreenClearColor.Alpha,
+            IsDccFastClearDraw(
+                state.CxRegisters,
+                renderTargets,
+                textures,
+                vertexInputs,
+                renderState,
+                primitiveType,
+                vertexCount));
+        return true;
+    }
+
+    private static bool TryAppendTranslatedImageBindings(
+        IReadOnlyList<Gen5ImageBinding> bindings,
+        IReadOnlyList<Gen5ImageBinding> stageBindings,
+        List<TranslatedImageBinding> textures,
+        ulong pixelShaderAddress,
+        ulong exportShaderAddress,
+        out string error)
+    {
+        foreach (var binding in bindings)
+        {
+            if (!TryDecodeTextureDescriptor(binding.ResourceDescriptor, out var texture))
+            {
+                // A garbage/zeroed texture descriptor (from a per-draw descriptor
+                // setup race â€” the same root as scalar-load-failed) would drop
+                // the whole draw, so deferred-lighting/composite passes that
+                // produce the composite's feeder targets never run. Keep the
+                // existing 1x1 fallback unless strict diagnostics are requested.
+                if (_strictShaderDescriptors)
+                {
+                    error = $"invalid texture descriptor at pc=0x{binding.Pc:X}";
+                    return false;
+                }
+
+                texture = new TextureDescriptor(
+                    0, 1, 1, Gen5TextureFormatR8G8B8A8Unorm, 0, 0, 0, 0, 0, 1, 0xFAC);
+            }
+
+            var isStorage = Gen5ShaderTranslator.RequiresStorageImage(
+                binding,
+                stageBindings);
+            if (_traceAgcShader || _tracePixelShaderAddress == pixelShaderAddress)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][TRACE] " +
+                    $"agc.texture_binding ps=0x{pixelShaderAddress:X16} es=0x{exportShaderAddress:X16} " +
+                    $"pc=0x{binding.Pc:X} op={binding.Opcode} storage={(isStorage ? 1 : 0)} " +
+                    $"decoded={FormatTextureDescriptor(texture)} " +
+                    $"raw={FormatShaderDwords(binding.ResourceDescriptor)} sampler={FormatShaderDwords(binding.SamplerDescriptor)}");
+            }
+            textures.Add(
+                new TranslatedImageBinding(
+                    texture,
+                    isStorage,
+                    binding.MipLevel ?? 0,
+                    binding.SamplerDescriptor,
+                    Gen5ShaderTranslator.IsArrayedImageBinding(binding)));
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static int _tracedAstroTitlePixelGlobals;
+    private static int _tracedAstroTitlePixelGlobalProbe;
+
+    private static void TraceAstroTitlePixelGlobalProbe(Gen5ShaderEvaluation evaluation)
+    {
+        const int probeOffset = 17216;
+        var draw = Interlocked.Increment(ref _tracedAstroTitlePixelGlobalProbe);
+        foreach (var (binding, index) in evaluation.GlobalMemoryBindings.Select((value, index) => (value, index)))
+        {
+            if (probeOffset + 16 > binding.DataLength)
+            {
+                continue;
+            }
+
+            Console.Error.WriteLine(
+                $"[TITLE-GLOBALS-LIVE] draw={draw} binding={index} " +
+                $"base=0x{binding.BaseAddress:X16} offset=0x{probeOffset:X} " +
+                $"bytes={Convert.ToHexString(binding.Data.AsSpan(probeOffset, 16))}");
+        }
+    }
+
+    private static void TraceAstroTitlePixelGlobals(Gen5ShaderEvaluation evaluation)
+    {
+        if (Interlocked.Exchange(ref _tracedAstroTitlePixelGlobals, 1) != 0)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[TITLE-GLOBALS] initial_s0_31=" +
+            string.Join(',', evaluation.InitialScalarRegisters
+                .Take(32)
+                .Select((value, index) => $"s{index}={value:X8}")));
+
+        var probeOffsets = new[]
+        {
+            0, 16, 24, 32, 48,
+            192, 256, 400, 432,
+            17100, 17104, 17136, 17168, 17184, 17200, 17216,
+        };
+        foreach (var binding in evaluation.GlobalMemoryBindings)
+        {
+            Console.Error.WriteLine(
+                $"[TITLE-GLOBALS] binding s{binding.ScalarAddress} " +
+                $"base=0x{binding.BaseAddress:X16} bytes={binding.DataLength} " +
+                $"pcs={string.Join(',', binding.InstructionPcs.Select(pc => $"0x{pc:X}"))}");
+            foreach (var offset in probeOffsets)
+            {
+                if (offset < 0 || offset + 16 > binding.DataLength)
+                {
+                    continue;
+                }
+
+                Console.Error.WriteLine(
+                    $"[TITLE-GLOBALS] s{binding.ScalarAddress}+0x{offset:X}=" +
+                    Convert.ToHexString(binding.Data.AsSpan(offset, 16)));
+            }
+        }
+    }
+
+    private static bool IsCachedFixedFullscreenClearPair(
+        Gen5ShaderState exportState,
+        Gen5ShaderEvaluation exportEvaluation,
+        Gen5ShaderState pixelState,
+        Gen5ShaderEvaluation pixelEvaluation) =>
+        IsProceduralFullscreenClearPair(
+            exportState,
+            exportEvaluation,
+            pixelState,
+            pixelEvaluation);
+
+    private static bool IsProceduralFullscreenClearPair(
+        Gen5ShaderState exportState,
+        Gen5ShaderEvaluation exportEvaluation,
+        Gen5ShaderState pixelState,
+        Gen5ShaderEvaluation pixelEvaluation)
+    {
+        if ((exportEvaluation.VertexInputs?.Count ?? 0) != 0 ||
+            exportEvaluation.ImageBindings.Count != 0 ||
+            pixelEvaluation.ImageBindings.Count != 0 ||
+            exportEvaluation.GlobalMemoryBindings.Count != 0 ||
+            pixelEvaluation.GlobalMemoryBindings.Count != 0)
+        {
+            return false;
+        }
+
+        if (!HasExportTarget(exportState, target: 12) ||
+            !HasExportTarget(pixelState, target: 0))
+        {
+            return false;
+        }
+
+        if (pixelState.Program.Instructions.Count is 0 or > 8 ||
+            exportState.Program.Instructions.Count is 0 or > 48)
+        {
+            return false;
+        }
+
+        return pixelState.Program.Instructions.All(IsBenignClearPixelInstruction) &&
+               exportState.Program.Instructions.All(IsBenignProceduralVertexInstruction);
+    }
+
+    private static bool HasExportTarget(Gen5ShaderState state, uint target) =>
+        state.Program.Instructions.Any(instruction =>
+            instruction.Control is Gen5ExportControl export &&
+            export.Target == target);
+
+    private static bool IsBenignClearPixelInstruction(Gen5ShaderInstruction instruction) =>
+        instruction.Opcode is
+            "SNop" or
+            "SWaitcnt" or
+            "SInstPrefetch" or
+            "SEndpgm" or
+            "VMovB32" ||
+        instruction.Control is Gen5ExportControl { Target: 0 };
+
+    private static bool IsBenignProceduralVertexInstruction(Gen5ShaderInstruction instruction)
+    {
+        if (instruction.Control is Gen5BufferMemoryControl or
+            Gen5ImageControl or
+            Gen5GlobalMemoryControl or
+            Gen5ScalarMemoryControl)
+        {
+            return false;
+        }
+
+        if (instruction.Control is Gen5ExportControl export)
+        {
+            // Position (12) plus ignored NGG/param exports.
+            return export.Target is 12 or (>= 13 and < 32) or 20;
+        }
+
+        return instruction.Opcode is
+            "SNop" or
+            "SWaitcnt" or
+            "SInstPrefetch" or
+            "SEndpgm" or
+            "SSendmsg" or
+            "VMovB32" or
+            "VAndB32" or
+            "VAddI32" or
+            "VLshlrevB32" or
+            "VCvtF32I32" or
+            "VCvtF32U32" ||
+            instruction.Encoding is
+                Gen5ShaderEncoding.Sop1 or
+                Gen5ShaderEncoding.Sop2 or
+                Gen5ShaderEncoding.Sopc or
+                Gen5ShaderEncoding.Sopk or
+                Gen5ShaderEncoding.Sopp;
+    }
+
+    private static (float Red, float Green, float Blue, float Alpha) DecodeSolidClearColor(
+        Gen5ShaderEvaluation pixelEvaluation)
+    {
+        // Default opaque white; guest clear shaders often mov a 1.0 literal into v0.
+        float red = 1f, green = 1f, blue = 1f, alpha = 1f;
+        if (pixelEvaluation.InitialScalarRegisters.Count > 0)
+        {
+            var bits = pixelEvaluation.InitialScalarRegisters[0];
+            if (bits != 0)
+            {
+                red = green = blue = alpha = BitConverter.UInt32BitsToSingle(bits);
+                if (!float.IsFinite(red) || red < 0f || red > 4f)
+                {
+                    red = green = blue = alpha = 1f;
+                }
+            }
+        }
+
+        return (red, green, blue, alpha);
+    }
+
+    private static readonly bool _fillClearHack = !string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_DISABLE_FILL_CLEAR"),
+        "1",
+        StringComparison.Ordinal);
+
+    /// <summary>
+    /// Treat an untextured fill that outputs pure transparent black through
+    /// premultiplied blending as an overwrite. Chowdren issues exactly this
+    /// draw once per frame to reset its effect layers (fog smoke, vignette
+    /// masks); under the blend factors it sets (One, OneMinusSrcAlpha) a
+    /// (0,0,0,0) source is a mathematical no-op, so without this the layers
+    /// accumulate until they saturate and the fog composites as a flat veil
+    /// over the whole scene. The workaround applies only when every MRT
+    /// attachment uses the same blend pattern. Disable with
+    /// SHARPEMU_DISABLE_FILL_CLEAR=1.
+    /// </summary>
+    private static GuestRenderState ApplyTransparentPremultipliedFillClear(
+        GuestRenderState renderState,
+        IReadOnlyList<TranslatedImageBinding> textures,
+        IReadOnlyList<Gen5VertexInputBinding> vertexInputs,
+        IReadOnlyList<uint> pixelUserData)
+    {
+        if (!_fillClearHack ||
+            textures.Count != 0 ||
+            vertexInputs.Count != 0 ||
+            pixelUserData.Count < 4 ||
+            !renderState.Blends.All(IsTransparentPremultipliedFillBlend))
+        {
+            return renderState;
+        }
+
+        for (var index = 0; index < 4; index++)
+        {
+            // Positive or negative zero.
+            if ((pixelUserData[index] & 0x7FFF_FFFFu) != 0)
+            {
+                return renderState;
+            }
+        }
+
+        return renderState with
+        {
+            Blends = renderState.Blends
+                .Select(blend => blend with { Enable = false })
+                .ToArray(),
+        };
+    }
+
+    /// <summary>
+    /// Recognises the covering quad a GFX10 driver issues to clear a
+    /// DCC-compressed colour target. There is no clear packet: the driver
+    /// programs CB_COLORn_CLEAR_WORD0/1 and draws a quad that the colour block
+    /// turns into DCC clear codes, discarding whatever the pixel shader
+    /// exported. Executing it as an ordinary draw writes the shaded output
+    /// instead, and because the blend it uses computes
+    /// <c>a &lt;- a_src + a_dst * (1 - a_src)</c> - fixed point 1 - the target's
+    /// alpha then climbs every frame and saturates.
+    ///
+    /// Restricted to clear-to-zero. The reset performed for a match clears the
+    /// attachment to zero, so a nonzero CLEAR_WORD would be cleared to the
+    /// wrong colour; those fall through and are drawn. Zero is zero under every
+    /// encoding the register can carry, so the pair needs no format handling.
+    ///
+    /// The clip-space test is load-bearing rather than belt-and-braces: fills
+    /// sharing the vertex count, topology and blend outnumber the clears by two
+    /// orders of magnitude and sit at coordinates well outside the frame.
+    /// </summary>
+    private const uint TriangleStripPrimitive = 6;
+
+    // A float32x3 vertex position stream (BUF_DATA_FORMAT_32_32_32 / FLOAT).
+    private const uint PositionDataFormat = 13;
+    private const uint PositionNumberFormat = 7;
+
+    private static bool IsDccFastClearDraw(
+        IReadOnlyDictionary<uint, uint> registers,
+        IReadOnlyList<RenderTargetDescriptor> renderTargets,
+        IReadOnlyList<TranslatedImageBinding> textures,
+        IReadOnlyList<Gen5VertexInputBinding> vertexInputs,
+        GuestRenderState renderState,
+        uint primitiveType,
+        uint vertexCount)
+    {
+        if (textures.Count != 0 ||
+            vertexCount != 4 ||
+            primitiveType != TriangleStripPrimitive ||
+            renderTargets.Count == 0 ||
+            renderState.Blends.Count == 0 ||
+            !renderState.Blends.All(IsTransparentPremultipliedFillBlend))
+        {
+            return false;
+        }
+
+        var slotStride = renderTargets[0].Slot * CbColorRegisterStride;
+        return registers.TryGetValue(CbColor0Info + slotStride, out var info) &&
+            (info & CbColorInfoDccEnableMask) != 0 &&
+            registers.TryGetValue(CbColor0ClearWord0 + slotStride, out var clearWord0) &&
+            registers.TryGetValue(CbColor0ClearWord1 + slotStride, out var clearWord1) &&
+            clearWord0 == 0 &&
+            clearWord1 == 0 &&
+            CoversClipSpace(vertexInputs, vertexCount);
+    }
+
+    /// <summary>
+    /// True when the draw's float32x3 position stream spans the full clip
+    /// rectangle, i.e. x and y both reach -1 and +1.
+    /// </summary>
+    private static bool CoversClipSpace(
+        IReadOnlyList<Gen5VertexInputBinding> vertexInputs,
+        uint vertexCount)
+    {
+        const float Tolerance = 0.001f;
+        foreach (var input in vertexInputs)
+        {
+            if (input.DataFormat != PositionDataFormat ||
+                input.NumberFormat != PositionNumberFormat)
+            {
+                continue;
+            }
+
+            var stride = input.Stride == 0 ? 12u : input.Stride;
+            var available = Math.Min(input.DataLength, input.Data.Length);
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            var seen = 0;
+            for (var vertex = 0u; vertex < vertexCount; vertex++)
+            {
+                var at = (int)(input.OffsetBytes + (vertex * stride));
+                if (at + 12 > available)
+                {
+                    break;
+                }
+
+                var position = input.Data.AsSpan(at);
+                var x = BitConverter.ToSingle(position);
+                var y = BitConverter.ToSingle(position[4..]);
+                if (!float.IsFinite(x) || !float.IsFinite(y))
+                {
+                    return false;
+                }
+
+                minX = Math.Min(minX, x);
+                maxX = Math.Max(maxX, x);
+                minY = Math.Min(minY, y);
+                maxY = Math.Max(maxY, y);
+                seen++;
+            }
+
+            return seen >= 3 &&
+                minX <= -1f + Tolerance && maxX >= 1f - Tolerance &&
+                minY <= -1f + Tolerance && maxY >= 1f - Tolerance;
+        }
+
+        return false;
+    }
+
+    private static bool IsTransparentPremultipliedFillBlend(GuestBlendState blend) =>
+        blend is
+        {
+            Enable: true,
+            ColorSrcFactor: 1,
+            ColorDstFactor: 5,
+            ColorFunc: 0,
+        };
+
+    private static AgcIndexHelpers.ProsperoIndexType GetProsperoIndexType(SubmittedDcbState state) =>
+        // IndexSize is latched from ItIndexType and from UC VGT_INDEX_TYPE
+        // writes. Do not fall back to a stale UC value when IndexSize is 0 â€”
+        // that mis-classified 16-bit draws as index8 and blanked meshes.
+        AgcIndexHelpers.Decode(state.IndexSize);
+
+    /// <summary>
+    /// ResolveVertexOffset for the common UC path: GE_INDX_OFFSET is the
+    /// DrawIndexed vertexOffset / DrawAuto firstVertex. Embedded-fetch SGPR
+    /// fallback is not required when the game latches this register (GTA UI).
+    /// </summary>
+    private static int GetBaseVertex(SubmittedDcbState state) =>
+        state.UcRegisters.TryGetValue(GeIndxOffset, out var indexOffset)
+            ? unchecked((int)indexOffset)
+            : 0;
+
+    private static GuestIndexBuffer? CreateGuestIndexBuffer(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        uint indexCount)
+    {
+        if (state.IndexBufferAddress == 0 || indexCount == 0)
+        {
+            return null;
+        }
+
+        var indexType = GetProsperoIndexType(state);
+        var guestBytesPerIndex = AgcIndexHelpers.GetGuestStrideBytes(indexType);
+        var byteOffset = checked((ulong)state.DrawIndexOffset * (uint)guestBytesPerIndex);
+        var guestByteCount = checked((int)(indexCount * (uint)guestBytesPerIndex));
+        var address = state.IndexBufferAddress + byteOffset;
+
+        // Host backends only bind u16/u32. Expand kIndex8 -> u16.
+        if (indexType == AgcIndexHelpers.ProsperoIndexType.Index8)
+        {
+            var guestData = GuestDataPool.Shared.Rent(guestByteCount);
+            var guestSpan = guestData.AsSpan(0, guestByteCount);
+            if (!ctx.Memory.TryRead(address, guestSpan) &&
+                !KernelMemoryCompatExports.TryReadTrackedLibcHeap(address, guestSpan))
+            {
+                GuestDataPool.Shared.Return(guestData);
+                return null;
+            }
+
+            var hostByteCount = checked((int)(indexCount * sizeof(ushort)));
+            var hostData = GuestDataPool.Shared.Rent(hostByteCount);
+            AgcIndexHelpers.ExpandIndex8ToU16(
+                guestSpan,
+                hostData.AsSpan(0, hostByteCount));
+            GuestDataPool.Shared.Return(guestData);
+            return new GuestIndexBuffer(hostData, hostByteCount, Is32Bit: false, Pooled: true);
+        }
+
+        var is32Bit = indexType == AgcIndexHelpers.ProsperoIndexType.Index32;
+        var data = GuestDataPool.Shared.Rent(guestByteCount);
+        var span = data.AsSpan(0, guestByteCount);
+        if (ctx.Memory.TryRead(address, span) ||
+            KernelMemoryCompatExports.TryReadTrackedLibcHeap(address, span))
+        {
+            return new GuestIndexBuffer(data, guestByteCount, is32Bit, Pooled: true);
+        }
+
+        GuestDataPool.Shared.Return(data);
+        return null;
+    }
+
+    private static bool TryGetRequiredVertexRecordCount(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        uint drawCount,
+        bool indexed,
+        out uint recordCount)
+    {
+        var baseVertex = (uint)Math.Max(GetBaseVertex(state), 0);
+        recordCount = Math.Max(
+            baseVertex + drawCount,
+            Math.Max(state.InstanceCount, 1u));
+        if (!indexed)
+        {
+            return true;
+        }
+
+        if (state.IndexBufferAddress == 0 || drawCount == 0)
+        {
+            return false;
+        }
+
+        var indexType = GetProsperoIndexType(state);
+        var bytesPerIndex = AgcIndexHelpers.GetGuestStrideBytes(indexType);
+        var byteOffset = checked((ulong)state.DrawIndexOffset * (uint)bytesPerIndex);
+        var address = state.IndexBufferAddress + byteOffset;
+        const int chunkBytes = 64 * 1024;
+        var scratch = GuestDataPool.Shared.Rent(chunkBytes);
+        var remaining = drawCount;
+        var maxIndex = 0u;
+        var sawIndex = false;
+        try
+        {
+            while (remaining != 0)
+            {
+                var chunkIndices = (int)Math.Min(
+                    remaining,
+                    (uint)(chunkBytes / bytesPerIndex));
+                var bytes = chunkIndices * bytesPerIndex;
+                var span = scratch.AsSpan(0, bytes);
+                if (!ctx.Memory.TryRead(address, span) &&
+                    !KernelMemoryCompatExports.TryReadTrackedLibcHeap(address, span))
+                {
+                    return false;
+                }
+
+                for (var index = 0; index < chunkIndices; index++)
+                {
+                    uint value = indexType switch
+                    {
+                        AgcIndexHelpers.ProsperoIndexType.Index32 =>
+                            BinaryPrimitives.ReadUInt32LittleEndian(
+                                span.Slice(index * sizeof(uint), sizeof(uint))),
+                        AgcIndexHelpers.ProsperoIndexType.Index8 => span[index],
+                        _ => BinaryPrimitives.ReadUInt16LittleEndian(
+                            span.Slice(index * sizeof(ushort), sizeof(ushort))),
+                    };
+                    var restart = indexType switch
+                    {
+                        AgcIndexHelpers.ProsperoIndexType.Index32 => uint.MaxValue,
+                        AgcIndexHelpers.ProsperoIndexType.Index8 => 0xFFu,
+                        _ => ushort.MaxValue,
+                    };
+                    if (value == restart)
+                    {
+                        // Primitive-restart markers do not address vertex data.
+                        continue;
+                    }
+
+                    maxIndex = Math.Max(maxIndex, value);
+                    sawIndex = true;
+                }
+
+                address += (uint)bytes;
+                remaining -= (uint)chunkIndices;
+            }
+        }
+        finally
+        {
+            GuestDataPool.Shared.Return(scratch);
+        }
+
+        var indexedRecords = sawIndex && maxIndex != uint.MaxValue
+            ? baseVertex + maxIndex + 1
+            : Math.Max(baseVertex + 1, 1u);
+        recordCount = Math.Max(indexedRecords, Math.Max(state.InstanceCount, 1u));
+        if (_traceVertexRanges &&
+            Interlocked.Increment(ref _tracedVertexRangeCount) <= 512)
+        {
+            var indexBits = indexType switch
+            {
+                AgcIndexHelpers.ProsperoIndexType.Index32 => 32,
+                AgcIndexHelpers.ProsperoIndexType.Index8 => 8,
+                _ => 16,
+            };
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] agc.vertex_range indexed=1 draw_count={drawCount} " +
+                $"max_index={(sawIndex ? maxIndex : 0)} base_vertex={baseVertex} " +
+                $"records={recordCount} instances={state.InstanceCount} " +
+                $"index_size={indexBits} index_addr=0x{state.IndexBufferAddress:X16} " +
+                $"offset={state.DrawIndexOffset}");
+        }
+        return true;
+    }
+
+    private static uint GetPixelColorExportMask(uint packedMasks, uint target) =>
+        target < ColorTargetCount
+            ? (packedMasks >> (int)(target * 4)) & 0xFu
+            : 0;
+
+    private static uint GetInterpolatedAttributeCount(Gen5ShaderState state)
+    {
+        var maxAttribute = -1;
+        foreach (var instruction in state.Program.Instructions)
+        {
+            if (instruction.Control is Gen5InterpolationControl interpolation)
+            {
+                maxAttribute = Math.Max(maxAttribute, (int)interpolation.Attribute);
+            }
+        }
+
+        return (uint)(maxAttribute + 1);
+    }
+
+    private static uint GetRequiredVertexOutputCount(
+        Gen5ShaderState pixelState,
+        IReadOnlyList<uint> pixelInputCntl)
+    {
+        var maxLocation = -1;
+
+        foreach (var instruction in pixelState.Program.Instructions)
+        {
+            if (instruction.Control is not Gen5InterpolationControl interpolation)
+            {
+                continue;
+            }
+
+            var attribute = interpolation.Attribute;
+            var cntl = attribute < (uint)pixelInputCntl.Count
+                ? pixelInputCntl[(int)attribute]
+                : attribute;
+
+            // SPI_PS_INPUT_CNTL.OFFSET[5] means no vertex export matched;
+            // DEFAULT_VAL supplies the PS input and no VS output is required.
+            if ((cntl & 0x20u) != 0)
+            {
+                continue;
+            }
+
+            maxLocation = Math.Max(maxLocation, (int)(cntl & 0x1Fu));
+        }
+
+        return (uint)(maxLocation + 1);
+    }
+
+    private static readonly bool _bakeScalars = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_BAKE_SGPRS"),
+        "1",
+        StringComparison.Ordinal);
+
+    /// <summary>
+    /// Fingerprint of everything that shapes the translated SPIR-V besides
+    /// scalar register values (those arrive in a per-draw buffer): the
+    /// resolved binding set with its format-shaping descriptor words, vertex
+    /// input layouts, and compute system registers. Value churn in user data
+    /// no longer forces a new translation and pipeline.
+    /// </summary>
+    private static ulong ComputeShaderStructuralFingerprint(Gen5ShaderEvaluation evaluation)
+    {
+        const ulong prime = 1099511628211UL;
+        var hash = 14695981039346656037UL;
+        void Mix(ulong value) => hash = (hash ^ value) * prime;
+
+        foreach (var binding in evaluation.ImageBindings)
+        {
+            Mix(binding.Pc);
+            Mix((ulong)(uint)binding.Opcode.GetHashCode());
+            if (binding.ResourceDescriptor.Count > 1)
+            {
+                // The generated image type depends only on unified format.
+                // Bounds are queried from the bound view in SPIR-V; guest image
+                // addresses, dimensions, swizzles and sampler state are all
+                // runtime descriptor data and must not create pipeline variants.
+                Mix(binding.ResourceDescriptor[1] & 0x1FF0_0000u);
+            }
+
+            Mix(binding.MipLevel ?? 0xFFFF_FFFFUL);
+        }
+
+        foreach (var binding in evaluation.GlobalMemoryBindings)
+        {
+            Mix(binding.ScalarAddress);
+            Mix((ulong)binding.InstructionPcs.Count);
+            foreach (var pc in binding.InstructionPcs)
+            {
+                Mix(pc);
+            }
+        }
+
+        if (evaluation.VertexInputs is { } vertexInputs)
+        {
+            foreach (var input in vertexInputs)
+            {
+                Mix(input.Pc);
+                Mix(input.Location);
+                Mix(input.ComponentCount);
+                Mix(input.DataFormat);
+                Mix(input.NumberFormat);
+                Mix(input.Stride);
+                Mix(input.OffsetBytes);
+                Mix(input.PerInstance ? 1u : 0u);
+            }
+        }
+
+        if (evaluation.ComputeSystemRegisters is { } computeSystemRegisters)
+        {
+            Mix(computeSystemRegisters.WorkGroupXRegister ?? uint.MaxValue);
+            Mix(computeSystemRegisters.WorkGroupYRegister ?? uint.MaxValue);
+            Mix(computeSystemRegisters.WorkGroupZRegister ?? uint.MaxValue);
+            Mix(computeSystemRegisters.ThreadGroupSizeRegister ?? uint.MaxValue);
+        }
+
+        return hash;
+    }
+
+    private static ulong ComputeShaderStateFingerprint(Gen5ShaderEvaluation evaluation)
+    {
+        const ulong offsetBasis = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offsetBasis;
+        foreach (var value in evaluation.ScalarRegisters)
+        {
+            hash = (hash ^ value) * prime;
+        }
+
+        // Baked-scalar mode has no runtime state block from which the shader
+        // can load descriptor-alignment biases, so the low guest address bits
+        // remain part of the generated module and must participate in its key.
+        foreach (var binding in evaluation.GlobalMemoryBindings)
+        {
+            hash = (hash ^ (
+                binding.BaseAddress &
+                (_storageBufferOffsetAlignment - 1))) * prime;
+        }
+
+        if (evaluation.ComputeSystemRegisters is { } computeSystemRegisters)
+        {
+            hash = (hash ^ (computeSystemRegisters.WorkGroupXRegister ?? uint.MaxValue)) * prime;
+            hash = (hash ^ (computeSystemRegisters.WorkGroupYRegister ?? uint.MaxValue)) * prime;
+            hash = (hash ^ (computeSystemRegisters.WorkGroupZRegister ?? uint.MaxValue)) * prime;
+            hash = (hash ^ (computeSystemRegisters.ThreadGroupSizeRegister ?? uint.MaxValue)) * prime;
+        }
+
+        return hash;
+    }
+
+    private enum CbColorMode : byte
+    {
+        Disable = 0,
+        Normal = 1,
+        EliminateFastClear = 2,
+        Resolve = 3,
+        FmaskDecompress = 5,
+        DccDecompress = 6,
+    }
+
+    private static bool TryGetCbColorControlMode(
+        IReadOnlyDictionary<uint, uint> registers,
+        out uint mode)
+    {
+        mode = 0;
+        if (!registers.TryGetValue(CbColorControl, out var colorControl))
+        {
+            return false;
+        }
+
+        mode = (colorControl >> 4) & 0x7u;
+        return true;
+    }
+
+    private static bool IsCbMetadataColorMode(uint mode) =>
+        mode is (uint)CbColorMode.EliminateFastClear or
+            (uint)CbColorMode.FmaskDecompress or
+            (uint)CbColorMode.DccDecompress;
+
+    /// <summary>
+    /// Publishes the resource identity/order of CB metadata operations. SharpEmu
+    /// keeps Vulkan colour images in an already-materialized representation, so
+    /// EliminateFastClear/DccDecompress do not need to reproduce hardware DCC
+    /// blocks in the host image. They do, however, need to preserve the guest
+    /// colour-surface identity and producer ordering so later metadata-backed SRDs
+    /// resolve to the live GPU image instead of guest RAM.
+    /// </summary>
+    // SHARPEMU_AGC_METADATA_FRAMEBUFFER_MATERIALIZATION_V1_8_31
+    private static readonly bool _metadataFramebufferClearV1831Enabled =
+        string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_AGC_METADATA_FB_CLEAR"),
+            "1",
+            StringComparison.Ordinal);
+
+    // SHARPEMU_V74_0_56_33_SCENE_METADATA_MATERIALIZATION
+    // The old V1.8.31 materializer was restricted to registered display
+    // buffers. Demon's Souls uses DCC-backed *offscreen* G-buffer/lighting
+    // surfaces, so a zero fast-clear representation could be tracked as a
+    // writer without ever creating the host image that later SRDs sample.
+    //
+    // Keep the extension independently gated. It never decodes arbitrary DCC
+    // blocks: only an EliminateFastClear whose two clear words are exactly zero
+    // is materialized, which is the semantic subset the existing implementation
+    // already knows how to represent safely.
+    private static readonly bool _sceneOffscreenMetadataMaterializationV7405633 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_SCENE_OFFSCREEN_METADATA_MATERIALIZATION"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static readonly bool _traceScenePipelineGapsV7405633 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_SCENE_PIPELINE_GAPS"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static long _metadataFramebufferClearCountV1831;
+    private static long _metadataFramebufferClearSkipCountV1831;
+    private static long _v7405633OffscreenFastClearCount;
+    private static long _v7405633MetadataProducerSeedCount;
+    private static long _v7405633NonresidentDecompressGapCount;
+    private static long _v7405633HullActiveCount;
+
+    private static bool TryMaterializeEliminateFastClearV1831(
+        SubmittedDcbState state,
+        RenderTargetDescriptor target,
+        ulong drawSequence,
+        ulong exportShaderAddress)
+    {
+        if (!_metadataFramebufferClearV1831Enabled)
+        {
+            return false;
+        }
+
+        var slotStride = target.Slot * CbColorRegisterStride;
+
+        // V1.8.31.1: initialize both values explicitly. With short-circuit &&,
+        // the second out-var may otherwise be considered not definitely
+        // assigned when the first lookup fails.
+        uint clearWord0 = 0;
+        uint clearWord1 = 0;
+        var clearWord0Known =
+            state.CxRegisters.TryGetValue(
+                CbColor0ClearWord0 + slotStride,
+                out clearWord0);
+        var clearWord1Known =
+            state.CxRegisters.TryGetValue(
+                CbColor0ClearWord1 + slotStride,
+                out clearWord1);
+        var clearWordsKnown = clearWord0Known && clearWord1Known;
+
+        var registeredDisplay =
+            VulkanVideoPresenter.IsRegisteredDisplayBufferV1831(target.Address);
+
+        var metadataBackedOffscreenV7405633 =
+            _sceneOffscreenMetadataMaterializationV7405633 &&
+            target.MetadataAddress != 0;
+
+        var eligibleTargetV7405633 =
+            registeredDisplay ||
+            metadataBackedOffscreenV7405633;
+
+        if (!eligibleTargetV7405633 ||
+            !clearWordsKnown ||
+            clearWord0 != 0 ||
+            clearWord1 != 0 ||
+            target.Address == 0 ||
+            target.Width == 0 ||
+            target.Height == 0 ||
+            target.Width > 8192 ||
+            target.Height > 8192)
+        {
+            var skip = Interlocked.Increment(
+                ref _metadataFramebufferClearSkipCountV1831);
+            if (skip <= 32)
+            {
+                TraceAgc(
+                    $"agc.cb_metadata_fb_clear_skip n={skip} seq={drawSequence} " +
+                    $"slot={target.Slot} rt=0x{target.Address:X16} " +
+                    $"registered={(registeredDisplay ? 1 : 0)} " +
+                    $"offscreen_metadata={(metadataBackedOffscreenV7405633 ? 1 : 0)} " +
+                    $"clear_known={(clearWordsKnown ? 1 : 0)} " +
+                    $"clear0=0x{clearWord0:X8} clear1=0x{clearWord1:X8} " +
+                    $"size={target.Width}x{target.Height}");
+            }
+            return false;
+        }
+
+        VulkanVideoPresenter.SubmitOffscreenColorClear(
+            [new GuestRenderTarget(
+                target.Address,
+                target.Width,
+                target.Height,
+                target.Format,
+                target.NumberType,
+                TileMode: target.TileMode,
+                TileModeKnown: target.TileModeKnown,
+                ComponentSwap: target.ComponentSwap,
+                MetadataAddress: target.MetadataAddress)],
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            exportShaderAddress);
+
+        if (metadataBackedOffscreenV7405633)
+        {
+            var sceneClearCountV7405633 =
+                Interlocked.Increment(
+                    ref _v7405633OffscreenFastClearCount);
+
+            if (sceneClearCountV7405633 <= 128 ||
+                (sceneClearCountV7405633 &
+                 (sceneClearCountV7405633 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.33][SCENE_METADATA] " +
+                    $"action=offscreen-zero-fastclear " +
+                    $"count={sceneClearCountV7405633} " +
+                    $"seq={drawSequence} slot={target.Slot} " +
+                    $"rt=0x{target.Address:X16} " +
+                    $"meta=0x{target.MetadataAddress:X16} " +
+                    $"size={target.Width}x{target.Height} " +
+                    $"fmt={target.Format}/{target.NumberType} " +
+                    $"tile={target.TileMode}");
+            }
+        }
+
+        var count = Interlocked.Increment(
+            ref _metadataFramebufferClearCountV1831);
+        TraceAgc(
+            $"agc.cb_metadata_fb_clear n={count} seq={drawSequence} " +
+            $"slot={target.Slot} rt=0x{target.Address:X16} " +
+            $"size={target.Width}x{target.Height} " +
+            $"fmt={target.Format}/{target.NumberType} " +
+            $"tile={target.TileMode} clear=zero");
+        return true;
+    }
+
+    private static int TrackCbMetadataColorTargets(
+        SubmittedDcbState state,
+        ulong drawSequence,
+        uint cbMode,
+        ulong exportShaderAddress,
+        ulong pixelShaderAddress,
+        uint vertexCount,
+        uint primitiveType)
+    {
+        var targets = GetRenderTargets(
+            state.CxRegisters,
+            includeMaskedTargets: true);
+        var tracked = 0;
+
+        foreach (var target in targets)
+        {
+            state.KnownRenderTargets[target.Address] = target;
+
+            // EliminateFastClear is itself a representation write even when
+            // CB_COLORn_INFO.DCC_ENABLE is clear. DBFZ uses MODE=2 on its
+            // registered 1920x1080 framebuffer surfaces with zero clear words.
+            // Preserve writer provenance for that operation instead of silently
+            // returning tracked_targets=0.
+            var writesRepresentation =
+                target.DccEnabled ||
+                cbMode == (uint)CbColorMode.FmaskDecompress ||
+                cbMode == (uint)CbColorMode.EliminateFastClear;
+
+            if (!writesRepresentation)
+            {
+                continue;
+            }
+
+            state.RenderTargetWriters[target.Address] = new RenderTargetWriter(
+                drawSequence,
+                exportShaderAddress,
+                pixelShaderAddress,
+                vertexCount,
+                primitiveType);
+            tracked++;
+
+            // SHARPEMU_V74_0_56_33_CB_METADATA_PRODUCER_HISTORY
+            // CB metadata operations are representation writes too. Normal
+            // translated color draws already seed V56.26 history, but this
+            // early-return path never did. Preserve the descriptor at the same
+            // publication point so a later DCB can resolve the metadata-backed
+            // sampled SRD instead of reaching the 1x1-black DCC fallback.
+            if (target.MetadataAddress != 0)
+            {
+                RememberDccProducerV7405626(
+                    target,
+                    drawSequence,
+                    "cb-metadata");
+
+                var metadataSeedCountV7405633 =
+                    Interlocked.Increment(
+                        ref _v7405633MetadataProducerSeedCount);
+
+                if (metadataSeedCountV7405633 <= 128 ||
+                    (metadataSeedCountV7405633 &
+                     (metadataSeedCountV7405633 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.33][SCENE_METADATA] " +
+                        $"action=producer-seed " +
+                        $"count={metadataSeedCountV7405633} " +
+                        $"mode={cbMode} seq={drawSequence} " +
+                        $"rt=0x{target.Address:X16} " +
+                        $"meta=0x{target.MetadataAddress:X16} " +
+                        $"size={target.Width}x{target.Height} " +
+                        $"fmt={target.Format}/{target.NumberType}");
+                }
+            }
+
+            if (cbMode == (uint)CbColorMode.EliminateFastClear)
+            {
+                _ = TryMaterializeEliminateFastClearV1831(
+                    state,
+                    target,
+                    drawSequence,
+                    exportShaderAddress);
+            }
+            else if (_traceScenePipelineGapsV7405633 &&
+                     target.MetadataAddress != 0 &&
+                     !GuestGpu.Current.IsGpuGuestImageAvailable(
+                         target.Address,
+                         target.Format,
+                         target.NumberType))
+            {
+                // DccDecompress/FmaskDecompress on a nonresident image is the
+                // still-unimplemented case. Record it rather than pretending
+                // compressed guest RAM is linear pixels.
+                var gapCountV7405633 =
+                    Interlocked.Increment(
+                        ref _v7405633NonresidentDecompressGapCount);
+
+                if (gapCountV7405633 <= 128 ||
+                    (gapCountV7405633 &
+                     (gapCountV7405633 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.33][SCENE_GAP] " +
+                        $"kind=nonresident-dcc-decompress " +
+                        $"count={gapCountV7405633} " +
+                        $"mode={cbMode} seq={drawSequence} " +
+                        $"rt=0x{target.Address:X16} " +
+                        $"meta=0x{target.MetadataAddress:X16} " +
+                        $"size={target.Width}x{target.Height} " +
+                        $"fmt={target.Format}/{target.NumberType}");
+                }
+            }
+
+            if (_traceDccAlias &&
+                Interlocked.Increment(ref _dccAliasTraceCount) <= 512)
+            {
+                var resident = GuestGpu.Current.IsGpuGuestImageAvailable(
+                    target.Address,
+                    target.Format,
+                    target.NumberType);
+                Console.Error.WriteLine(
+                    $"[V61.6][DCC] agc.cb_metadata_track " +
+                    $"seq={drawSequence} mode={cbMode} slot={target.Slot} " +
+                    $"rt=0x{target.Address:X16} meta=0x{target.MetadataAddress:X16} " +
+                    $"size={target.Width}x{target.Height} " +
+                    $"fmt={target.Format}/{target.NumberType} " +
+                    $"resident={(resident ? 1 : 0)}");
+            }
+        }
+
+        return tracked;
+    }
+    private static bool TryGetHardwareColorResolveTargets(
+        IReadOnlyDictionary<uint, uint> registers,
+        out RenderTargetDescriptor source,
+        out RenderTargetDescriptor destination)
+    {
+        source = default;
+        destination = default;
+        if (!TryGetCbColorControlMode(registers, out var mode) ||
+            mode != (uint)CbColorMode.Resolve)
+        {
+            return false;
+        }
+
+        // CB_COLOR_CONTROL.MODE=RESOLVE uses color slot 0 as the multisampled
+        // source and slot 1 as the single-sample destination. CB_TARGET_MASK
+        // still enables only slot 0, so treating this like a normal MRT draw
+        // rewrites the source and leaves the following composite's input blank.
+        var boundTargets = GetRenderTargets(registers, includeMaskedTargets: true);
+        source = boundTargets.FirstOrDefault(target => target.Slot == 0);
+        destination = boundTargets.FirstOrDefault(target => target.Slot == 1);
+        return source.Address != 0 &&
+            destination.Address != 0 &&
+            source.Width == destination.Width &&
+            source.Height == destination.Height &&
+            source.Format == destination.Format;
+    }
+
+    private static readonly HashSet<ulong> _renderTargetAddresses = new();
+    private static readonly HashSet<ulong> _sampledRenderTargets = new();
+    private static readonly object _renderTargetProbeGate = new();
+    private static long _renderTargetSampleTraceCount;
+    private static long _indirectDrawProbeCount;
+    private static long _indirectDrawEmitCount;
+    private static long _indirectDrawEmitRejectCount;
+    private static long _indirectMultiProbeCount;
+
+    private static void NoteRenderTargetAddress(ulong address)
+    {
+        if (address == 0)
+        {
+            return;
+        }
+
+        lock (_renderTargetProbeGate)
+        {
+            if (_renderTargetAddresses.Count < 512)
+            {
+                _renderTargetAddresses.Add(address);
+            }
+        }
+    }
+
+    private static void NoteSampledAddress(ulong address, uint format = 0, uint numberType = 0)
+    {
+        if (address == 0)
+        {
+            return;
+        }
+
+        bool firstTime;
+        int distinctTargets;
+        lock (_renderTargetProbeGate)
+        {
+            if (!_renderTargetAddresses.Contains(address))
+            {
+                return;
+            }
+
+            firstTime = _sampledRenderTargets.Add(address);
+            distinctTargets = _renderTargetAddresses.Count;
+        }
+
+        var count = Interlocked.Increment(ref _renderTargetSampleTraceCount);
+        if (firstTime || count % 2000 == 0)
+        {
+            var gpuResident = GuestGpu.Current.IsGpuGuestImageAvailable(address, format, numberType);
+            Console.Error.WriteLine(
+                $"[LOADER][WARN] agc.rt_sampled#{count} addr=0x{address:X} first={firstTime} " +
+                $"gpu_resident={gpuResident} fmt={format}/{numberType} known_targets={distinctTargets}");
+        }
+    }
+
+    private static IReadOnlyList<RenderTargetDescriptor> GetRenderTargets(
+        IReadOnlyDictionary<uint, uint> registers,
+        bool includeMaskedTargets = false)
+    {
+        var hasTargetMask = registers.TryGetValue(CbTargetMask, out var targetMask);
+        var targets = new List<RenderTargetDescriptor>(ColorTargetCount);
+        for (uint slot = 0; slot < ColorTargetCount; slot++)
+        {
+            var baseRegister = CbColor0Base + slot * CbColorRegisterStride;
+
+            // V27: partial color-target register programming is legal.
+            //
+            // GFX10 command streams do not have to rewrite every member of the
+            // CB_COLORn state block for every target.  BASE, INFO and ATTRIB2
+            // are sufficient to identify the allocation, format and extent.
+            // BASE_EXT and ATTRIB3 are upper/default state and may legitimately
+            // be absent from the current register snapshot.  Requiring all five
+            // made a valid target disappear completely from KnownRenderTargets,
+            // after which the same address was sampled through a zero CPU
+            // snapshot as if no GPU writer had ever existed.
+            if (!registers.TryGetValue(baseRegister, out var baseLow) ||
+                !registers.TryGetValue(CbColor0Attrib2 + slot, out var attrib2) ||
+                !registers.TryGetValue(CbColor0Info + slot * CbColorRegisterStride, out var info))
+            {
+                continue;
+            }
+
+            // Missing extension means the hardware/default high bits are zero.
+            // Missing ATTRIB3 must not invalidate the target. Unlike the old
+            // path, however, do not silently turn "unknown" into tile mode 0:
+            // later alias matching can be strict whenever the guest did program
+            // ATTRIB3, while partial-state draws remain compatible.
+            registers.TryGetValue(CbColor0BaseExt + slot, out var baseHigh);
+            var hasAttrib3 = registers.TryGetValue(
+                CbColor0Attrib3 + slot,
+                out var attrib3);
+
+            var address = ((ulong)(baseHigh & 0xFFu) << 40) | ((ulong)baseLow << 8);
+            var dccEnabled = (info & CbColorInfoDccEnableMask) != 0;
+            ulong metadataAddress = 0;
+            if (dccEnabled &&
+                registers.TryGetValue(
+                    CbColor0DccBase + slot * CbColorRegisterStride,
+                    out var dccBaseLow))
+            {
+                // As with BASE_EXT, DCC_BASE_EXT defaults to zero when the
+                // command stream did not rewrite it.  The low register still
+                // provides a valid 256-byte-aligned metadata identity.
+                registers.TryGetValue(
+                    CbColor0DccBaseExt + slot,
+                    out var dccBaseHigh);
+                metadataAddress = ((ulong)(dccBaseHigh & 0xFFu) << 40) |
+                    ((ulong)dccBaseLow << 8);
+            }
+            var writeMask = (targetMask >> ((int)slot * 4)) & 0xFu;
+            if (address == 0 ||
+                (!includeMaskedTargets && hasTargetMask && writeMask == 0))
+            {
+                continue;
+            }
+
+            if (targets.Exists(existing => existing.Address == address))
+            {
+                continue;
+            }
+
+            NoteRenderTargetAddress(address);
+
+            if (_traceAgcShader &&
+                !registers.ContainsKey(CbColor0Attrib3 + slot))
+            {
+                TraceAgcShader(
+                    $"agc.rt_partial_state slot={slot} addr=0x{address:X16} " +
+                    $"missing=attrib3 dcc={(dccEnabled ? 1 : 0)} " +
+                    $"meta=0x{metadataAddress:X16}");
+            }
+
+            var target = new RenderTargetDescriptor(
+                slot,
+                address,
+                ((attrib2 >> 14) & 0x3FFFu) + 1,
+                (attrib2 & 0x3FFFu) + 1,
+                (info >> 2) & 0x1Fu,
+                (info >> 8) & 0x7u,
+                (attrib3 >> 14) & 0x1Fu,
+                hasAttrib3,
+                metadataAddress,
+                dccEnabled,
+                ComponentSwap: (info >> 11) & 0x3u);
+            targets.Add(target);
+            if (_traceDccAlias &&
+                dccEnabled &&
+                metadataAddress != 0 &&
+                Interlocked.Increment(ref _dccAliasTraceCount) <= 512)
+            {
+                Console.Error.WriteLine(
+                    $"[V24][DCC] agc.rt_dcc_metadata slot={slot} " +
+                    $"rt=0x{address:X16} meta=0x{metadataAddress:X16} " +
+                    $"size={target.Width}x{target.Height} fmt={target.Format}/{target.NumberType} " +
+                    $"swap={target.ComponentSwap} tile={target.TileMode}");
+            }
+        }
+
+        if (targets.Count > 1 &&
+            targets.Select(t => t.Address).Distinct().Count() != targets.Count)
+        {
+            var dupCount = Interlocked.Increment(ref _duplicateTargetTraceCount);
+            if (dupCount <= 12 || dupCount % 500 == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][WARN] agc.rt_duplicate#{dupCount} has_mask={hasTargetMask} " +
+                    $"mask=0x{targetMask:X8} slots=[" +
+                    string.Join(",", targets.Select(t =>
+                        $"{t.Slot}:0x{t.Address:X}:m{(targetMask >> ((int)t.Slot * 4)) & 0xFu}")) +
+                    "]");
+            }
+        }
+
+        return targets;
+    }
+
+    private static GuestRenderState CreateRenderState(
+        IReadOnlyDictionary<uint, uint> registers,
+        RenderTargetDescriptor target)
+    {
+        var scissor = DecodeScissor(registers, target.Width, target.Height);
+        return new GuestRenderState(
+            [DecodeBlendState(registers, target.Slot)],
+            scissor,
+            DecodeViewport(registers, target.Width, target.Height, scissor),
+            DecodeRasterState(registers),
+            DecodeDepthState(registers),
+            DecodeBlendConstant(registers));
+    }
+
+    private static GuestRenderState CreateRenderState(
+        IReadOnlyDictionary<uint, uint> registers,
+        IReadOnlyList<RenderTargetDescriptor> targets,
+        uint pixelColorExportMasks)
+    {
+        if (targets.Count == 0)
+        {
+            // V20.1.3: preserve DB render state for pixel+depth passes without color targets.
+            // The translated pixel path already carries DecodeDepthTarget(state.CxRegisters)
+            // into TranslatedGuestDraw. What was lost was only the render state: the old
+            // fallback returned GuestRenderState.Default and disabled depth test/write/clear.
+            var depthTarget = DecodeDepthTarget(registers);
+            if (depthTarget is null)
+            {
+                return GuestRenderState.Default;
+            }
+
+            // SubmitDepthOnlyTranslatedDraw uses one private compatibility color target
+            // because the translated fragment module can still declare a color output.
+            // Decode viewport/scissor/raster/depth from the DB extent, but suppress writes
+            // to that private color attachment. The guest-visible result is depth only.
+            var syntheticTarget = new RenderTargetDescriptor(
+                Slot: 0,
+                Address: 0,
+                Width: depthTarget.Width,
+                Height: depthTarget.Height,
+                Format: 0,
+                NumberType: 0,
+                TileMode: 0);
+            return CreateRenderState(registers, syntheticTarget) with
+            {
+                Blends = [GuestBlendState.Default with { WriteMask = 0 }],
+            };
+        }
+
+        var target = targets[0];
+        var scissor = DecodeScissor(registers, target.Width, target.Height);
+        var blends = new GuestBlendState[targets.Count];
+        for (var index = 0; index < targets.Count; index++)
+        {
+            var blend = DecodeBlendState(registers, targets[index].Slot);
+            blends[index] = blend with
+            {
+                WriteMask = blend.WriteMask &
+                    GetPixelColorExportMask(
+                        pixelColorExportMasks,
+                        targets[index].Slot),
+            };
+        }
+
+        return new GuestRenderState(
+            blends,
+            scissor,
+            DecodeViewport(registers, target.Width, target.Height, scissor),
+            DecodeRasterState(registers),
+            DecodeDepthState(registers),
+            DecodeBlendConstant(registers));
+    }
+
+    // DB_DEPTH_CONTROL (context register 0x200): Z_ENABLE bit1, Z_WRITE_ENABLE
+    // bit2, ZFUNC bits[6:4] (GCN compare, matches Vulkan CompareOp ordering).
+    // DB_RENDER_CONTROL (context register 0x000): DEPTH_CLEAR_ENABLE bit0.
+    private const uint DbDepthControl = 0x200;
+
+    internal static GuestDepthState DecodeDepthState(
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        var hasDepthControl = registers.TryGetValue(DbDepthControl, out var control);
+        registers.TryGetValue(DbRenderControl, out var renderControl);
+        var testEnable = (control & 0x2u) != 0;
+        var writeEnable = (control & 0x4u) != 0;
+        var compareOp = hasDepthControl
+            ? (control >> 4) & 0x7u
+            : GuestDepthState.Default.CompareOp;
+        var clearEnable = (renderControl & 0x1u) != 0;
+        return new GuestDepthState(testEnable, writeEnable, compareOp, clearEnable);
+    }
+
+    private static GuestDepthTarget? DecodeDepthTarget(
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        var depthState = DecodeDepthState(registers);
+        if (!depthState.TestEnable &&
+            !depthState.WriteEnable &&
+            !depthState.ClearEnable)
+        {
+            return null;
+        }
+
+        if (!registers.TryGetValue(DbZInfo, out var zInfo) ||
+            !registers.TryGetValue(DbDepthSizeXy, out var sizeXy))
+        {
+            return null;
+        }
+
+        var guestFormat = zInfo & 0x3u;
+        if (guestFormat == 0)
+        {
+            return null;
+        }
+
+        registers.TryGetValue(DbZReadBase, out var readBase);
+        registers.TryGetValue(DbZWriteBase, out var writeBase);
+        registers.TryGetValue(DbZReadBaseHi, out var readBaseHi);
+        registers.TryGetValue(DbZWriteBaseHi, out var writeBaseHi);
+        var readAddress = ((ulong)(readBaseHi & 0xFFu) << 40) | ((ulong)readBase << 8);
+        var writeAddress = ((ulong)(writeBaseHi & 0xFFu) << 40) | ((ulong)writeBase << 8);
+        if (readAddress == 0 && writeAddress == 0)
+        {
+            return null;
+        }
+
+        var width = (sizeXy & 0x3FFFu) + 1;
+        var height = ((sizeXy >> 16) & 0x3FFFu) + 1;
+
+        // RootFix V6: AGC reset/state blocks can leave DB_DEPTH_SIZE_XY at
+        // zero while the active render pass already has a real viewport and
+        // scissor. Decoding zero literally produced a bogus 1x1 depth image;
+        // the same address is subsequently sampled as (for Demon's Souls)
+        // 2560x1440. Infer only for the exact reset value, so legitimate small
+        // depth surfaces keep their programmed dimensions.
+        if (sizeXy == 0 &&
+            TryInferDepthExtentFromActiveScissor(
+                registers,
+                out var inferredDepthWidth,
+                out var inferredDepthHeight))
+        {
+            width = inferredDepthWidth;
+            height = inferredDepthHeight;
+        }
+
+        if (width == 0 || height == 0 || width > 16384 || height > 16384)
+        {
+            return null;
+        }
+
+        registers.TryGetValue(DbDepthView, out var depthView);
+        var clearDepth = registers.TryGetValue(DbDepthClear, out var clearBits)
+            ? BitConverter.UInt32BitsToSingle(clearBits)
+            : 1f;
+        if (!float.IsFinite(clearDepth) || clearDepth < 0f || clearDepth > 1f)
+        {
+            clearDepth = 1f;
+        }
+
+        return new GuestDepthTarget(
+            readAddress,
+            writeAddress,
+            width,
+            height,
+            guestFormat,
+            (zInfo >> 4) & 0x1Fu,
+            clearDepth,
+            ReadOnly: (depthView & (1u << 24)) != 0 || writeAddress == 0);
+    }
+
+    private static bool TryInferDepthExtentFromActiveScissor(
+        IReadOnlyDictionary<uint, uint> registers,
+        out uint width,
+        out uint height)
+    {
+        width = 0;
+        height = 0;
+
+        // Prefer the generic scissor: games commonly program it even when the
+        // DB depth-size register is still the reset value. Fall back to the
+        // viewport scissor when necessary.
+        var pairs = new (uint Tl, uint Br)[]
+        {
+            (PaScGenericScissorTl, PaScGenericScissorBr),
+            (PaScVportScissor0Tl, PaScVportScissor0Br),
+        };
+
+        foreach (var pair in pairs)
+        {
+            if (!TryDecodeScissorPair(
+                    registers,
+                    pair.Tl,
+                    pair.Br,
+                    out var left,
+                    out var top,
+                    out var right,
+                    out var bottom,
+                    out var allZero) ||
+                allZero ||
+                right <= left ||
+                bottom <= top)
+            {
+                continue;
+            }
+
+            var candidateWidth = right - left;
+            var candidateHeight = bottom - top;
+            if (candidateWidth <= 1 ||
+                candidateHeight <= 1 ||
+                candidateWidth > 16384 ||
+                candidateHeight > 16384)
+            {
+                continue;
+            }
+
+            width = checked((uint)candidateWidth);
+            height = checked((uint)candidateHeight);
+            return true;
+        }
+
+        return false;
+    }
+
+    // PA_SU_SC_MODE_CNTL (context register 0x205) carries face culling, the
+    // front-face winding and polygon (wireframe) mode.
+    private const uint PaSuScModeCntl = 0x205;
+
+    private static GuestRasterState DecodeRasterState(
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        if (!registers.TryGetValue(PaSuScModeCntl, out var mode))
+        {
+            return GuestRasterState.Default;
+        }
+
+        var cullFront = (mode & 0x1u) != 0;
+        var cullBack = (mode & 0x2u) != 0;
+        var frontFaceClockwise = (mode & 0x4u) != 0;
+        var polyMode = (mode >> 3) & 0x3u;
+        var frontPtype = (mode >> 5) & 0x7u;
+        // POLY_MODE != 0 with a line front primitive type renders wireframe.
+        var wireframe = polyMode != 0 && frontPtype == 1;
+        return new GuestRasterState(cullFront, cullBack, frontFaceClockwise, wireframe);
+    }
+
+    /// <summary>CB_BLEND_RED..ALPHA carry the constant blend color as raw
+    /// float bits; unwritten registers read as the reset value (0.0).</summary>
+    private static GuestBlendConstant DecodeBlendConstant(
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        registers.TryGetValue(CbBlendRed, out var red);
+        registers.TryGetValue(CbBlendGreen, out var green);
+        registers.TryGetValue(CbBlendBlue, out var blue);
+        registers.TryGetValue(CbBlendAlpha, out var alpha);
+        return new GuestBlendConstant(
+            BitConverter.Int32BitsToSingle(unchecked((int)red)),
+            BitConverter.Int32BitsToSingle(unchecked((int)green)),
+            BitConverter.Int32BitsToSingle(unchecked((int)blue)),
+            BitConverter.Int32BitsToSingle(unchecked((int)alpha)));
+    }
+
+    private static GuestBlendState DecodeBlendState(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint slot)
+    {
+        var writeMask = 0xFu;
+        if (registers.TryGetValue(CbTargetMask, out var targetMask))
+        {
+            writeMask = (targetMask >> checked((int)(slot * 4))) & 0xFu;
+        }
+
+        registers.TryGetValue(CbBlend0Control + slot, out var control);
+        return new GuestBlendState(
+            ((control >> 30) & 1u) != 0,
+            control & 0x1Fu,
+            (control >> 8) & 0x1Fu,
+            (control >> 5) & 0x7u,
+            (control >> 16) & 0x1Fu,
+            (control >> 24) & 0x1Fu,
+            (control >> 21) & 0x7u,
+            ((control >> 29) & 1u) != 0,
+            writeMask);
+    }
+
+    private static GuestRect? DecodeScissor(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint targetWidth,
+        uint targetHeight)
+    {
+        if (targetWidth == 0 || targetHeight == 0)
+        {
+            return new GuestRect(0, 0, 0, 0);
+        }
+
+        var left = 0;
+        var top = 0;
+        var right = checked((int)Math.Min(targetWidth, int.MaxValue));
+        var bottom = checked((int)Math.Min(targetHeight, int.MaxValue));
+
+        var windowOffsetX = 0;
+        var windowOffsetY = 0;
+        var enableWindowOffset = true;
+        if (registers.TryGetValue(PaScWindowScissorTl, out var windowScissorTl))
+        {
+            enableWindowOffset = (windowScissorTl & 0x80000000u) == 0;
+        }
+
+        if (enableWindowOffset &&
+            registers.TryGetValue(PaScWindowOffset, out var windowOffset))
+        {
+            windowOffsetX = (short)(windowOffset & 0xFFFFu);
+            windowOffsetY = (short)(windowOffset >> 16);
+        }
+
+        // AGC reset-state blocks can carry an all-zero screen-scissor pair as
+        // an unpatched placeholder while the generic/viewport scissors hold
+        // the active bounds. Treat only that exact reset value as absent. A
+        // nonzero empty rectangle remains meaningful and still clips the draw.
+        IntersectScissorPair(
+            registers,
+            PaScScreenScissorTl,
+            PaScScreenScissorBr,
+            ref left,
+            ref top,
+            ref right,
+            ref bottom,
+            ignoreAllZeroPair: true);
+        IntersectScissorPair(
+            registers,
+            PaScWindowScissorTl,
+            PaScWindowScissorBr,
+            ref left,
+            ref top,
+            ref right,
+            ref bottom,
+            windowOffsetX,
+            windowOffsetY);
+        IntersectScissorPair(
+            registers,
+            PaScGenericScissorTl,
+            PaScGenericScissorBr,
+            ref left,
+            ref top,
+            ref right,
+            ref bottom,
+            windowOffsetX,
+            windowOffsetY);
+        var vportScissorEnabled =
+            !registers.TryGetValue(PaScModeCntl0, out var modeControl) ||
+            ((modeControl >> 1) & 1u) != 0;
+        if (vportScissorEnabled)
+        {
+            IntersectScissorPair(registers, PaScVportScissor0Tl, PaScVportScissor0Br, ref left, ref top, ref right, ref bottom);
+        }
+
+        left = Math.Clamp(left, 0, checked((int)targetWidth));
+        top = Math.Clamp(top, 0, checked((int)targetHeight));
+        right = Math.Clamp(right, left, checked((int)targetWidth));
+        bottom = Math.Clamp(bottom, top, checked((int)targetHeight));
+
+        if (left == 0 &&
+            top == 0 &&
+            right == (int)targetWidth &&
+            bottom == (int)targetHeight)
+        {
+            return null;
+        }
+
+        return new GuestRect(
+            left,
+            top,
+            checked((uint)(right - left)),
+            checked((uint)(bottom - top)));
+    }
+
+    private static GuestViewport? DecodeViewport(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint targetWidth,
+        uint targetHeight,
+        GuestRect? scissor)
+    {
+        if (targetWidth == 0 || targetHeight == 0)
+        {
+            return new GuestViewport(0, 0, 0, 0, 0, 1);
+        }
+
+        var minDepth = 0f;
+        var maxDepth = 1f;
+        if (registers.TryGetValue(PaScVportZMin0, out var zMinBits) &&
+            registers.TryGetValue(PaScVportZMax0, out var zMaxBits))
+        {
+            var decodedMin = BitConverter.UInt32BitsToSingle(zMinBits);
+            var decodedMax = BitConverter.UInt32BitsToSingle(zMaxBits);
+            if (float.IsFinite(decodedMin) &&
+                float.IsFinite(decodedMax) &&
+                decodedMax > decodedMin)
+            {
+                minDepth = decodedMin;
+                maxDepth = decodedMax;
+            }
+        }
+
+        if (TryDecodeFiniteFloat(registers, PaClVportXScale, out var xScale) &&
+            TryDecodeFiniteFloat(registers, PaClVportXOffset, out var xOffset) &&
+            TryDecodeFiniteFloat(registers, PaClVportYScale, out var yScale) &&
+            TryDecodeFiniteFloat(registers, PaClVportYOffset, out var yOffset) &&
+            xScale > 0f &&
+            yScale != 0f)
+        {
+            return new GuestViewport(
+                xOffset - xScale,
+                yOffset - yScale,
+                xScale * 2f,
+                yScale * 2f,
+                minDepth,
+                maxDepth);
+        }
+
+        if (scissor is not { } rect)
+        {
+            return minDepth == 0f && maxDepth == 1f
+                ? null
+                : new GuestViewport(0, 0, targetWidth, targetHeight, minDepth, maxDepth);
+        }
+
+        return new GuestViewport(
+            rect.X,
+            rect.Y,
+            rect.Width,
+            rect.Height,
+            minDepth,
+            maxDepth);
+    }
+
+    private static bool TryDecodeFiniteFloat(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint register,
+        out float value)
+    {
+        value = 0;
+        if (!registers.TryGetValue(register, out var bits))
+        {
+            return false;
+        }
+
+        value = BitConverter.UInt32BitsToSingle(bits);
+        return float.IsFinite(value);
+    }
+
+    private static void IntersectScissorPair(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint tlRegister,
+        uint brRegister,
+        ref int left,
+        ref int top,
+        ref int right,
+        ref int bottom,
+        int offsetX = 0,
+        int offsetY = 0,
+        bool ignoreAllZeroPair = false)
+    {
+        if (!TryDecodeScissorPair(
+                registers,
+                tlRegister,
+                brRegister,
+                out var pairLeft,
+                out var pairTop,
+                out var pairRight,
+                out var pairBottom,
+                out var allZero) ||
+            (ignoreAllZeroPair && allZero))
+        {
+            return;
+        }
+
+        pairLeft += offsetX;
+        pairTop += offsetY;
+        pairRight += offsetX;
+        pairBottom += offsetY;
+
+        left = Math.Max(left, pairLeft);
+        top = Math.Max(top, pairTop);
+        right = Math.Min(right, pairRight);
+        bottom = Math.Min(bottom, pairBottom);
+    }
+
+    private static bool TryDecodeScissorPair(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint tlRegister,
+        uint brRegister,
+        out int left,
+        out int top,
+        out int right,
+        out int bottom,
+        out bool allZero)
+    {
+        left = 0;
+        top = 0;
+        right = 0;
+        bottom = 0;
+        allZero = false;
+        if (!registers.TryGetValue(tlRegister, out var tl) ||
+            !registers.TryGetValue(brRegister, out var br))
+        {
+            return false;
+        }
+
+        allZero = tl == 0 && br == 0;
+        left = (int)(tl & 0x7FFFu);
+        top = (int)((tl >> 16) & 0x7FFFu);
+        right = (int)(br & 0x7FFFu);
+        bottom = (int)((br >> 16) & 0x7FFFu);
+        return true;
+    }
+
+    private static void TraceTranslatedGuestDraw(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        TranslatedGuestDraw draw,
+        uint psInputEna,
+        uint psInputAddr)
+    {
+        var targets = draw.RenderTargets.Count == 0
+            ? "none"
+            : string.Join(
+                ',',
+                draw.RenderTargets.Select(target =>
+                    $"{target.Slot}:0x{target.Address:X16}:{target.Width}x{target.Height}:" +
+                    $"fmt{target.Format}/num{target.NumberType}/tile{target.TileMode}"));
+        var depthTarget = draw.DepthTarget is { } depth
+            ? $"0x{depth.Address:X16}:{depth.Width}x{depth.Height}:" +
+              $"fmt{depth.GuestFormat}/sw{depth.SwizzleMode}:" +
+              $"read=0x{depth.ReadAddress:X16}/write=0x{depth.WriteAddress:X16}:" +
+              $"clear={depth.ClearDepth:0.######}/ro={(depth.ReadOnly ? 1 : 0)}"
+            : "none";
+        var probes = new Dictionary<ulong, string>();
+        var textures = string.Join(
+            ',',
+            draw.Textures.Select(binding =>
+            {
+                var texture = binding.Descriptor;
+                var targetSlot = draw.RenderTargets
+                    .FirstOrDefault(target => target.Address == texture.Address)
+                    .Slot;
+                var target = draw.RenderTargets.Any(candidate => candidate.Address == texture.Address)
+                    ? $"/rt{targetSlot}"
+                    : string.Empty;
+                if (!probes.TryGetValue(texture.Address, out var probe))
+                {
+                    probe = ProbeTexture(ctx, texture);
+                    probes.Add(texture.Address, probe);
+                }
+
+                state.RenderTargetWriters.TryGetValue(texture.Address, out var sourceWriter);
+                gpuState.ComputeImageWriters.TryGetValue(texture.Address, out var computeWriter);
+                var writer = sourceWriter.Sequence >= computeWriter.Sequence && sourceWriter.Sequence != 0
+                    ? $"/writer={sourceWriter.Sequence}:" +
+                      $"es0x{sourceWriter.ExportShaderAddress:X}:" +
+                      $"ps0x{sourceWriter.PixelShaderAddress:X}:" +
+                      $"v{sourceWriter.VertexCount}:prim0x{sourceWriter.PrimitiveType:X}"
+                    : computeWriter.Sequence != 0
+                        ? $"/compute={computeWriter.Sequence}:" +
+                          $"cs0x{computeWriter.ShaderAddress:X}:{computeWriter.Opcode}"
+                        : "/writer=none";
+                return
+                    $"0x{texture.Address:X16}:{texture.Width}x{texture.Height}:" +
+                    $"fmt{texture.Format}/num{texture.NumberType}/tile{texture.TileMode}" +
+                    $"/storage={binding.IsStorage}{target}/{probe}{writer}";
+            }));
+        var buffers = string.Join(
+            ',',
+            draw.GlobalMemoryBindings.Select((binding, index) =>
+                $"{index}:0x{binding.BaseAddress:X16}:{binding.DataLength}:" +
+                Convert.ToHexString(binding.Data.AsSpan(0, Math.Min(binding.DataLength, 256)))));
+        var indices = draw.IndexBuffer is { } indexBuffer
+            ? $"{(indexBuffer.Is32Bit ? 32 : 16)}:" +
+              Convert.ToHexString(indexBuffer.Data.AsSpan(0, Math.Min(indexBuffer.Length, 32)))
+            : "none";
+        var vertexInputs = draw.VertexInputs.Count == 0
+            ? "none"
+            : string.Join(
+                ',',
+                draw.VertexInputs.Select(input =>
+                    $"{input.Location}:pc=0x{input.Pc:X}:0x{input.BaseAddress:X16}" +
+                    $":stride{input.Stride}:off{input.OffsetBytes}:c{input.ComponentCount}" +
+                    $":fmt{input.DataFormat}/num{input.NumberFormat}"));
+        var scissor = draw.RenderState.Scissor is { } drawScissor
+            ? $"{drawScissor.X},{drawScissor.Y},{drawScissor.Width}x{drawScissor.Height}"
+            : "full";
+        var viewport = draw.RenderState.Viewport is { } drawViewport
+            ? $"{drawViewport.X:0.###},{drawViewport.Y:0.###}," +
+              $"{drawViewport.Width:0.###}x{drawViewport.Height:0.###}:" +
+              $"{drawViewport.MinDepth:0.###}-{drawViewport.MaxDepth:0.###}"
+            : "full";
+        var rasterRegisters = new (string Name, uint Offset)[]
+        {
+            ("screen_tl", PaScScreenScissorTl),
+            ("screen_br", PaScScreenScissorBr),
+            ("window_off", PaScWindowOffset),
+            ("window_tl", PaScWindowScissorTl),
+            ("window_br", PaScWindowScissorBr),
+            ("generic_tl", PaScGenericScissorTl),
+            ("generic_br", PaScGenericScissorBr),
+            ("vport_tl", PaScVportScissor0Tl),
+            ("vport_br", PaScVportScissor0Br),
+            ("mode", PaScModeCntl0),
+            ("xscale", PaClVportXScale),
+            ("xoffset", PaClVportXOffset),
+            ("yscale", PaClVportYScale),
+            ("yoffset", PaClVportYOffset),
+        };
+        var raster = string.Join(
+            ',',
+            rasterRegisters.Select(entry =>
+                state.CxRegisters.TryGetValue(entry.Offset, out var value)
+                    ? $"{entry.Name}=0x{value:X8}"
+                    : $"{entry.Name}=missing"));
+        var blend = draw.RenderState.Blend;
+        var rectExpanded = AgcPrimitiveHelpers.GetRectListDrawVertexCount(
+            draw.PrimitiveType,
+            draw.VertexCount,
+            indexed: draw.IndexBuffer is not null,
+            hasVertexBuffers: draw.VertexInputs.Count > 0);
+        TraceAgcShader(
+            $"agc.shader_draw es=0x{draw.ExportShaderAddress:X16} " +
+            $"ps=0x{draw.PixelShaderAddress:X16} spirv={draw.PixelShader.Payload.Length} " +
+            $"primitive=0x{draw.PrimitiveType:X} verts={draw.VertexCount}->{rectExpanded} " +
+            $"blend={(blend.Enable ? 1 : 0)}:{blend.ColorSrcFactor}/{blend.ColorDstFactor}/{blend.ColorFunc} " +
+            $"write_mask=0x{blend.WriteMask:X} scissor={scissor} viewport={viewport} " +
+            $"raster=[{raster}] " +
+            $"ps_ena=0x{psInputEna:X8} ps_addr=0x{psInputAddr:X8} " +
+            $"targets=[{targets}] depth=[{depthTarget}] textures=[{textures}] " +
+            $"buffers=[{buffers}] vertex=[{vertexInputs}] indices=[{indices}]");
+    }
+
+    private static IReadOnlyList<GuestDrawTexture> CreateGuestDrawTextures(
+        CpuContext ctx,
+        IReadOnlyList<TranslatedImageBinding> bindings,
+        out int fallbackTextureCount,
+        SubmittedGpuState? gpuState = null,
+        SubmittedDcbState? drawState = null)
+    {
+        var textures = new List<GuestDrawTexture>(bindings.Count);
+        fallbackTextureCount = 0;
+        Dictionary<V74085LocalTexturePayloadKey, GuestDrawTexture>? v74085Seen =
+            _localTexturePayloadDedupV74085
+                ? new Dictionary<V74085LocalTexturePayloadKey, GuestDrawTexture>()
+                : null;
+        foreach (var binding in bindings)
+        {
+            var descriptorAddress = binding.Descriptor.Address;
+            var dV74085 = binding.Descriptor;
+            var keyV74085 = new V74085LocalTexturePayloadKey(
+                dV74085.Address, dV74085.Width, dV74085.Height,
+                dV74085.Format, dV74085.NumberType, dV74085.TileMode,
+                dV74085.Type, dV74085.BaseLevel, dV74085.LastLevel,
+                dV74085.Pitch, dV74085.Depth, dV74085.BaseArray,
+                dV74085.ArrayPitch, dV74085.MaxMip, dV74085.BcSwizzle,
+                dV74085.MetadataAddress, dV74085.DescriptorFlags,
+                dV74085.HasExtendedDescriptor, binding.MipLevel,
+                binding.IsArrayed);
+            if (v74085Seen is not null &&
+                !binding.IsStorage &&
+                v74085Seen.TryGetValue(keyV74085, out var firstV74085))
+            {
+                var bytesV74085 =
+                    firstV74085.RgbaPixels.LongLength +
+                    (firstV74085.TiledSource?.LongLength ?? 0L);
+                if (bytesV74085 >= V74085LocalTexturePayloadDedupThresholdBytes)
+                {
+                    textures.Add(firstV74085 with
+                    {
+                        RgbaPixels = [],
+                        TiledSource = null,
+                        DstSelect = dV74085.DstSelect,
+                        Sampler = ToGuestSampler(binding.SamplerDescriptor),
+                    });
+                    var dedupCountV74085 = Interlocked.Increment(
+                        ref _v74085LocalTexturePayloadDedupCount);
+                    var dedupBytesV74085 = Interlocked.Add(
+                        ref _v74085LocalTexturePayloadDedupBytes,
+                        bytesV74085);
+                    if (dedupCountV74085 <= 256 ||
+                        (dedupCountV74085 & (dedupCountV74085 - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.85][LOCAL_TEXTURE_PAYLOAD_DEDUP] " +
+                            $"count={dedupCountV74085} addr=0x{dV74085.Address:X16} " +
+                            $"size={dV74085.Width}x{dV74085.Height} " +
+                            $"bytes={bytesV74085} skipped_mb={dedupBytesV74085 / (1024 * 1024)}");
+                    }
+                    continue;
+                }
+            }
+            var hasRenderWriter =
+                drawState is not null &&
+                descriptorAddress != 0 &&
+                drawState.RenderTargetWriters.ContainsKey(descriptorAddress);
+            var hasComputeWriter =
+                gpuState is not null &&
+                descriptorAddress != 0 &&
+                gpuState.ComputeImageWriters.ContainsKey(descriptorAddress);
+
+            if (TryCreateGuestDrawTexture(
+                    ctx,
+                    binding.Descriptor,
+                    binding.IsStorage,
+                    binding.MipLevel,
+                    binding.SamplerDescriptor,
+                    binding.IsArrayed,
+                    preferGpuResident: hasRenderWriter || hasComputeWriter,
+                    drawState: drawState,
+                    out var texture))
+            {
+                textures.Add(texture);
+                if (texture.IsFallback)
+                {
+                    fallbackTextureCount++;
+                }
+                if (v74085Seen is not null && !binding.IsStorage && !texture.IsFallback)
+                {
+                    var payloadBytesV74085 = texture.RgbaPixels.LongLength +
+                        (texture.TiledSource?.LongLength ?? 0L);
+                    if (payloadBytesV74085 >= V74085LocalTexturePayloadDedupThresholdBytes)
+                    {
+                        v74085Seen[keyV74085] = texture;
+                    }
+                }
+            }
+        }
+
+        return textures;
+    }
+
+    /// <summary>
+    /// Guest storage buffers for a translated draw, followed by the per-draw
+    /// initial scalar registers of each stage (pixel then vertex), matching
+    /// the binding layout the shaders were compiled against.
+    /// </summary>
+    private static IReadOnlyList<GuestMemoryBuffer> CreateTranslatedDrawGlobalBuffers(
+        TranslatedGuestDraw translatedDraw)
+    {
+        var buffers = CreateGuestMemoryBuffers(translatedDraw.GlobalMemoryBindings);
+        if (_bakeScalars)
+        {
+            return buffers;
+        }
+
+        var combined = new List<GuestMemoryBuffer>(buffers.Count + 2);
+        combined.AddRange(buffers);
+        var runtimeStateLength = GetRuntimeScalarBufferLength(
+            translatedDraw.GlobalMemoryBindings.Count);
+        combined.Add(new GuestMemoryBuffer(
+            0,
+            PackRuntimeScalarState(
+                translatedDraw.PixelInitialScalars,
+                translatedDraw.GlobalMemoryBindings),
+            runtimeStateLength,
+            Pooled: true));
+        combined.Add(new GuestMemoryBuffer(
+            0,
+            PackRuntimeScalarState(
+                translatedDraw.VertexInitialScalars,
+                translatedDraw.GlobalMemoryBindings),
+            runtimeStateLength,
+            Pooled: true));
+        return combined;
+    }
+
+    private static IReadOnlyList<GuestMemoryBuffer>
+        CreateGlobalBufferOwnershipView(
+            IReadOnlyList<GuestMemoryBuffer> buffers,
+            bool ownsPooledData)
+    {
+        var view = new GuestMemoryBuffer[buffers.Count];
+        for (var index = 0; index < buffers.Count; index++)
+        {
+            var buffer = buffers[index];
+            view[index] = buffer with
+            {
+                Pooled = ownsPooledData && buffer.Pooled,
+            };
+        }
+
+        return view;
+    }
+
+    /// <summary>
+    /// Present-time variant: the flip path can reuse the same translated
+    /// draw across several flips and swapchain retries, so it must not wrap
+    /// the (pooled, single-consumption) binding arrays. Buffer contents are
+    /// re-read from guest memory instead, which also presents current data.
+    /// </summary>
+    private static IReadOnlyList<GuestMemoryBuffer> CreateTranslatedDrawGlobalBuffersForPresent(
+        CpuContext ctx,
+        TranslatedGuestDraw translatedDraw)
+    {
+        var bindings = translatedDraw.GlobalMemoryBindings;
+        var combined = new List<GuestMemoryBuffer>(bindings.Count + 2);
+        foreach (var binding in bindings)
+        {
+            var data = new byte[Math.Max(binding.DataLength, sizeof(uint))];
+            var guestMemoryBacked = binding.BaseAddress != 0 &&
+                (ctx.Memory.TryRead(binding.BaseAddress, data) ||
+                 KernelMemoryCompatExports.TryReadTrackedLibcHeap(binding.BaseAddress, data));
+            if (!guestMemoryBacked)
+            {
+                // Keep the zero-filled buffer; layout must match the shader.
+            }
+
+            combined.Add(new GuestMemoryBuffer(
+                binding.BaseAddress,
+                data,
+                data.Length,
+                Pooled: false,
+                Writable: binding.Writable,
+                WriteBackToGuest: binding.WriteBackToGuest && guestMemoryBacked));
+        }
+
+        if (!_bakeScalars)
+        {
+            var runtimeStateLength = GetRuntimeScalarBufferLength(bindings.Count);
+            combined.Add(new GuestMemoryBuffer(
+                0,
+                PackRuntimeScalarStateUnpooled(
+                    translatedDraw.PixelInitialScalars,
+                    bindings),
+                runtimeStateLength,
+                Pooled: false));
+            combined.Add(new GuestMemoryBuffer(
+                0,
+                PackRuntimeScalarStateUnpooled(
+                    translatedDraw.VertexInitialScalars,
+                    bindings),
+                runtimeStateLength,
+                Pooled: false));
+        }
+
+        return combined;
+    }
+
+    private static int GetRuntimeScalarBufferLength(int bindingCount) =>
+        checked((256 + bindingCount) * sizeof(uint));
+
+    private static byte[] PackRuntimeScalarState(
+        IReadOnlyList<uint> registers,
+        IReadOnlyList<Gen5GlobalMemoryBinding> bindings)
+    {
+        var bytes = GuestDataPool.Shared.Rent(
+            GetRuntimeScalarBufferLength(bindings.Count));
+        PackRuntimeScalarStateInto(bytes, registers, bindings);
+        return bytes;
+    }
+
+    private static byte[] PackRuntimeScalarStateUnpooled(
+        IReadOnlyList<uint> registers,
+        IReadOnlyList<Gen5GlobalMemoryBinding> bindings)
+    {
+        var bytes = new byte[GetRuntimeScalarBufferLength(bindings.Count)];
+        PackRuntimeScalarStateInto(bytes, registers, bindings);
+        return bytes;
+    }
+
+    private static void PackRuntimeScalarStateInto(
+        byte[] bytes,
+        IReadOnlyList<uint> registers,
+        IReadOnlyList<Gen5GlobalMemoryBinding> bindings)
+    {
+        PackScalarRegistersInto(bytes, registers);
+        var biasOffset = 256 * sizeof(uint);
+        for (var index = 0; index < bindings.Count; index++)
+        {
+            var byteBias = checked((uint)(
+                bindings[index].BaseAddress &
+                (_storageBufferOffsetAlignment - 1)));
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(biasOffset + index * sizeof(uint), sizeof(uint)),
+                byteBias);
+        }
+    }
+
+    private static void PackScalarRegistersInto(byte[] bytes, IReadOnlyList<uint> registers)
+    {
+        if (registers is uint[] { Length: >= 256 } array)
+        {
+            // Guest scalar registers are little-endian dwords and the host
+            // is x86-64, so a bulk copy replaces 256 per-element writes.
+            System.Runtime.InteropServices.MemoryMarshal
+                .AsBytes(array.AsSpan(0, 256))
+                .CopyTo(bytes);
+            return;
+        }
+
+        // Rented arrays carry stale bytes; clear the packed window first.
+        Array.Clear(bytes, 0, 256 * sizeof(uint));
+        var count = Math.Min(registers.Count, 256);
+        for (var index = 0; index < count; index++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(index * sizeof(uint)),
+                registers[index]);
+        }
+    }
+
+    /// <summary>
+    /// Returns the pooled buffer arrays an evaluation produced. Called only
+    /// on translation-failure paths, where no <see cref="TranslatedGuestDraw"/>
+    /// is built to take ownership; on success the draw's consumers return them.
+    /// </summary>
+    private static void ReturnPooledEvaluationArrays(Gen5ShaderEvaluation evaluation)
+    {
+        var returned = new HashSet<byte[]>(
+            System.Collections.Generic.ReferenceEqualityComparer.Instance);
+        foreach (var binding in evaluation.GlobalMemoryBindings)
+        {
+            if (binding.DataPooled && returned.Add(binding.Data))
+            {
+                GuestDataPool.Shared.Return(binding.Data);
+            }
+        }
+
+        if (evaluation.VertexInputs is { } vertexInputs)
+        {
+            foreach (var binding in vertexInputs)
+            {
+                if (binding.DataPooled && returned.Add(binding.Data))
+                {
+                    GuestDataPool.Shared.Return(binding.Data);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reclaims a compute submission that was prepared but never accepted by
+    /// the backend. The submission view can contain an additional pooled
+    /// runtime-scalar buffer that is not part of <paramref name="evaluation"/>,
+    /// so returning only evaluation arrays would leak that lease.
+    /// </summary>
+    private static void ReturnPooledComputeSubmissionArrays(
+        Gen5ShaderEvaluation evaluation,
+        IReadOnlyList<GuestMemoryBuffer> submissionBuffers)
+    {
+        var returned = new HashSet<byte[]>(
+            System.Collections.Generic.ReferenceEqualityComparer.Instance);
+
+        foreach (var buffer in submissionBuffers)
+        {
+            if (buffer.Pooled && returned.Add(buffer.Data))
+            {
+                GuestDataPool.Shared.Return(buffer.Data);
+            }
+        }
+
+        if (evaluation.VertexInputs is { } vertexInputs)
+        {
+            foreach (var binding in vertexInputs)
+            {
+                if (binding.DataPooled && returned.Add(binding.Data))
+                {
+                    GuestDataPool.Shared.Return(binding.Data);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns pooled data arrays a translated draw owns but did not hand to
+    /// a presenter consumer. The offscreen path hands globals, vertex and
+    /// index buffers to the presenter (which returns them), so it passes all
+    /// three false; other draw sinks pass true for whatever they dropped.
+    /// </summary>
+    private static void ReturnPooledDrawArrays(
+        TranslatedGuestDraw draw,
+        bool globals,
+        bool vertex,
+        bool index)
+    {
+        var returned = new HashSet<byte[]>(
+            System.Collections.Generic.ReferenceEqualityComparer.Instance);
+        if (globals)
+        {
+            foreach (var binding in draw.GlobalMemoryBindings)
+            {
+                if (binding.DataPooled && returned.Add(binding.Data))
+                {
+                    GuestDataPool.Shared.Return(binding.Data);
+                }
+            }
+        }
+
+        if (vertex)
+        {
+            foreach (var binding in draw.VertexInputs)
+            {
+                if (binding.DataPooled && returned.Add(binding.Data))
+                {
+                    GuestDataPool.Shared.Return(binding.Data);
+                }
+            }
+        }
+
+        if (index && draw.IndexBuffer is { Pooled: true } indexBuffer &&
+            returned.Add(indexBuffer.Data))
+        {
+            GuestDataPool.Shared.Return(indexBuffer.Data);
+        }
+    }
+
+    private static IReadOnlyList<GuestMemoryBuffer> CreateGuestMemoryBuffers(
+        IReadOnlyList<Gen5GlobalMemoryBinding> bindings)
+    {
+        var buffers = new GuestMemoryBuffer[bindings.Count];
+        for (var index = 0; index < bindings.Count; index++)
+        {
+            buffers[index] = new GuestMemoryBuffer(
+                bindings[index].BaseAddress,
+                bindings[index].Data,
+                bindings[index].DataLength,
+                bindings[index].DataPooled,
+                bindings[index].Writable,
+                bindings[index].WriteBackToGuest);
+        }
+
+        return buffers;
+    }
+
+    /// <summary>
+    /// Guest storage buffers for a compute dispatch followed by its initial
+    /// scalar registers. Dispatch-specific SGPR values remain runtime data so
+    /// one translated pipeline serves every matching shader/resource shape.
+    /// </summary>
+    private static void QueueComputeGlobalWritePublication(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ulong shaderAddress,
+        IReadOnlyList<GuestMemoryBuffer> globalMemoryBuffers)
+    {
+        // Do not serialize every writable dispatch. Only schedule a visibility
+        // point when one of its writable ranges overlaps a label that is
+        // currently suspending a guest queue.
+        TraceComputeLabelCoverageV734(
+            ctx.Memory,
+            shaderAddress,
+            state.QueueName,
+            state.ActiveSubmissionId,
+            globalMemoryBuffers);
+        // [V72.4.3.2.16][COMPUTE_LABEL_VISIBILITY]
+        // Preserve writable compute ranges during boot/handoff even if their waiter
+        // registers slightly later, then publish only after real GPU->CPU visibility.
+        var proactiveBootVisibility =
+            SharpEmu.Libs.Media.BinkHostPlaybackAssist.ShouldForceBootComputeLabelVisibility;
+        var candidateRanges = new List<(ulong Address, ulong Length)>();
+        var seenLabels = new HashSet<ulong>();
+        foreach (var buffer in globalMemoryBuffers)
+        {
+            if (!buffer.Writable ||
+                !buffer.WriteBackToGuest ||
+                buffer.BaseAddress == 0 ||
+                buffer.Length <= 0)
+            {
+                continue;
+            }
+
+            var length = (ulong)buffer.Length;
+            var watched = GpuWaitRegistry.SnapshotWatchedLabelsInRange(
+                CanonicalMemory(ctx.Memory),
+                buffer.BaseAddress,
+                length);
+            if (watched.Count == 0 && !proactiveBootVisibility)
+            {
+                continue;
+            }
+
+            candidateRanges.Add((buffer.BaseAddress, length));
+            foreach (var label in watched)
+            {
+                seenLabels.Add(label.Address);
+            }
+        }
+
+        if (candidateRanges.Count == 0)
+        {
+            return;
+        }
+
+        var queueName = state.QueueName;
+        var submissionId = state.ActiveSubmissionId;
+
+        void PublishVisibleLabels()
+        {
+            var latchedAny = false;
+            var published = 0;
+            var publishedLabels = new HashSet<ulong>();
+
+            foreach (var range in candidateRanges)
+            {
+                foreach (var watched in GpuWaitRegistry.SnapshotWatchedLabelsInRange(
+                             CanonicalMemory(ctx.Memory),
+                             range.Address,
+                             range.Length))
+                {
+                    if (!publishedLabels.Add(watched.Address))
+                    {
+                        continue;
+                    }
+
+                    ulong value;
+                    if (watched.Is64Bit)
+                    {
+                        if (!TryReadUInt64(ctx, watched.Address, out value))
+                        {
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        if (!TryReadUInt32(ctx, watched.Address, out var value32))
+                        {
+                            continue;
+                        }
+
+                        value = value32;
+                    }
+
+                    latchedAny |= GpuWaitRegistry.RecordProduced(
+                        CanonicalMemory(ctx.Memory),
+                        watched.Address,
+                        value);
+                    published++;
+                }
+            }
+
+            if (latchedAny)
+            {
+                lock (gpuState.WaitMonitorSignalGate)
+                {
+                    gpuState.WaitMonitorSignalVersion++;
+                    Monitor.PulseAll(gpuState.WaitMonitorSignalGate);
+                }
+            }
+
+            if (_traceAgc && published != 0)
+            {
+                TraceAgc(
+                    $"agc.compute_labels_published cs=0x{shaderAddress:X16} " +
+                    $"queue={queueName} submission={submissionId} " +
+                    $"labels={published} watched={seenLabels.Count} " +
+                    $"latched={(latchedAny ? 1 : 0)}");
+            }
+        }
+
+        var sequence = GuestGpu.Current.SubmitOrderedGuestActionWithVisibility(
+            PublishVisibleLabels,
+            $"compute label visibility cs=0x{shaderAddress:X16}",
+            requiresGpuToCpuVisibility: true);
+        if (sequence == 0)
+        {
+            // Headless/startup mode has no GPU consumer. Preserve immediate
+            // semantics rather than losing a legitimate CPU-backed write.
+            PublishVisibleLabels();
+        }
+    }
+
+    private static bool TryEvaluateShaderWithResourceVisibilityRetry(
+        CpuContext ctx,
+        Gen5ShaderState shaderState,
+        out Gen5ShaderEvaluation evaluation,
+        out string error,
+        bool resolveVertexInputs = false,
+        uint? requiredVertexRecordCount = null)
+    {
+        // Upstream 0.0.3 behavior: evaluate directly. A scalar-pointer fallback
+        // is handled by the evaluator itself and is not, by itself, evidence
+        // that all pending Vulkan work must be drained to guest memory.
+        //
+        // The old V74 path remains available behind
+        // SHARPEMU_SHADER_RESOURCE_GLOBAL_VISIBILITY_RETRY=1 for A/B only.
+        if (!_shaderResourceGlobalVisibilityRetryV74060)
+        {
+            var evaluated = Gen5ShaderScalarEvaluator.TryEvaluate(
+                ctx,
+                shaderState,
+                out evaluation,
+                out error,
+                resolveVertexInputs,
+                requiredVertexRecordCount);
+
+            if (evaluated &&
+                Gen5ShaderScalarEvaluator.WasEmptySrtScalarPointerFallback(
+                    shaderState.Program.Address))
+            {
+                var count = Interlocked.Increment(
+                    ref _shaderResourceVisibilityRetryElidedCountV74060);
+                if (count <= 64 || (count & (count - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.60][SHADER_GLOBAL_VISIBILITY_RETRY_ELIDED] " +
+                        $"count={count} shader=0x{shaderState.Program.Address:X16} " +
+                        $"srt={shaderState.Metadata?.ShaderResourceTableSizeDwords ?? 0} " +
+                        $"eud={shaderState.Metadata?.ExtendedUserDataSizeDwords ?? 0}");
+                }
+            }
+
+            return evaluated;
+        }
+
+        // Explicit diagnostic A/B: retain the accumulated V74 retry semantics.
+        var fallbackBefore =
+            Gen5ShaderScalarEvaluator.GetScalarPointerFallbackCount(
+                shaderState.Program.Address);
+
+        if (!Gen5ShaderScalarEvaluator.TryEvaluate(
+                ctx,
+                shaderState,
+                out evaluation,
+                out error,
+                resolveVertexInputs,
+                requiredVertexRecordCount))
+        {
+            return false;
+        }
+
+        var fallbackAfter =
+            Gen5ShaderScalarEvaluator.GetScalarPointerFallbackCount(
+                shaderState.Program.Address);
+        if (fallbackAfter == fallbackBefore ||
+            shaderState.Metadata is null ||
+            shaderState.Metadata.ShaderResourceTableSizeDwords == 0 &&
+            shaderState.Metadata.ExtendedUserDataSizeDwords == 0)
+        {
+            return true;
+        }
+
+        if (!GuestGpu.Current.SynchronizeGuestMemoryForCpu())
+        {
+            return true;
+        }
+
+        ReturnPooledEvaluationArrays(evaluation);
+        if (!Gen5ShaderScalarEvaluator.TryEvaluate(
+                ctx,
+                shaderState,
+                out evaluation,
+                out error,
+                resolveVertexInputs,
+                requiredVertexRecordCount))
+        {
+            return false;
+        }
+
+        var fallbackAfterRetry =
+            Gen5ShaderScalarEvaluator.GetScalarPointerFallbackCount(
+                shaderState.Program.Address);
+        TraceAgcShader(
+            $"agc.shader_resource_visibility_retry " +
+            $"shader=0x{shaderState.Program.Address:X16} " +
+            $"fallback_before={fallbackBefore} " +
+            $"fallback_first={fallbackAfter} " +
+            $"fallback_after={fallbackAfterRetry} " +
+            $"srt={shaderState.Metadata.ShaderResourceTableSizeDwords} " +
+            $"eud={shaderState.Metadata.ExtendedUserDataSizeDwords}");
+
+        return true;
+    }
+
+    private static IReadOnlyList<GuestMemoryBuffer> CreateTranslatedComputeGlobalBuffers(
+        Gen5ShaderEvaluation evaluation)
+    {
+        var buffers = CreateGuestMemoryBuffers(evaluation.GlobalMemoryBindings);
+        if (_bakeScalars)
+        {
+            return buffers;
+        }
+
+        var combined = new List<GuestMemoryBuffer>(buffers.Count + 1);
+        combined.AddRange(buffers);
+        combined.Add(new GuestMemoryBuffer(
+            0,
+            PackRuntimeScalarState(
+                evaluation.InitialScalarRegisters,
+                evaluation.GlobalMemoryBindings),
+            GetRuntimeScalarBufferLength(evaluation.GlobalMemoryBindings.Count),
+            Pooled: true));
+        return combined;
+    }
+
+    private static IReadOnlyList<GuestVertexBuffer> CreateGuestVertexBuffers(
+        IReadOnlyList<Gen5VertexInputBinding> bindings)
+    {
+        var buffers = new GuestVertexBuffer[bindings.Count];
+        for (var index = 0; index < bindings.Count; index++)
+        {
+            var binding = bindings[index];
+            buffers[index] = new GuestVertexBuffer(
+                binding.Location,
+                binding.ComponentCount,
+                binding.DataFormat,
+                binding.NumberFormat,
+                binding.BaseAddress,
+                binding.Stride,
+                binding.OffsetBytes,
+                binding.Data,
+                binding.DataLength,
+                binding.DataPooled,
+                binding.PerInstance);
+        }
+
+        return buffers;
+    }
+
+    private static IReadOnlyList<GuestVertexBuffer>
+        CreateVertexBufferOwnershipView(
+            IReadOnlyList<GuestVertexBuffer> buffers,
+            bool ownsPooledData)
+    {
+        var view = new GuestVertexBuffer[buffers.Count];
+        for (var index = 0; index < buffers.Count; index++)
+        {
+            var buffer = buffers[index];
+            view[index] = buffer with
+            {
+                Pooled = ownsPooledData && buffer.Pooled,
+            };
+        }
+
+        return view;
+    }
+
+    private static GuestIndexBuffer? CreateIndexBufferOwnershipView(
+        GuestIndexBuffer? buffer,
+        bool ownsPooledData) =>
+        buffer is null
+            ? null
+            : buffer with { Pooled = ownsPooledData && buffer.Pooled };
+
+    // BCn block-compressed guest formats and the bytes per 4x4 block.
+    private static int GetBlockCompressedBlockBytes(uint format) => format switch
+    {
+        169 or 170 or 175 or 176 => 8,
+        171 or 172 or 173 or 174 or 177 or 178 or 179 or 180 or 181 or 182 => 16,
+        _ => 0,
+    };
+
+    /// <summary>
+    /// Deswizzles a tiled texture source into linear layout when tiling is
+    /// enabled and the format is understood; returns null to keep the raw
+    /// bytes (linear surfaces, unknown modes, or non-power-of-two elements).
+    /// </summary>
+    // The GPU detile kernel implements these two equation families at 4/8/16 bpp
+    // (one/two/four 32-bit words per element; 1/2 bpp are sub-word and stay on the
+    // CPU). Keep in lockstep with VulkanDetilePass.Supports / MetalDetilePass.Supports.
+    private static bool IsGpuDetileEquation(DetileEquation equation) =>
+        equation == DetileEquation.ExactXor || equation == DetileEquation.BlockTable;
+
+    private static bool IsGpuDetileBytesPerElement(int bytesPerElement) =>
+        bytesPerElement is 4 or 8 or 16;
+
+    private static bool IsGpuDetileTextureType(uint type) =>
+        type != Gen5TextureType3D;
+
+    private static bool TryGetTextureElementLayout(
+        TextureDescriptor descriptor,
+        uint sourceWidth,
+        out int elementsWide,
+        out int elementsHigh,
+        out int bytesPerElement)
+    {
+        var blockBytes = GetBlockCompressedBlockBytes(descriptor.Format);
+        if (blockBytes != 0)
+        {
+            bytesPerElement = blockBytes;
+            elementsWide = (int)((sourceWidth + 3) / 4);
+            elementsHigh = (int)((descriptor.Height + 3) / 4);
+        }
+        else
+        {
+            bytesPerElement = (int)GetTextureBytesPerTexel(descriptor.Format);
+            if (bytesPerElement == 0)
+            {
+                elementsWide = 0;
+                elementsHigh = 0;
+                return false;
+            }
+
+            elementsWide = (int)sourceWidth;
+            elementsHigh = (int)descriptor.Height;
+        }
+
+        return true;
+    }
+
+    private static byte[]? TryDetileTextureSource(
+        TextureDescriptor descriptor,
+        uint sourceWidth,
+        int logicalByteCount,
+        byte[] source,
+        bool baseMipInTail = false,
+        int tailElementX = 0,
+        int tailElementY = 0)
+    {
+        if (!GnmTiling.NeedsDetile(descriptor.TileMode) ||
+            !TryGetTextureElementLayout(
+                descriptor,
+                sourceWidth,
+                out var elementsWide,
+                out var elementsHigh,
+                out var bytesPerElement))
+        {
+            return null;
+        }
+
+        if (baseMipInTail)
+        {
+            if (!GnmTiling.TryGetBlockElementDimensions(
+                    descriptor.TileMode,
+                    bytesPerElement,
+                    out var blockWidth,
+                    out var blockHeight))
+            {
+                return null;
+            }
+
+            var blockByteCount = (long)blockWidth * blockHeight * bytesPerElement;
+            if (source.Length < blockByteCount ||
+                (long)elementsWide * elementsHigh * bytesPerElement > logicalByteCount)
+            {
+                return null;
+            }
+
+            var blockLinear = new byte[blockByteCount];
+            if (!GnmTiling.TryDetile(
+                    source,
+                    blockLinear,
+                    descriptor.TileMode,
+                    blockWidth,
+                    blockHeight,
+                    bytesPerElement))
+            {
+                return null;
+            }
+
+            var tailLinear = new byte[logicalByteCount];
+            var rowBytes = elementsWide * bytesPerElement;
+            for (var y = 0; y < elementsHigh; y++)
+            {
+                var sourceOffset = (((long)tailElementY + y) * blockWidth + tailElementX) * bytesPerElement;
+                blockLinear.AsSpan((int)sourceOffset, rowBytes)
+                    .CopyTo(tailLinear.AsSpan(y * rowBytes, rowBytes));
+            }
+
+            return tailLinear;
+        }
+
+        var volumeDepth = checked((int)GetTextureVolumeDepth(
+            descriptor.Type,
+            descriptor.Depth));
+        if (logicalByteCount % volumeDepth != 0 ||
+            source.Length % volumeDepth != 0)
+        {
+            return null;
+        }
+
+        var logicalSliceByteCount = logicalByteCount / volumeDepth;
+        var physicalSliceByteCount = source.Length / volumeDepth;
+        var linear = new byte[logicalByteCount];
+        for (var slice = 0; slice < volumeDepth; slice++)
+        {
+            if (!GnmTiling.TryDetile(
+                    source.AsSpan(slice * physicalSliceByteCount, physicalSliceByteCount),
+                    linear.AsSpan(slice * logicalSliceByteCount, logicalSliceByteCount),
+                    descriptor.TileMode,
+                    elementsWide,
+                    elementsHigh,
+                    bytesPerElement))
+            {
+                return null;
+            }
+        }
+
+        return linear;
+    }
+
+    // RootFix V10: Gen5 texture descriptors carry a packed guest/host-visible
+    // address. Standard guest mappings are readable through CpuMemory, while
+    // native/libc allocations can be tracked as host allocations and on some
+    // platforms appear through the descriptor's packed low-46-bit GPU alias.
+    // Index/global-buffer paths already use tracked libc fallback; texture
+    // uploads must use the same resolution rules instead of substituting a
+    // fallback texture when CpuMemory alone cannot resolve the range.
+    private static bool TryReadTextureGuestMemory(
+        CpuContext ctx,
+        ulong address,
+        Span<byte> destination)
+    {
+        if (destination.IsEmpty)
+        {
+            return true;
+        }
+
+        return ctx.Memory.TryRead(address, destination) ||
+               KernelMemoryCompatExports.TryReadTrackedLibcHeap(
+                   address,
+                   destination) ||
+               KernelMemoryCompatExports.TryReadTrackedLibcHeapGpuAlias(
+                   address,
+                   destination);
+    }
+
+    // SHARPEMU_V73_17_ZERO_DCC_PROBE
+    private static bool TryProbeTextureGuestRangeAllZero(
+        CpuContext ctx,
+        ulong address,
+        ulong length,
+        out bool allZero)
+    {
+        allZero = false;
+        if (length == 0)
+        {
+            allZero = true;
+            return true;
+        }
+
+        const int ChunkBytes = 1024 * 1024;
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(ChunkBytes);
+        try
+        {
+            ulong offset = 0;
+            while (offset < length)
+            {
+                var count = (int)Math.Min((ulong)ChunkBytes, length - offset);
+                var span = buffer.AsSpan(0, count);
+                if (!TryReadTextureGuestMemory(ctx, address + offset, span))
+                {
+                    return false;
+                }
+
+                for (var index = 0; index < count; index++)
+                {
+                    if (buffer[index] != 0)
+                    {
+                        allZero = false;
+                        return true;
+                    }
+                }
+
+                offset += (ulong)count;
+            }
+
+            allZero = true;
+            return true;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static bool CanReadTextureGuestRange(
+        CpuContext ctx,
+        ulong address,
+        ulong length)
+    {
+        if (length == 0)
+        {
+            return true;
+        }
+
+        if (address > ulong.MaxValue - (length - 1))
+        {
+            return false;
+        }
+
+        Span<byte> probe = stackalloc byte[1];
+        return TryReadTextureGuestMemory(ctx, address, probe) &&
+               TryReadTextureGuestMemory(
+                   ctx,
+                   address + length - 1,
+                   probe);
+    }
+
+    private static ulong ComputeV74067213LargeArrayContentKey(
+        CpuContext ctx,
+        ulong baseAddress,
+        uint layers,
+        ulong guestLayerStride,
+        ulong readableSliceBytes,
+        long writeGeneration)
+    {
+        if (SharpEmu.HLE.GuestImageWriteTracker.Enabled &&
+            writeGeneration >= 0)
+        {
+            return 0xD15A000000000000UL ^
+                   unchecked((ulong)writeGeneration);
+        }
+
+        if (layers == 0 || readableSliceBytes == 0)
+        {
+            return 0;
+        }
+
+        const int SampleBytes = 64;
+        const int SampleCount = 32;
+        Span<byte> sample = stackalloc byte[SampleBytes];
+        ulong hash = 14695981039346656037UL;
+        ulong packedBytes;
+        try
+        {
+            packedBytes = checked(readableSliceBytes * layers);
+        }
+        catch (OverflowException)
+        {
+            return unchecked((ulong)Interlocked.Increment(
+                ref _v74067213LargeArrayProbeFailureNonce));
+        }
+
+        var maximumOffset = packedBytes > SampleBytes
+            ? packedBytes - SampleBytes
+            : 0UL;
+
+        for (var sampleIndex = 0; sampleIndex < SampleCount; sampleIndex++)
+        {
+            var packedOffset = maximumOffset * (ulong)sampleIndex /
+                (ulong)(SampleCount - 1);
+            var layer = packedOffset / readableSliceBytes;
+            var within = packedOffset % readableSliceBytes;
+            if (within + SampleBytes > readableSliceBytes)
+            {
+                within = readableSliceBytes > SampleBytes
+                    ? readableSliceBytes - SampleBytes
+                    : 0UL;
+            }
+
+            var guestAddress =
+                baseAddress + layer * guestLayerStride + within;
+            var readLength = (int)Math.Min(
+                (ulong)SampleBytes,
+                readableSliceBytes - within);
+            var destination = sample[..readLength];
+
+            if (!TryReadTextureGuestMemory(ctx, guestAddress, destination))
+            {
+                var nonce = Interlocked.Increment(
+                    ref _v74067213LargeArrayProbeFailureNonce);
+                return 0xBAD0000000000000UL ^
+                       unchecked((ulong)nonce);
+            }
+
+            for (var i = 0; i < destination.Length; i++)
+            {
+                hash ^= destination[i];
+                hash *= 1099511628211UL;
+            }
+
+            hash ^= layer;
+            hash *= 1099511628211UL;
+        }
+
+        return hash;
+    }
+
+    private static void TraceTextureFallback(TextureDescriptor descriptor, string reason)
+    {
+        var mode = Environment.GetEnvironmentVariable("SHARPEMU_TRACE_GUEST_IMAGES");
+        if ((!string.Equals(mode, "1", StringComparison.Ordinal) &&
+             !string.Equals(mode, "present", StringComparison.OrdinalIgnoreCase)) ||
+            Interlocked.Increment(ref _textureFallbackTraceCount) > 64)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[LOADER][TRACE] agc.texture_fallback reason={reason} " +
+            $"addr=0x{descriptor.Address:X16} type={descriptor.Type} " +
+            $"size={descriptor.Width}x{descriptor.Height} pitch={descriptor.Pitch} " +
+            $"fmt={descriptor.Format} num={descriptor.NumberType} " +
+            $"tile={descriptor.TileMode} mip={descriptor.MipLevels} " +
+            $"dst=0x{descriptor.DstSelect:X3}");
+    }
+
+    // SHARPEMU_V74_0_56_34_RDNA2_DCC_COMPRESSION_ENABLE
+    private static void TraceRdna2SrdCompressionV7405634(
+        TextureDescriptor descriptor,
+        bool isStorage)
+    {
+        if (!_traceRdna2SrdCompressionV7405634 ||
+            !descriptor.HasExtendedDescriptor ||
+            descriptor.MetadataAddress == 0)
+        {
+            return;
+        }
+
+        var compressionEnabled =
+            descriptor.DccCompressionEnabled;
+
+        var count = compressionEnabled
+            ? Interlocked.Increment(
+                ref _v7405634CompressionOnTraceCount)
+            : Interlocked.Increment(
+                ref _v7405634CompressionOffTraceCount);
+
+        if (count <= 128 ||
+            (count & (count - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.56.34][RDNA2_SRD] " +
+                $"compression={(compressionEnabled ? 1 : 0)} " +
+                $"count={count} " +
+                $"addr=0x{descriptor.Address:X16} " +
+                $"meta=0x{descriptor.MetadataAddress:X16} " +
+                $"flags=0x{descriptor.DescriptorFlags:X6} " +
+                $"size={descriptor.Width}x{descriptor.Height} " +
+                $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                $"tile={descriptor.TileMode} " +
+                $"storage={(isStorage ? 1 : 0)}");
+        }
+    }
+
+    // V61.6: resolve metadata-backed SRDs against every known DCC surface,
+    // including the exact colour address. Metadata-only CB operations now publish
+    // those surfaces before returning, so exact or aliased resident images can be
+    // consumed without a CPU snapshot of compressed/stale guest memory.
+    // SHARPEMU_V74_0_1_TEXTURE_PRODUCER_CONTRACT
+    // Semantics-neutral producer/residency report for the 4K DCC surface.
+    private static void TraceDemonTextureProducerContract(
+        TextureDescriptor descriptor,
+        SubmittedDcbState? drawState,
+        string aliasReason)
+    {
+        if (!_traceDemonTextureContract ||
+            descriptor.Width != 3840 ||
+            descriptor.Height != 2160 ||
+            !descriptor.DccCompressionEnabled ||
+            Interlocked.Increment(ref _v7401TextureContractTraceCount) > 128)
+        {
+            return;
+        }
+
+        var exactKnown = false;
+        var exactWriter = false;
+        var exactWriterSequence = 0UL;
+        var metadataCandidates = 0;
+        var shapeCandidates = 0;
+        var residentCandidates = 0;
+        var writerCandidates = 0;
+
+        if (drawState is not null)
+        {
+            exactKnown = drawState.KnownRenderTargets.ContainsKey(descriptor.Address);
+            if (drawState.RenderTargetWriters.TryGetValue(descriptor.Address, out var exactWriterInfo))
+            {
+                exactWriter = true;
+                exactWriterSequence = exactWriterInfo.Sequence;
+            }
+
+            foreach (var candidate in drawState.KnownRenderTargets.Values)
+            {
+                if (!candidate.DccEnabled ||
+                    candidate.MetadataAddress == 0 ||
+                    candidate.MetadataAddress != descriptor.MetadataAddress)
+                {
+                    continue;
+                }
+                metadataCandidates++;
+                if (candidate.Width != descriptor.Width ||
+                    candidate.Height != descriptor.Height ||
+                    candidate.Format != descriptor.Format ||
+                    candidate.NumberType != descriptor.NumberType)
+                {
+                    continue;
+                }
+                shapeCandidates++;
+                if (GuestGpu.Current.IsGpuGuestImageAvailable(candidate.Address, candidate.Format, candidate.NumberType))
+                {
+                    residentCandidates++;
+                }
+                if (drawState.RenderTargetWriters.ContainsKey(candidate.Address))
+                {
+                    writerCandidates++;
+                }
+            }
+        }
+
+        var exactResident = GuestGpu.Current.IsGpuGuestImageAvailable(
+            descriptor.Address,
+            descriptor.Format,
+            descriptor.NumberType);
+
+        TraceRuntimeDebug45DStateV134(descriptor, drawState);
+        Console.Error.WriteLine(
+            $"[V74.0.2][TEXTURE_CONTRACT] sample=0x{descriptor.Address:X16} " +
+            $"meta=0x{descriptor.MetadataAddress:X16} size={descriptor.Width}x{descriptor.Height} " +
+            $"fmt={descriptor.Format}/{descriptor.NumberType} tile={descriptor.TileMode} " +
+            $"flags=0x{descriptor.DescriptorFlags:X8} exact_known={(exactKnown ? 1 : 0)} " +
+            $"exact_writer={(exactWriter ? 1 : 0)} exact_writer_seq={exactWriterSequence} " +
+            $"exact_resident={(exactResident ? 1 : 0)} metadata_candidates={metadataCandidates} " +
+            $"shape_candidates={shapeCandidates} resident_candidates={residentCandidates} " +
+            $"writer_candidates={writerCandidates} alias_reason={aliasReason}");
+    }
+    private static void TraceRuntimeDebug45DStateV134(
+        TextureDescriptor descriptor,
+        SubmittedDcbState? drawState)
+    {
+        if (!_runtimeDebugTrace45DStateV134 ||
+            descriptor.Address != V74041Target45DAddress ||
+            drawState is null)
+        {
+            return;
+        }
+
+        var n = Interlocked.Increment(
+            ref _runtimeDebug45DStateTraceCountV134);
+        if (n > 16 && (n & (n - 1)) != 0)
+        {
+            return;
+        }
+
+        var candidates = new List<string>();
+        var considered = 0;
+
+        foreach (var candidate in drawState.KnownRenderTargets.Values)
+        {
+            var sameShape =
+                candidate.Width == descriptor.Width &&
+                candidate.Height == descriptor.Height;
+            var sameFormat =
+                candidate.Format == descriptor.Format &&
+                candidate.NumberType == descriptor.NumberType;
+            var sameMetadata =
+                candidate.MetadataAddress != 0 &&
+                candidate.MetadataAddress == descriptor.MetadataAddress;
+            var addressDelta = candidate.Address >= descriptor.Address
+                ? candidate.Address - descriptor.Address
+                : descriptor.Address - candidate.Address;
+            var nearAddress = addressDelta <= 0x08000000UL;
+
+            if (!sameShape &&
+                !sameFormat &&
+                !sameMetadata &&
+                !nearAddress)
+            {
+                continue;
+            }
+
+            considered++;
+            if (candidates.Count >= 32)
+            {
+                continue;
+            }
+
+            var hasWriter = drawState.RenderTargetWriters.TryGetValue(
+                candidate.Address,
+                out var writer);
+            var writerSequence = hasWriter ? writer.Sequence : 0UL;
+            var resident = GuestGpu.Current.IsGpuGuestImageAvailable(
+                candidate.Address,
+                candidate.Format,
+                candidate.NumberType);
+
+            candidates.Add(
+                $"addr=0x{candidate.Address:X16}" +
+                $"/meta=0x{candidate.MetadataAddress:X16}" +
+                $"/size={candidate.Width}x{candidate.Height}" +
+                $"/fmt={candidate.Format}:{candidate.NumberType}" +
+                $"/tile={candidate.TileMode}" +
+                $"/dcc={(candidate.DccEnabled ? 1 : 0)}" +
+                $"/writer={writerSequence}" +
+                $"/resident={(resident ? 1 : 0)}" +
+                $"/shape={(sameShape ? 1 : 0)}" +
+                $"/format={(sameFormat ? 1 : 0)}" +
+                $"/metadata={(sameMetadata ? 1 : 0)}" +
+                $"/delta=0x{addressDelta:X}");
+        }
+
+        Console.Error.WriteLine(
+            $"[V1.3.4][45D_STATE] n={n} " +
+            $"sample=0x{descriptor.Address:X16} " +
+            $"meta=0x{descriptor.MetadataAddress:X16} " +
+            $"known_rt={drawState.KnownRenderTargets.Count} " +
+            $"writers={drawState.RenderTargetWriters.Count} " +
+            $"considered={considered} " +
+            $"candidates=[{string.Join(';', candidates)}]");
+    }
+    private static V7405626DccProducerKey GetDccProducerKeyV7405626(
+        ulong metadataAddress,
+        uint width,
+        uint height,
+        uint format) =>
+        new(
+            metadataAddress,
+            width,
+            height,
+            format);
+
+    private static void TraceDccProducerV7405626(
+        string operation,
+        string kind,
+        long count,
+        ulong sampleAddress,
+        RenderTargetDescriptor alias,
+        ulong writerSequence,
+        long ageMs = 0)
+    {
+        if (!_traceDccAlias ||
+            !(count <= 128 ||
+              (count & (count - 1)) == 0))
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[V74.0.56.26][DCC_PRODUCER_HISTORY] " +
+            $"op={operation} kind={kind} count={count} " +
+            $"sample=0x{sampleAddress:X16} " +
+            $"alias=0x{alias.Address:X16} " +
+            $"meta=0x{alias.MetadataAddress:X16} " +
+            $"size={alias.Width}x{alias.Height} " +
+            $"fmt={alias.Format}/{alias.NumberType} " +
+            $"writer_seq={writerSequence} age_ms={ageMs}");
+    }
+
+    private static void RememberDccProducerV7405626(
+        RenderTargetDescriptor alias,
+        ulong writerSequence,
+        string kind)
+    {
+        if (_v7405626DccProducerHistoryTtlMs <= 0 ||
+            alias.Address == 0 ||
+            alias.MetadataAddress == 0 ||
+            alias.Width == 0 ||
+            alias.Height == 0 ||
+            !alias.DccEnabled ||
+            writerSequence == 0)
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        var key = GetDccProducerKeyV7405626(
+            alias.MetadataAddress,
+            alias.Width,
+            alias.Height,
+            alias.Format);
+
+        if (_v7405626DccProducerHistory.Count >=
+            V7405626DccProducerHistoryMaxEntries)
+        {
+            foreach (var pair in _v7405626DccProducerHistory)
+            {
+                var age = unchecked(now - pair.Value.Tick);
+                if (age < 0 ||
+                    age > _v7405626DccProducerHistoryTtlMs)
+                {
+                    _v7405626DccProducerHistory.TryRemove(
+                        pair.Key,
+                        out _);
+                }
+            }
+        }
+
+        var entry = new V7405626DccProducerEntry(
+            alias,
+            writerSequence,
+            now,
+            kind);
+
+        if (_v7405626DccProducerHistory.Count <
+                V7405626DccProducerHistoryMaxEntries ||
+            _v7405626DccProducerHistory.ContainsKey(key))
+        {
+            _v7405626DccProducerHistory.AddOrUpdate(
+                key,
+                entry,
+                (_, previous) =>
+                    previous.WriterSequence > writerSequence
+                        ? previous
+                        : entry);
+        }
+
+        long count;
+        if (string.Equals(
+                kind,
+                "compute",
+                StringComparison.Ordinal))
+        {
+            count = Interlocked.Increment(
+                ref _v7405626ComputeProducerSeedCount);
+        }
+        else
+        {
+            count = Interlocked.Increment(
+                ref _v7405626GraphicsProducerSeedCount);
+        }
+
+        TraceDccProducerV7405626(
+            "seed",
+            kind,
+            count,
+            alias.Address,
+            alias,
+            writerSequence);
+    }
+
+    private static void RememberDccComputeProducerV7405626(
+        TextureDescriptor descriptor,
+        ulong writerSequence,
+        ulong shaderAddress,
+        string opcode)
+    {
+        if (_v7405626DccProducerHistoryTtlMs <= 0)
+        {
+            return;
+        }
+
+        if (descriptor.Address == 0 ||
+            !descriptor.DccCompressionEnabled ||
+            descriptor.Width == 0 ||
+            descriptor.Height == 0)
+        {
+            if (_traceDccAlias &&
+                descriptor.Address != 0)
+            {
+                var skip = Interlocked.Increment(
+                    ref _v7405626ProducerSkipCount);
+
+                if (skip <= 64 ||
+                    (skip & (skip - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.26][DCC_PRODUCER_SKIP] " +
+                        $"count={skip} kind=compute " +
+                        $"addr=0x{descriptor.Address:X16} " +
+                        $"meta=0x{descriptor.MetadataAddress:X16} " +
+                        $"size={descriptor.Width}x{descriptor.Height} " +
+                        $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                        $"extended={(descriptor.HasExtendedDescriptor ? 1 : 0)} " +
+                        $"cs=0x{shaderAddress:X16} op={opcode}");
+                }
+            }
+
+            return;
+        }
+
+        var alias = new RenderTargetDescriptor(
+            Slot: 0,
+            Address: descriptor.Address,
+            Width: descriptor.Width,
+            Height: descriptor.Height,
+            Format: descriptor.Format,
+            NumberType: descriptor.NumberType,
+            TileMode: descriptor.TileMode,
+            TileModeKnown: true,
+            MetadataAddress: descriptor.MetadataAddress,
+            DccEnabled: true,
+            ComponentSwap: 0);
+
+        RememberDccProducerV7405626(
+            alias,
+            writerSequence,
+            "compute");
+    }
+
+    private static bool TryUseDccProducerV7405626(
+        TextureDescriptor descriptor,
+        out RenderTargetDescriptor alias,
+        out ulong writerSequence,
+        out string kind)
+    {
+        alias = default;
+        writerSequence = 0;
+        kind = string.Empty;
+
+        if (_v7405626DccProducerHistoryTtlMs <= 0 ||
+            !descriptor.DccCompressionEnabled ||
+            descriptor.Width == 0 ||
+            descriptor.Height == 0)
+        {
+            return false;
+        }
+
+        var key = GetDccProducerKeyV7405626(
+            descriptor.MetadataAddress,
+            descriptor.Width,
+            descriptor.Height,
+            descriptor.Format);
+
+        if (!_v7405626DccProducerHistory.TryGetValue(
+                key,
+                out var entry))
+        {
+            return false;
+        }
+
+        var now = Environment.TickCount64;
+        var age = unchecked(now - entry.Tick);
+
+        if (age < 0 ||
+            age > _v7405626DccProducerHistoryTtlMs ||
+            entry.Alias.Address == 0 ||
+            entry.WriterSequence == 0)
+        {
+            _v7405626DccProducerHistory.TryRemove(
+                key,
+                out _);
+            return false;
+        }
+
+        alias = entry.Alias;
+        writerSequence = entry.WriterSequence;
+        kind = entry.Kind;
+
+        long count;
+        if (string.Equals(
+                kind,
+                "compute",
+                StringComparison.Ordinal))
+        {
+            count = Interlocked.Increment(
+                ref _v7405626ComputeProducerHitCount);
+        }
+        else
+        {
+            count = Interlocked.Increment(
+                ref _v7405626GraphicsProducerHitCount);
+        }
+
+        TraceDccProducerV7405626(
+            "hit",
+            kind,
+            count,
+            descriptor.Address,
+            alias,
+            writerSequence,
+            age);
+
+        return true;
+    }
+
+    private static V74016DccAliasHistoryKey GetV74016DccAliasHistoryKey(
+        TextureDescriptor descriptor) =>
+        new(
+            descriptor.MetadataAddress,
+            descriptor.Width,
+            descriptor.Height,
+            descriptor.Format,
+            descriptor.NumberType);
+
+    private static void RememberV74016DccAlias(
+        TextureDescriptor descriptor,
+        RenderTargetDescriptor alias,
+        ulong writerSequence)
+    {
+        if (_v74016DccAliasHistoryTtlMs <= 0 ||
+            !descriptor.DccCompressionEnabled)
+        {
+            return;
+        }
+
+        var now = Environment.TickCount64;
+        var key = GetV74016DccAliasHistoryKey(descriptor);
+        if (_v74016DccAliasHistory.Count >= 64)
+        {
+            foreach (var entry in _v74016DccAliasHistory)
+            {
+                var age = unchecked(now - entry.Value.Tick);
+                if (age < 0 || age > _v74016DccAliasHistoryTtlMs)
+                {
+                    _v74016DccAliasHistory.TryRemove(entry.Key, out _);
+                }
+            }
+        }
+
+        if (_v74016DccAliasHistory.Count < 64 || _v74016DccAliasHistory.ContainsKey(key))
+        {
+            _v74016DccAliasHistory[key] =
+                new V74016DccAliasHistoryEntry(alias, writerSequence, now);
+        }
+
+        var count = Interlocked.Increment(ref _v74016DccAliasHistorySeedTraceCount);
+        if (count <= 64)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.16.1][DCC_HISTORY] seed count={count} " +
+                $"sample=0x{descriptor.Address:X16} alias=0x{alias.Address:X16} " +
+                $"meta=0x{descriptor.MetadataAddress:X16} size={descriptor.Width}x{descriptor.Height} " +
+                $"fmt={descriptor.Format}/{descriptor.NumberType} writer_seq={writerSequence}");
+        }
+    }
+
+    private static bool TryUseV74016DccAlias(
+        TextureDescriptor descriptor,
+        out RenderTargetDescriptor alias,
+        out ulong writerSequence)
+    {
+        alias = default;
+        writerSequence = 0;
+        var key = GetV74016DccAliasHistoryKey(descriptor);
+        if (_v74016DccAliasHistoryTtlMs <= 0 ||
+            !descriptor.DccCompressionEnabled ||
+            !_v74016DccAliasHistory.TryGetValue(key, out var entry))
+        {
+            return false;
+        }
+
+        var now = Environment.TickCount64;
+        var age = unchecked(now - entry.Tick);
+        if (age < 0 ||
+            age > _v74016DccAliasHistoryTtlMs ||
+            !GuestGpu.Current.IsGpuGuestImageAvailable(
+                entry.Alias.Address,
+                entry.Alias.Format,
+                entry.Alias.NumberType))
+        {
+            _v74016DccAliasHistory.TryRemove(key, out _);
+            return false;
+        }
+
+        alias = entry.Alias;
+        writerSequence = entry.WriterSequence;
+        var count = Interlocked.Increment(ref _v74016DccAliasHistoryHitTraceCount);
+        if (count <= 128 || count % 256 == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.16.1][DCC_HISTORY] hit count={count} " +
+                $"sample=0x{descriptor.Address:X16} alias=0x{alias.Address:X16} " +
+                $"meta=0x{descriptor.MetadataAddress:X16} age_ms={age} " +
+                $"size={descriptor.Width}x{descriptor.Height} " +
+                $"fmt={descriptor.Format}/{descriptor.NumberType}");
+        }
+        return true;
+    }
+private static bool TryResolveDccMetadataAlias(
+        TextureDescriptor descriptor,
+        SubmittedDcbState? drawState,
+        out RenderTargetDescriptor alias,
+        out ulong writerSequence,
+        out string reason)
+    {
+        // SHARPEMU_V73_16_PENDING_DCC_WRITER_ALIAS
+        alias = default;         writerSequence = 0;         if (!descriptor.DccCompressionEnabled)         {             reason = "dcc-compression-disabled";             return false;         }         if (drawState is null)
+        {
+            if (TryUseDccProducerV7405626(
+                    descriptor,
+                    out alias,
+                    out writerSequence,
+                    out var producerKind))
+            {
+                reason =
+                    $"producer_history_no_draw_state={producerKind}";
+                return true;
+            }
+
+            if (TryUseV74016DccAlias(
+                    descriptor,
+                    out alias,
+                    out writerSequence))
+            {
+                reason = "history-no-draw-state";
+                return true;
+            }
+
+            reason = "no-draw-state";
+            return false;
+        }
+
+        var metadataMatches = 0;
+        var shapeMatches = 0;
+        var exactTypeMatches = 0;
+        var residentMatches = 0;
+        var writerMatches = 0;
+        var found = false;
+        var selectedHasWriter = false;
+        var selectedResident = false;
+        var selectedSameAddress = false;
+        var selectedExactType = false;
+
+        foreach (var candidate in drawState.KnownRenderTargets.Values)
+        {
+            if (!candidate.DccEnabled ||
+                candidate.MetadataAddress == 0 ||
+                candidate.MetadataAddress != descriptor.MetadataAddress)
+            {
+                continue;
+            }
+
+            metadataMatches++;
+
+            // SHARPEMU_V74_0_56_25_DCC_TYPED_VIEW_COMPAT
+            // DCC metadata identifies the storage allocation. NUMBER_TYPE is a
+            // view interpretation and may legitimately differ between CB_COLOR
+            // and a later sampled SRD. Keep DATA_FORMAT + shape exact; let the
+            // presenter reject an actually incompatible Vulkan view.
+            if (candidate.Width != descriptor.Width ||
+                candidate.Height != descriptor.Height ||
+                candidate.Format != descriptor.Format)
+            {
+                continue;
+            }
+
+            shapeMatches++;
+
+            var exactType =
+                candidate.NumberType == descriptor.NumberType;
+            if (exactType)
+            {
+                exactTypeMatches++;
+            }
+
+            var resident = GuestGpu.Current.IsGpuGuestImageAvailable(
+                candidate.Address,
+                candidate.Format,
+                candidate.NumberType);
+            if (resident)
+            {
+                residentMatches++;
+            }
+
+            var hasWriter = drawState.RenderTargetWriters.TryGetValue(
+                candidate.Address,
+                out var writer);
+            var sequence = hasWriter ? writer.Sequence : 0UL;
+            if (hasWriter)
+            {
+                writerMatches++;
+            }
+
+            if (!resident && !hasWriter)
+            {
+                continue;
+            }
+
+            var sameAddress =
+                candidate.Address == descriptor.Address;
+
+            // Producer freshness stays authoritative. Same-address and exact
+            // NUMBER_TYPE are only tie-breakers, so a newer real writer is not
+            // hidden by an older but more literally typed identity.
+            var select =
+                !found ||
+                (hasWriter && !selectedHasWriter) ||
+                (hasWriter == selectedHasWriter &&
+                 sequence > writerSequence) ||
+                (hasWriter == selectedHasWriter &&
+                 sequence == writerSequence &&
+                 resident &&
+                 !selectedResident) ||
+                (hasWriter == selectedHasWriter &&
+                 sequence == writerSequence &&
+                 resident == selectedResident &&
+                 sameAddress &&
+                 !selectedSameAddress) ||
+                (hasWriter == selectedHasWriter &&
+                 sequence == writerSequence &&
+                 resident == selectedResident &&
+                 sameAddress == selectedSameAddress &&
+                 exactType &&
+                 !selectedExactType);
+
+            if (!select)
+            {
+                continue;
+            }
+
+            alias = candidate;
+            writerSequence = sequence;
+            selectedHasWriter = hasWriter;
+            selectedResident = resident;
+            selectedSameAddress = sameAddress;
+            selectedExactType = exactType;
+            found = true;
+        }
+
+        if (found)
+        {
+            RememberV74016DccAlias(
+                descriptor,
+                alias,
+                writerSequence);
+
+            if (_traceDccAlias &&
+                alias.NumberType != descriptor.NumberType)
+            {
+                var typedCount = Interlocked.Increment(
+                    ref _v7405625TypedAliasTraceCount);
+
+                if (typedCount <= 128 ||
+                    (typedCount & (typedCount - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.25][DCC_TYPED_ALIAS] " +
+                        $"count={typedCount} " +
+                        $"sample=0x{descriptor.Address:X16} " +
+                        $"alias=0x{alias.Address:X16} " +
+                        $"meta=0x{descriptor.MetadataAddress:X16} " +
+                        $"size={descriptor.Width}x{descriptor.Height} " +
+                        $"fmt={descriptor.Format} " +
+                        $"sample_num={descriptor.NumberType} " +
+                        $"alias_num={alias.NumberType} " +
+                        $"writer_seq={writerSequence} " +
+                        $"resident={(selectedResident ? 1 : 0)}");
+                }
+            }
+        }
+        else if (TryUseDccProducerV7405626(
+                     descriptor,
+                     out alias,
+                     out writerSequence,
+                     out var producerKind))
+        {
+            reason =
+                $"producer_history_hit={producerKind}";
+            return true;
+        }
+        else if (TryUseV74016DccAlias(
+                     descriptor,
+                     out alias,
+                     out writerSequence))
+        {
+            reason = "history_hit=1";
+            return true;
+        }
+
+        reason =
+            $"metadata_matches={metadataMatches};" +
+            $"shape_matches={shapeMatches};" +
+            $"exact_type_matches={exactTypeMatches};" +
+            $"resident_matches={residentMatches};" +
+            $"writer_matches={writerMatches}";
+        if (!found)
+        {
+            TraceDemonTextureProducerContract(
+                descriptor,
+                drawState,
+                reason);
+        }
+
+        return found;
+    }
+    private static bool TryCreateGuestDrawTexture(
+        CpuContext ctx,
+        TextureDescriptor descriptor,
+        bool isStorage,
+        uint mipLevel,
+        IReadOnlyList<uint> samplerDescriptor,
+        bool isArrayed,
+        bool preferGpuResident,
+        SubmittedDcbState? drawState,
+        out GuestDrawTexture texture)
+    {
+        texture = default!;
+        var originalDescriptorAddress = descriptor.Address;
+
+        TraceRdna2SrdCompressionV7405634(
+            descriptor,
+            isStorage);
+
+        if (!isStorage &&
+            descriptor.DccCompressionEnabled)
+        {
+            if (TryResolveDccMetadataAlias(
+                    descriptor,
+                    drawState,
+                    out var dccAlias,
+                    out var aliasWriterSequence,
+                    out var aliasReason))
+            {
+                if (_traceDccAlias &&
+                    Interlocked.Increment(ref _dccAliasTraceCount) <= 512)
+                {
+                    Console.Error.WriteLine(
+                        $"[V24][DCC] agc.texture_dcc_alias_hit " +
+                        $"sample=0x{originalDescriptorAddress:X16} alias=0x{dccAlias.Address:X16} " +
+                        $"meta=0x{descriptor.MetadataAddress:X16} " +
+                        $"size={descriptor.Width}x{descriptor.Height} " +
+                        $"fmt={descriptor.Format}/{descriptor.NumberType} writer_seq={aliasWriterSequence}");
+                }
+                var aliasResidentAtTranslation =
+                    GuestGpu.Current.IsGpuGuestImageAvailable(
+                        dccAlias.Address,
+                        dccAlias.Format,
+                        dccAlias.NumberType);
+                descriptor = descriptor with { Address = dccAlias.Address };
+
+                // SHARPEMU_V73_16_DCC_PENDING_GPU_REFERENCE
+                if (aliasWriterSequence != 0)
+                {
+                    preferGpuResident = true;
+                }
+
+                if (_traceDccAlias &&
+                    aliasWriterSequence != 0 &&
+                    !aliasResidentAtTranslation &&
+                    Interlocked.Increment(ref _dccAliasTraceCount) <= 512)
+                {
+                    Console.Error.WriteLine(
+                        $"[V73.16][DCC] agc.texture_dcc_pending_writer " +
+                        $"sample=0x{originalDescriptorAddress:X16} " +
+                        $"alias=0x{dccAlias.Address:X16} " +
+                        $"meta=0x{descriptor.MetadataAddress:X16} " +
+                        $"writer_seq={aliasWriterSequence} resident=0; preserving GPU reference");
+                }
+            }
+            else if (_traceDccAlias &&
+                     Interlocked.Increment(ref _dccAliasTraceCount) <= 512)
+            {
+                Console.Error.WriteLine(
+                    $"[V24][DCC] agc.texture_dcc_alias_miss " +
+                    $"sample=0x{originalDescriptorAddress:X16} " +
+                    $"meta=0x{descriptor.MetadataAddress:X16} " +
+                    $"size={descriptor.Width}x{descriptor.Height} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} reason={aliasReason}");
+            }
+        }
+        var textureDepth = GetTextureVolumeDepth(
+            descriptor.Type,
+            descriptor.Depth);
+        if ((descriptor.Type != Gen5TextureType1D &&
+             descriptor.Type != Gen5TextureType2D &&
+             descriptor.Type != Gen5TextureType3D &&
+             descriptor.Type != Gen5TextureTypeCube &&
+             descriptor.Type != Gen5TextureType1DArray &&
+             descriptor.Type != Gen5TextureType2DArray) ||
+            descriptor.Width == 0 ||
+            descriptor.Height == 0 ||
+            descriptor.Width > 8192 ||
+            descriptor.Height > 8192)
+        {
+            TraceTextureFallback(descriptor, "invalid-descriptor");
+            texture = CreateFallbackGuestDrawTexture(
+                isStorage,
+                descriptor.Format,
+                descriptor.NumberType,
+                isArrayed,
+                descriptor.Type,
+                textureDepth);
+            return true;
+        }
+
+        // SHARPEMU_V74_0_56_27_TEXTURE_TYPE_RUNTIME
+        if (_traceTextureTypesV7405627 &&
+            descriptor.Type < (uint)_textureTypeCountsV7405627.Length)
+        {
+            var typeIndexV7405627 = (int)descriptor.Type;
+            var typeCountV7405627 =
+                Interlocked.Increment(
+                    ref _textureTypeCountsV7405627[typeIndexV7405627]);
+
+            if (typeCountV7405627 <= 32 ||
+                (typeCountV7405627 &
+                 (typeCountV7405627 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.27][TEXTURE_TYPE] " +
+                    $"type={descriptor.Type} count={typeCountV7405627} " +
+                    $"storage={(isStorage ? 1 : 0)} " +
+                    $"shader_arrayed={(isArrayed ? 1 : 0)} " +
+                    $"size={descriptor.Width}x{descriptor.Height} " +
+                    $"depth={descriptor.Depth} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                    $"tile={descriptor.TileMode} " +
+                    $"meta=0x{descriptor.MetadataAddress:X16}");
+            }
+        }
+
+        if (_gpuDetileLog)
+        {
+            lock (_seenTextureTileModes)
+            {
+                if (_seenTextureTileModes.Add(descriptor.TileMode))
+                {
+                    Console.Error.WriteLine(
+                        $"[GPU-DETILE] texture tile_mode={descriptor.TileMode} fmt={descriptor.Format} " +
+                        $"{descriptor.Width}x{descriptor.Height} " +
+                        $"(0=linear; GPU covers exact-XOR 5/9/24/27 @ 4bpp).");
+                }
+            }
+        }
+
+        var sourceWidth = descriptor.TileMode == 0
+            ? GetLinearTexturePitch(
+                Math.Max(descriptor.Width, descriptor.Pitch),
+                descriptor.Height,
+                descriptor.Format)
+            : descriptor.Width;
+        var sourceSliceByteCount = GetTextureByteCount(
+            descriptor.Format,
+            sourceWidth,
+            descriptor.Height);
+        var sourceByteCount = GetTextureByteCount(
+            descriptor.Format,
+            sourceWidth,
+            descriptor.Height,
+            textureDepth);
+        if (sourceByteCount == 0 ||
+            sourceByteCount > MaxPresentedTextureBytes ||
+            sourceByteCount > int.MaxValue)
+        {
+            TraceTextureFallback(
+                descriptor,
+                $"invalid-byte-count:{sourceByteCount}");
+            texture = CreateFallbackGuestDrawTexture(
+                isStorage,
+                descriptor.Format,
+                descriptor.NumberType,
+                isArrayed,
+                descriptor.Type,
+                textureDepth);
+            return true;
+        }
+
+        var physicalSourceByteCount = sourceSliceByteCount;
+        var elementsWide = 0;
+        var elementsHigh = 0;
+        var bytesPerElement = 0;
+        var hasElementLayout = GnmTiling.NeedsDetile(descriptor.TileMode) &&
+            TryGetTextureElementLayout(
+                descriptor,
+                sourceWidth,
+                out elementsWide,
+                out elementsHigh,
+                out bytesPerElement);
+        if (hasElementLayout &&
+            GnmTiling.TryGetTiledByteCount(
+                descriptor.TileMode,
+                elementsWide,
+                elementsHigh,
+                bytesPerElement,
+                out var tiledByteCount))
+        {
+            physicalSourceByteCount = tiledByteCount;
+        }
+
+        var resourceMipLevels = descriptor.HasExtendedDescriptor
+            ? descriptor.ResourceMipLevels
+            : 1u;
+        var baseMipByteOffset = 0UL;
+        var baseMipInTail = false;
+        var mipTailElementX = 0;
+        var mipTailElementY = 0;
+        var chainSliceBytes = physicalSourceByteCount;
+        if (hasElementLayout && resourceMipLevels > 1 &&
+            GnmTiling.TryGetBaseMipPlacement(
+                descriptor.TileMode,
+                elementsWide,
+                elementsHigh,
+                bytesPerElement,
+                resourceMipLevels,
+                out baseMipByteOffset,
+                out baseMipInTail,
+                out mipTailElementX,
+                out mipTailElementY,
+                out var placedChainSliceBytes))
+        {
+            chainSliceBytes = placedChainSliceBytes;
+        }
+
+        physicalSourceByteCount = checked(physicalSourceByteCount * textureDepth);
+        if (physicalSourceByteCount > MaxPresentedTextureBytes ||
+            physicalSourceByteCount > int.MaxValue)
+        {
+            texture = CreateFallbackGuestDrawTexture(
+                isStorage,
+                descriptor.Format,
+                descriptor.NumberType,
+                isArrayed,
+                descriptor.Type,
+                textureDepth);
+            return true;
+        }
+
+        // SHARPEMU_V74_0_56_30_SHADER_DRIVEN_LAYERED_UPLOAD
+        // Only the shader's decoded MIMG dimensionality may request a layered
+        // view. Descriptor TYPE is used to validate the physical resource,
+        // not to force a shader/view shape (the V56.27 regression).
+        //
+        // Cube descriptors expose face slices through DEPTH/LAST_SLICE; when
+        // MIMG DIM=Cube made isArrayed=true above, upload those real slices so
+        // IBL/GI and UI cube resources do not sample a one-layer placeholder.
+        var wantsArrayUpload = isArrayed &&
+            !isStorage &&
+            descriptor.Address != 0 &&
+            (descriptor.Type == Gen5TextureType2DArray ||
+             descriptor.Type == Gen5TextureType1DArray ||
+             descriptor.Type == Gen5TextureTypeCube) &&
+            descriptor.Depth > 1 &&
+            !_arrayUploadUnsupported.ContainsKey(descriptor.Address);
+
+        var arrayUploadLayers =
+            wantsArrayUpload
+                ? descriptor.Depth
+                : 1u;
+
+        // Upload-known (not plain availability): the presenter's answer goes
+        // generation-stale when the guest CPU rewrites a CPU-backed image
+        // (video planes, streamed font atlases), which routes this draw back
+        // through the texel copy below so the refresh path re-uploads.
+        // With the write tracker off (Windows default), IsGuestImageUploadKnown
+        // uses a cheap guest-memory probe so static UI can still skip (Dead
+        // Cells menus) while changing CPU content (GTA Bink) forces a copy.
+        var gpuResidentWriterImage =
+            preferGpuResident &&
+            !isStorage &&
+            !wantsArrayUpload &&
+            descriptor.Address != 0 &&
+            GuestGpu.Current.IsGpuGuestImageAvailable(
+                descriptor.Address,
+                descriptor.Format,
+                descriptor.NumberType);
+
+        // RDNA2 descriptors carrying a metadata address can refer to a
+        // DCC/metadata-backed surface whose CPU memory is not a trustworthy
+        // linear representation of the live image. If that exact image is
+        // already resident in Vulkan, preserve it even when AGC did not observe
+        // the original writer in the current command-buffer window.
+        var gpuResidentMetadataImage =
+            !isStorage &&
+            !wantsArrayUpload &&
+            descriptor.Address != 0 &&
+            descriptor.DccCompressionEnabled &&
+            GuestGpu.Current.IsGpuGuestImageAvailable(
+                descriptor.Address,
+                descriptor.Format,
+                descriptor.NumberType);
+
+        var gpuUploadKnown =
+            !isStorage &&
+            !wantsArrayUpload &&
+            descriptor.Address != 0 &&
+            GuestGpu.Current.IsGuestImageUploadKnown(
+                descriptor.Address,
+                descriptor.Format,
+                descriptor.NumberType);
+
+        // V61.5: an observed GPU writer is authoritative even before its Vulkan
+        // image becomes resident. Falling through to the CPU snapshot path here
+        // uploads stale/zero guest RAM for a render target which is still queued
+        // on another logical GPU queue. The presenter already records the writer
+        // sequence for render/storage images and delays consumers until that
+        // sequence completes, so preserve a reference-only texture instead.
+        // Once the consumer executes, normal alias/resource lookup resolves the
+        // image produced by the earlier GPU work.
+        var gpuWriterPending =
+            preferGpuResident &&
+            !isStorage &&
+            !wantsArrayUpload &&
+            descriptor.Address != 0 &&
+            !gpuResidentWriterImage &&
+            !gpuResidentMetadataImage &&
+            !gpuUploadKnown;
+
+        if (gpuWriterPending)
+        {
+            if (_traceAgcShader)
+            {
+                TraceAgcShader(
+                    $"agc.texture_gpu_writer_pending addr=0x{descriptor.Address:X16} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                    $"size={descriptor.Width}x{descriptor.Height}; deferring CPU snapshot");
+            }
+
+            NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+            texture = new GuestDrawTexture(
+                descriptor.Address,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.Format,
+                descriptor.NumberType,
+                [],
+                IsFallback: false,
+                IsStorage: false,
+                MipLevels: descriptor.MipLevels,
+                MipLevel: mipLevel,
+                BaseMipLevel: descriptor.ViewBaseLevel,
+                ResourceMipLevels: descriptor.ResourceMipLevels,
+                Pitch: sourceWidth,
+                TileMode: descriptor.TileMode,
+                DstSelect: descriptor.DstSelect,
+                Sampler: ToGuestSampler(samplerDescriptor),
+                ArrayedView: isArrayed,
+                Type: descriptor.Type,
+                Depth: textureDepth,
+                MetadataAddress: descriptor.MetadataAddress,
+                DescriptorFlags: descriptor.DescriptorFlags,
+                BcSwizzle: descriptor.BcSwizzle,
+                HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+            return true;
+        }
+
+        if (!isStorage &&
+            !wantsArrayUpload &&
+            descriptor.Address != 0 &&
+            (gpuResidentWriterImage ||
+             gpuResidentMetadataImage ||
+             gpuUploadKnown))
+        {
+            if (gpuResidentWriterImage && _traceAgcShader)
+            {
+                TraceAgcShader(
+                    $"agc.texture_gpu_writer_resident addr=0x{descriptor.Address:X16} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                    $"size={descriptor.Width}x{descriptor.Height}");
+            }
+            else if (gpuResidentMetadataImage && _traceAgcShader)
+            {
+                TraceAgcShader(
+                    $"agc.texture_metadata_gpu_resident addr=0x{descriptor.Address:X16} " +
+                    $"meta=0x{descriptor.MetadataAddress:X16} " +
+                    $"flags=0x{descriptor.DescriptorFlags:X6} " +
+                    $"size={descriptor.Width}x{descriptor.Height}");
+            }
+
+            NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+            texture = new GuestDrawTexture(
+                descriptor.Address,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.Format,
+                descriptor.NumberType,
+                [],
+                IsFallback: false,
+                IsStorage: false,
+                MipLevels: descriptor.MipLevels,
+                MipLevel: mipLevel,
+                BaseMipLevel: descriptor.ViewBaseLevel,
+                ResourceMipLevels: descriptor.ResourceMipLevels,
+                Pitch: sourceWidth,
+                TileMode: descriptor.TileMode,
+                DstSelect: descriptor.DstSelect,
+                Sampler: ToGuestSampler(samplerDescriptor),
+                ArrayedView: isArrayed,
+                Type: descriptor.Type,
+                Depth: textureDepth,
+                MetadataAddress: descriptor.MetadataAddress,
+                DescriptorFlags: descriptor.DescriptorFlags,
+                BcSwizzle: descriptor.BcSwizzle,
+                HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+            return true;
+        }
+
+        if (isStorage)
+        {
+            var initialPixels = Array.Empty<byte>();
+            var uploadKnown = descriptor.Address != 0 &&
+                GuestGpu.Current.IsGuestImageUploadKnown(
+                    descriptor.Address,
+                    descriptor.Format,
+                    descriptor.NumberType);
+            var readSucceeded = false;
+            var linearNonzero = false;
+            if (descriptor.Address != 0 && !uploadKnown)
+            {
+                // Storage images can be pre-populated in tiled guest memory
+                // just like sampled images. Reading only the logical linear
+                // byte count both truncates 64 KiB swizzle blocks and uploads
+                // tiled bytes as scanlines. Read the full physical footprint
+                // and run the same AddrLib-derived detile path used below for
+                // sampled textures before seeding the Vulkan image.
+                var storageSource = GC.AllocateUninitializedArray<byte>(checked((int)physicalSourceByteCount));
+                if (TryReadTextureGuestMemory(ctx, descriptor.Address + baseMipByteOffset, storageSource))
+                {
+                    readSucceeded = true;
+                    var linearStorage = TryDetileTextureSource(
+                        descriptor,
+                        sourceWidth,
+                        checked((int)sourceByteCount),
+                        storageSource,
+                        baseMipInTail,
+                        mipTailElementX,
+                        mipTailElementY) ?? storageSource
+                            .AsSpan(0, checked((int)sourceByteCount))
+                            .ToArray();
+                    if (linearStorage.AsSpan().IndexOfAnyExcept((byte)0) >= 0)
+                    {
+                        linearNonzero = true;
+                        initialPixels = linearStorage;
+                    }
+                }
+            }
+
+            if (ParseOptionalHexAddress(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_TRACE_STORAGE_IMAGE_INIT_ADDRESS")) ==
+                descriptor.Address)
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][TRACE] agc.storage_initial_data " +
+                    $"addr=0x{descriptor.Address:X16} op_storage={isStorage} " +
+                    $"upload_known={uploadKnown} read={readSucceeded} " +
+                    $"nonzero={linearNonzero} initial_bytes={initialPixels.Length} " +
+                    $"logical_bytes={sourceByteCount} physical_bytes={physicalSourceByteCount} " +
+                    $"size={descriptor.Width}x{descriptor.Height} pitch={sourceWidth} " +
+                    $"fmt={descriptor.Format} num={descriptor.NumberType} " +
+                    $"tile={descriptor.TileMode} mip={mipLevel}");
+            }
+
+            NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+            texture = new GuestDrawTexture(
+                descriptor.Address,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.Format,
+                descriptor.NumberType,
+                initialPixels,
+                IsFallback: descriptor.Address == 0,
+                IsStorage: true,
+                MipLevels: descriptor.MipLevels,
+                MipLevel: mipLevel,
+                BaseMipLevel: descriptor.ViewBaseLevel,
+                ResourceMipLevels: descriptor.ResourceMipLevels,
+                Pitch: sourceWidth,
+                TileMode: descriptor.TileMode,
+                DstSelect: descriptor.DstSelect,
+                Sampler: ToGuestSampler(samplerDescriptor),
+                Type: descriptor.Type,
+                Depth: textureDepth,
+                MetadataAddress: descriptor.MetadataAddress,
+                DescriptorFlags: descriptor.DescriptorFlags,
+                BcSwizzle: descriptor.BcSwizzle,
+                HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+            return true;
+        }
+
+        // When the presenter already holds this exact texture identity in
+        // its cache, the texel copy below would be discarded on arrival; for
+        // scenes that sample large textures every draw this copy dominated
+        // CPU time (Dead Cells menus). The dirty peek closes the race with
+        // eviction when the write tracker is on. With the tracker off,
+        // PeekDirty is always false so a cached identity keeps skipping â€”
+        // correct for static UI atlases. CPU-updated guest Bink planes are
+        // handled by the upload-known gate above (forced copies when the
+        // tracker cannot invalidate), not by disabling this cache skip.
+        var sampler = ToGuestSampler(samplerDescriptor);
+        // Track the guest allocation before reading its texels so a CPU
+        // rewrite landing after the copy still bumps the write generation.
+        // The generation rides on the texture and is recorded by the
+        // presenter after upload, where the upload-known skip compares it
+        // against the tracker to force fresh texels for rewritten memory.
+        var hasWriteGeneration =
+            SharpEmu.HLE.GuestImageWriteTracker.TryGetWriteGeneration(
+                descriptor.Address,
+                out var writeGeneration);
+        var textureContentIdentityV74074 =
+            new TextureContentIdentity(
+                descriptor.Address,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.Format,
+                descriptor.NumberType,
+                descriptor.DstSelect,
+                descriptor.TileMode,
+                sourceWidth,
+                sampler,
+                isArrayed,
+                arrayUploadLayers,
+                descriptor.Type,
+                textureDepth,
+                MetadataAddress: descriptor.MetadataAddress,
+                DescriptorFlags: descriptor.DescriptorFlags,
+                BcSwizzle: descriptor.BcSwizzle,
+                HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+
+        if (!_textureCopySkipDisabled &&
+            descriptor.Address != 0 &&
+            !SharpEmu.HLE.GuestImageWriteTracker.PeekDirty(descriptor.Address))
+        {
+            var exactCachedV74074 =
+                GuestGpu.Current.IsTextureContentCached(
+                    textureContentIdentityV74074);
+            var samplerOnlyCachedV74074 =
+                !exactCachedV74074 &&
+                _samplerPrecopySkipV74074 &&
+                VulkanVideoPresenter
+                    .IsTextureContentCachedIgnoringSamplerV74074(
+                        textureContentIdentityV74074);
+
+            if (exactCachedV74074 || samplerOnlyCachedV74074)
+            {
+                if (samplerOnlyCachedV74074)
+                {
+                    var savedBytes = Interlocked.Add(
+                        ref _v74074SamplerPrecopySkipBytes,
+                        checked((long)physicalSourceByteCount));
+                    var skipCount = Interlocked.Increment(
+                        ref _v74074SamplerPrecopySkipCount);
+
+                    if (skipCount <= 256 ||
+                        (skipCount & (skipCount - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.74][SAMPLER_PRECOPY_SKIP] " +
+                            $"count={skipCount} " +
+                            $"addr=0x{descriptor.Address:X16} " +
+                            $"size={descriptor.Width}x{descriptor.Height} " +
+                            $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                            $"tile={descriptor.TileMode} " +
+                            $"bytes={physicalSourceByteCount} " +
+                            $"saved_mb={savedBytes / (1024 * 1024)}");
+                    }
+                }
+
+                NoteSampledAddress(
+                    descriptor.Address,
+                    descriptor.Format,
+                    descriptor.NumberType);
+                texture = new GuestDrawTexture(
+                descriptor.Address,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.Format,
+                descriptor.NumberType,
+                [],
+                IsFallback: false,
+                IsStorage: false,
+                MipLevels: descriptor.MipLevels,
+                MipLevel: mipLevel,
+                BaseMipLevel: descriptor.ViewBaseLevel,
+                ResourceMipLevels: descriptor.ResourceMipLevels,
+                Pitch: sourceWidth,
+                TileMode: descriptor.TileMode,
+                DstSelect: descriptor.DstSelect,
+                Sampler: sampler,
+                ArrayedView: isArrayed,
+                ArrayLayers: arrayUploadLayers,
+                Type: descriptor.Type,
+                Depth: textureDepth,
+                MetadataAddress: descriptor.MetadataAddress,
+                DescriptorFlags: descriptor.DescriptorFlags,
+                BcSwizzle: descriptor.BcSwizzle,
+                    HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+                return true;
+            }
+        }
+
+        if (wantsArrayUpload)
+        {
+            var arrayLayers = arrayUploadLayers;
+            var layerBytes = checked((int)sourceSliceByteCount);
+            var totalBytes = (long)layerBytes * arrayLayers;
+
+            // GPU detile for arrayed exact-XOR/4bpp textures: pack the tiled array
+            // slices contiguously and hand them to the GPU pass (one dispatch-Z
+            // layer per slice), mirroring the single-layer gate above. The backend
+            // deswizzles every layer on the GPU; only unsupported cases fall to the
+            // CPU per-layer detile below. Font/text atlases uploaded as 2D arrays
+            // take this path.
+            if (_gpuDetileEnabled && hasElementLayout && !baseMipInTail &&
+                IsGpuDetileBytesPerElement(bytesPerElement) &&
+                IsGpuDetileTextureType(descriptor.Type) &&
+                (long)physicalSourceByteCount * arrayLayers <= int.MaxValue)
+            {
+                var gpuArrayParams = GnmTiling.GetDetileParams(
+                    descriptor.TileMode, bytesPerElement, elementsWide, elementsHigh);
+                if (IsGpuDetileEquation(gpuArrayParams.Equation) &&
+                    (long)elementsWide * elementsHigh * bytesPerElement <= (long)physicalSourceByteCount)
+                {
+                    var sliceBytes = checked((int)physicalSourceByteCount);
+                    var totalTiledArrayBytes = checked((long)sliceBytes * arrayLayers);
+                    byte[] tiledLayers;
+                    var readAllLayers = true;
+
+                    if (totalTiledArrayBytes >= V74015LargeArrayThresholdBytes)
+                    {
+                        var v74015ArrayKey = new V74015LargeArraySnapshotKey(
+                            descriptor.Address,
+                            descriptor.Width,
+                            descriptor.Height,
+                            descriptor.Format,
+                            descriptor.NumberType,
+                            descriptor.TileMode,
+                            sourceWidth,
+                            sliceBytes,
+                            arrayLayers,
+                            ComputeV74067213LargeArrayContentKey(
+                                ctx,
+                                descriptor.Address + baseMipByteOffset,
+                                arrayLayers,
+                                chainSliceBytes,
+                                (ulong)sliceBytes,
+                                hasWriteGeneration ? writeGeneration : -1),
+                            Tiled: true);
+
+                        lock (_v74015LargeArraySnapshotGate)
+                        {
+                            var v74015Now = Environment.TickCount64;
+                            if (TryGetLargeArraySnapshotV74064(
+                                    v74015ArrayKey,
+                                    totalTiledArrayBytes,
+                                    v74015Now,
+                                    out var v74015Cached))
+                            {
+                                tiledLayers = v74015Cached;
+                                var reuseBytes = Interlocked.Add(
+                                    ref _v74015LargeArraySnapshotReuseBytes,
+                                    totalTiledArrayBytes);
+                                var reuseCount = Interlocked.Increment(
+                                    ref _v74015LargeArraySnapshotReuseTraceCount);
+                                if (reuseCount <= 32 || reuseCount % 128 == 0)
+                                {
+                                    Console.Error.WriteLine(
+                                        $"[V74.0.15][ARRAY_SINGLEFLIGHT] reuse path=tiled " +
+                                        $"count={reuseCount} addr=0x{descriptor.Address:X16} " +
+                                        $"size={descriptor.Width}x{descriptor.Height} layers={arrayLayers} " +
+                                        $"bytes={totalTiledArrayBytes} saved_mb={reuseBytes / (1024 * 1024)} " +
+                                        $"cache={_v74064LargeArraySnapshotCache.Count}/" +
+                                        $"{_v74064LargeArraySnapshotCacheEntries} " +
+                                        $"ttl_ms={_v74064LargeArraySnapshotTtlMs}");
+                                }
+                            }
+                            else
+                            {
+                                tiledLayers = GC.AllocateUninitializedArray<byte>(
+                                    checked((int)totalTiledArrayBytes));
+                                for (var layer = 0u; layer < arrayLayers; layer++)
+                                {
+                                    if (!TryReadTextureGuestMemory(ctx,
+                                            descriptor.Address + layer * chainSliceBytes + baseMipByteOffset,
+                                            tiledLayers.AsSpan(
+                                                checked((int)(layer * (uint)sliceBytes)),
+                                                sliceBytes)))
+                                    {
+                                        readAllLayers = false;
+                                        break;
+                                    }
+                                }
+
+                                if (readAllLayers)
+                                {
+                                    StoreLargeArraySnapshotV74064(
+                                        v74015ArrayKey,
+                                        tiledLayers,
+                                        Environment.TickCount64);
+
+                                    var ownerCount = Interlocked.Increment(
+                                        ref _v74015LargeArraySnapshotOwnerTraceCount);
+                                    if (ownerCount <= 32 || ownerCount % 64 == 0)
+                                    {
+                                        Console.Error.WriteLine(
+                                            $"[V74.0.64][ARRAY_CACHE_OWNER] path=tiled " +
+                                            $"count={ownerCount} addr=0x{descriptor.Address:X16} " +
+                                            $"size={descriptor.Width}x{descriptor.Height} layers={arrayLayers} " +
+                                            $"bytes={totalTiledArrayBytes} " +
+                                            $"cache={_v74064LargeArraySnapshotCache.Count}/" +
+                                            $"{_v74064LargeArraySnapshotCacheEntries} " +
+                                            $"ttl_ms={_v74064LargeArraySnapshotTtlMs}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        tiledLayers = GC.AllocateUninitializedArray<byte>(
+                            checked((int)totalTiledArrayBytes));
+                        for (var layer = 0u; layer < arrayLayers; layer++)
+                        {
+                            if (!TryReadTextureGuestMemory(ctx,
+                                    descriptor.Address + layer * chainSliceBytes + baseMipByteOffset,
+                                    tiledLayers.AsSpan(
+                                        checked((int)(layer * (uint)sliceBytes)),
+                                        sliceBytes)))
+                            {
+                                readAllLayers = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (readAllLayers)
+                    {
+                        NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+            texture = new GuestDrawTexture(
+                            descriptor.Address,
+                            descriptor.Width,
+                            descriptor.Height,
+                            descriptor.Format,
+                            descriptor.NumberType,
+                            [],
+                            IsFallback: false,
+                            IsStorage: false,
+                            MipLevels: descriptor.MipLevels,
+                            MipLevel: mipLevel,
+                            BaseMipLevel: descriptor.ViewBaseLevel,
+                            ResourceMipLevels: descriptor.ResourceMipLevels,
+                            Pitch: sourceWidth,
+                            TileMode: descriptor.TileMode,
+                            DstSelect: descriptor.DstSelect,
+                            Sampler: sampler,
+                            WriteGeneration: hasWriteGeneration ? writeGeneration : -1,
+                            ArrayedView: true,
+                            ArrayLayers: arrayLayers,
+                            // Must match the identity the CPU path below ships, or
+                            // the presenter caches this texture under a different
+                            // key than IsTextureContentCached queries above and the
+                            // texel-copy skip never hits for non-2D descriptors.
+                            Type: descriptor.Type,
+                            Depth: textureDepth,
+                            TiledSource: tiledLayers,
+                            Detile: gpuArrayParams,
+                            MetadataAddress: descriptor.MetadataAddress,
+                            DescriptorFlags: descriptor.DescriptorFlags,
+                            BcSwizzle: descriptor.BcSwizzle,
+                            HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+                        return true;
+                    }
+                }
+            }
+
+            if (totalBytes <= int.MaxValue)
+            {
+                byte[] layered;
+                var uploadedLayers = 0u;
+
+                if (totalBytes >= V74015LargeArrayThresholdBytes)
+                {
+                    var v74015ArrayKey = new V74015LargeArraySnapshotKey(
+                        descriptor.Address,
+                        descriptor.Width,
+                        descriptor.Height,
+                        descriptor.Format,
+                        descriptor.NumberType,
+                        descriptor.TileMode,
+                        sourceWidth,
+                        layerBytes,
+                        arrayLayers,
+                        ComputeV74067213LargeArrayContentKey(
+                            ctx,
+                            descriptor.Address + baseMipByteOffset,
+                            arrayLayers,
+                            chainSliceBytes,
+                            chainSliceBytes,
+                            hasWriteGeneration ? writeGeneration : -1),
+                        Tiled: false);
+
+                    lock (_v74015LargeArraySnapshotGate)
+                    {
+                        var v74015Now = Environment.TickCount64;
+                        if (TryGetLargeArraySnapshotV74064(
+                                v74015ArrayKey,
+                                totalBytes,
+                                v74015Now,
+                                out var v74015Cached))
+                        {
+                            layered = v74015Cached;
+                            uploadedLayers = arrayLayers;
+                            var reuseBytes = Interlocked.Add(
+                                ref _v74015LargeArraySnapshotReuseBytes,
+                                totalBytes);
+                            var reuseCount = Interlocked.Increment(
+                                ref _v74015LargeArraySnapshotReuseTraceCount);
+                            if (reuseCount <= 32 || reuseCount % 128 == 0)
+                            {
+                                Console.Error.WriteLine(
+                                    $"[V74.0.15][ARRAY_SINGLEFLIGHT] reuse path=linear " +
+                                    $"count={reuseCount} addr=0x{descriptor.Address:X16} " +
+                                    $"size={descriptor.Width}x{descriptor.Height} layers={arrayLayers} " +
+                                    $"bytes={totalBytes} saved_mb={reuseBytes / (1024 * 1024)} " +
+                                    $"cache={_v74064LargeArraySnapshotCache.Count}/" +
+                                    $"{_v74064LargeArraySnapshotCacheEntries} " +
+                                    $"ttl_ms={_v74064LargeArraySnapshotTtlMs}");
+                            }
+                        }
+                        else
+                        {
+                            layered = GC.AllocateUninitializedArray<byte>(checked((int)totalBytes));
+                            var sliceSource = GC.AllocateUninitializedArray<byte>(
+                                checked((int)chainSliceBytes));
+                            for (var layer = 0u; layer < arrayLayers; layer++)
+                            {
+                                if (!TryReadTextureGuestMemory(ctx,
+                                        descriptor.Address + layer * chainSliceBytes + baseMipByteOffset,
+                                        sliceSource))
+                                {
+                                    break;
+                                }
+
+                                var sliceLinear = TryDetileTextureSource(
+                                    descriptor,
+                                    sourceWidth,
+                                    layerBytes,
+                                    sliceSource,
+                                    baseMipInTail,
+                                    mipTailElementX,
+                                    mipTailElementY) ?? sliceSource.AsSpan(0, layerBytes).ToArray();
+                                sliceLinear.AsSpan(0, layerBytes)
+                                    .CopyTo(layered.AsSpan(checked((int)(layer * layerBytes))));
+                                uploadedLayers++;
+                            }
+
+                            if (uploadedLayers == arrayLayers)
+                            {
+                                StoreLargeArraySnapshotV74064(
+                                    v74015ArrayKey,
+                                    layered,
+                                    Environment.TickCount64);
+
+                                var ownerCount = Interlocked.Increment(
+                                    ref _v74015LargeArraySnapshotOwnerTraceCount);
+                                if (ownerCount <= 32 || ownerCount % 64 == 0)
+                                {
+                                    Console.Error.WriteLine(
+                                        $"[V74.0.64][ARRAY_CACHE_OWNER] path=linear " +
+                                        $"count={ownerCount} addr=0x{descriptor.Address:X16} " +
+                                        $"size={descriptor.Width}x{descriptor.Height} layers={arrayLayers} " +
+                                        $"bytes={totalBytes} " +
+                                        $"cache={_v74064LargeArraySnapshotCache.Count}/" +
+                                        $"{_v74064LargeArraySnapshotCacheEntries} " +
+                                        $"ttl_ms={_v74064LargeArraySnapshotTtlMs}");
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    layered = new byte[checked((int)totalBytes)];
+                    for (var layer = 0u; layer < arrayLayers; layer++)
+                    {
+                        var sliceSource = new byte[(int)chainSliceBytes];
+                        if (!TryReadTextureGuestMemory(ctx,
+                                descriptor.Address + layer * chainSliceBytes + baseMipByteOffset,
+                                sliceSource))
+                        {
+                            break;
+                        }
+
+                        var sliceLinear = TryDetileTextureSource(
+                            descriptor,
+                            sourceWidth,
+                            layerBytes,
+                            sliceSource,
+                            baseMipInTail,
+                            mipTailElementX,
+                            mipTailElementY) ?? sliceSource.AsSpan(0, layerBytes).ToArray();
+                        sliceLinear.AsSpan(0, layerBytes)
+                            .CopyTo(layered.AsSpan(checked((int)(layer * layerBytes))));
+                        uploadedLayers++;
+                    }
+                }
+
+                if (uploadedLayers == arrayLayers)
+                {
+                    NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+            texture = new GuestDrawTexture(
+                        descriptor.Address,
+                        descriptor.Width,
+                        descriptor.Height,
+                        descriptor.Format,
+                        descriptor.NumberType,
+                        layered,
+                        IsFallback: false,
+                        IsStorage: false,
+                        MipLevels: descriptor.MipLevels,
+                        MipLevel: mipLevel,
+                        BaseMipLevel: descriptor.ViewBaseLevel,
+                        ResourceMipLevels: descriptor.ResourceMipLevels,
+                        Pitch: sourceWidth,
+                        TileMode: descriptor.TileMode,
+                        DstSelect: descriptor.DstSelect,
+                        Sampler: sampler,
+                        ArrayedView: true,
+                        ArrayLayers: arrayLayers,
+                        Type: descriptor.Type,
+                        Depth: textureDepth,
+                        MetadataAddress: descriptor.MetadataAddress,
+                        DescriptorFlags: descriptor.DescriptorFlags,
+                        BcSwizzle: descriptor.BcSwizzle,
+                        HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+                    return true;
+                }
+            }
+
+            _arrayUploadUnsupported.TryAdd(descriptor.Address, 0);
+        }
+
+        var physicalReadAddress = descriptor.Address + baseMipByteOffset;
+        if (!CanReadTextureGuestRange(
+                ctx,
+                physicalReadAddress,
+                physicalSourceByteCount))
+        {
+            TraceTextureFallback(
+                descriptor,
+                $"guest-range-unreadable:{physicalSourceByteCount}");
+            texture = CreateFallbackGuestDrawTexture(
+                isStorage,
+                descriptor.Format,
+                descriptor.NumberType,
+                isArrayed,
+                descriptor.Type,
+                textureDepth);
+            return true;
+        }
+
+                // SHARPEMU_V73_17_UNRESOLVED_DCC_ZERO_SUPPRESSION
+        // SHARPEMU_V74_0_4_DCC_NO_CPU_SNAPSHOT
+        //
+        // Producer/resident/upload-known cases have already returned above.
+        // What remains here is a metadata-backed sampled surface with no
+        // trustworthy Vulkan producer. DCC bytes are compressed metadata/
+        // color blocks, not a linear/tiled texture upload. The old V73.17
+        // path scanned the whole range and suppressed only when every byte
+        // was zero. A non-zero 4K DCC range therefore allocated tens of MiB
+        // per draw and uploaded semantically invalid pixels.
+        //
+        // For large DCC surfaces, never snapshot CPU bytes. A later real GPU
+        // writer/resident image re-enters one of the authoritative paths
+        // above. Keep the old zero-only guard for small metadata surfaces.
+        if (!isStorage &&
+            descriptor.DccCompressionEnabled &&
+            physicalSourceByteCount >= 8UL * 1024UL * 1024UL)
+        {
+            // SHARPEMU_V74_0_56_32_DEFER_DCC_TO_GPU_METADATA
+            //
+            // V56.31 proves that these are not merely expensive snapshots:
+            // 3840x2160 and 2560x1440 scene inputs repeatedly reach this branch
+            // and the old code replaces each one with Address=0, 1x1 black.
+            //
+            // DCC bytes cannot be decoded as ordinary guest RAM here. Preserve
+            // the real address + metadata identity and let the Vulkan backend
+            // resolve the GPU image that owns that metadata. If no such image
+            // exists at execution time, the backend performs the same safe
+            // black fallback there; it must never self-heal by uploading DCC
+            // bytes as pixels.
+            var suppressionCount = Interlocked.Increment(
+                ref _v7317ZeroDccSuppressionTraceCount);
+            var suppressedBytes = Interlocked.Add(
+                ref _v7404DccSnapshotSuppressedBytes,
+                checked((long)physicalSourceByteCount));
+
+            if (suppressionCount <= 64 || suppressionCount % 256 == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.32][DCC_DEFER] " +
+                    $"count={suppressionCount} addr=0x{descriptor.Address:X16} " +
+                    $"meta=0x{descriptor.MetadataAddress:X16} " +
+                    $"size={descriptor.Width}x{descriptor.Height} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                    $"tile={descriptor.TileMode} bytes={physicalSourceByteCount} " +
+                    $"suppressed_mb={suppressedBytes / (1024 * 1024)}");
+            }
+
+            NoteSampledAddress(
+                descriptor.Address,
+                descriptor.Format,
+                descriptor.NumberType);
+
+            texture = new GuestDrawTexture(
+                descriptor.Address,
+                descriptor.Width,
+                descriptor.Height,
+                descriptor.Format,
+                descriptor.NumberType,
+                Array.Empty<byte>(),
+                IsFallback: false,
+                IsStorage: false,
+                MipLevels: descriptor.MipLevels,
+                MipLevel: mipLevel,
+                BaseMipLevel: descriptor.ViewBaseLevel,
+                ResourceMipLevels: descriptor.ResourceMipLevels,
+                Pitch: sourceWidth,
+                TileMode: descriptor.TileMode,
+                DstSelect: descriptor.DstSelect,
+                Sampler: sampler,
+                WriteGeneration: hasWriteGeneration ? writeGeneration : -1,
+                ArrayedView: isArrayed,
+                ArrayLayers: arrayUploadLayers,
+                Type: descriptor.Type,
+                Depth: textureDepth,
+                MetadataAddress: descriptor.MetadataAddress,
+                DescriptorFlags: descriptor.DescriptorFlags,
+                BcSwizzle: descriptor.BcSwizzle,
+                HasExtendedDescriptor: descriptor.HasExtendedDescriptor,
+                GpuReferenceOnly: true);
+            return true;
+        }
+
+        if (!isStorage &&
+            descriptor.DccCompressionEnabled &&
+            TryProbeTextureGuestRangeAllZero(
+                ctx,
+                physicalReadAddress,
+                physicalSourceByteCount,
+                out var unresolvedDccAllZero) &&
+            unresolvedDccAllZero)
+        {
+            if ((_traceDccAlias || _traceAgcShader) &&
+                Interlocked.Increment(
+                    ref _v7317ZeroDccSuppressionTraceCount) <= 128)
+            {
+                Console.Error.WriteLine(
+                    "[V73.17][DCC] agc.dcc_zero_snapshot_suppressed " +
+                    $"addr=0x{descriptor.Address:X16} " +
+                    $"meta=0x{descriptor.MetadataAddress:X16} " +
+                    $"size={descriptor.Width}x{descriptor.Height} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                    $"tile={descriptor.TileMode} bytes={physicalSourceByteCount}");
+            }
+
+            texture = CreateFallbackGuestDrawTexture(
+                isStorage,
+                descriptor.Format,
+                descriptor.NumberType,
+                isArrayed,
+                descriptor.Type,
+                textureDepth);
+            return true;
+        }
+
+        // Any >=8MiB allocation reaching this point is NOT the large
+        // unresolved-DCC case above. Log a bounded breadcrumb so remaining
+        // managed allocation pressure has an exact texture descriptor.
+        if (physicalSourceByteCount >= 8UL * 1024UL * 1024UL &&
+            Interlocked.Increment(
+                ref _v7404LargeTextureSnapshotTraceCount) <= 96)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.4][ALLOC] large_texture_cpu_snapshot " +
+                $"addr=0x{descriptor.Address:X16} " +
+                $"meta=0x{descriptor.MetadataAddress:X16} " +
+                $"size={descriptor.Width}x{descriptor.Height} " +
+                $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                $"tile={descriptor.TileMode} storage={(isStorage ? 1 : 0)} " +
+                $"bytes={physicalSourceByteCount}");
+        }
+var v7405CacheLargeSnapshot =     !isStorage &&     !descriptor.DccCompressionEnabled &&     descriptor.Address != 0 &&     physicalSourceByteCount >= 8UL * 1024UL * 1024UL &&
+    physicalSourceByteCount <= 32UL * 1024UL * 1024UL;  var v7405WriteGeneration =     hasWriteGeneration ? writeGeneration : -1;  var v7405SnapshotKey = new V7405LargeTextureSnapshotKey(     descriptor.Address,     descriptor.Width,     descriptor.Height,     descriptor.Format,     descriptor.NumberType,     descriptor.TileMode,     sourceWidth,     physicalSourceByteCount,     v7405WriteGeneration);  byte[] source; var v7405Now = Environment.TickCount64; var v7405Reused = false;  if (v7405CacheLargeSnapshot &&     _v7405LargeTextureSnapshotCache.TryGetValue(         v7405SnapshotKey,         out var v7405Cached) &&     unchecked(v7405Now - v7405Cached.Tick) >= 0 &&     unchecked(v7405Now - v7405Cached.Tick) <= _v74016LargeSnapshotReuseTtlMs) {     source = v7405Cached.Data;     v7405Reused = true;      var reuseBytes = Interlocked.Add(         ref _v7405LargeTextureSnapshotReuseBytes,         source.Length);     var reuseCount = Interlocked.Increment(         ref _v7405LargeTextureSnapshotReuseTraceCount);      if (reuseCount <= 64 || reuseCount % 256 == 0)     {         Console.Error.WriteLine(             $"[V74.0.5][CACHE] large_texture_snapshot_reuse " +             $"count={reuseCount} addr=0x{descriptor.Address:X16} " +             $"size={descriptor.Width}x{descriptor.Height} " +             $"fmt={descriptor.Format}/{descriptor.NumberType} " +             $"tile={descriptor.TileMode} bytes={source.Length} " +             $"saved_mb={reuseBytes / (1024 * 1024)}");     } } else {     source = GC.AllocateUninitializedArray<byte>(checked((int)physicalSourceByteCount));     if (!TryReadTextureGuestMemory(ctx, physicalReadAddress, source))     {         TraceTextureFallback(             descriptor,             $"guest-read-failed:{physicalSourceByteCount}");         texture = CreateFallbackGuestDrawTexture(             isStorage,             descriptor.Format,             descriptor.NumberType,             isArrayed,             descriptor.Type,             textureDepth);         return true;     }      if (v7405CacheLargeSnapshot)     {         if (_v7405LargeTextureSnapshotCache.Count >= 8)         {             foreach (var entry in _v7405LargeTextureSnapshotCache)             {                 if (unchecked(v7405Now - entry.Value.Tick) > _v74016LargeSnapshotReuseTtlMs)                 {                     _v7405LargeTextureSnapshotCache.TryRemove(                         entry.Key,                         out _);                 }             }         }          if (_v7405LargeTextureSnapshotCache.Count < 8)         {             _v7405LargeTextureSnapshotCache[v7405SnapshotKey] =                 (source, v7405Now);         }     } }  _ = v7405Reused;
+
+        if (_traceAgcShader)
+        {
+            var nonZero = 0;
+            for (var i = 0; i < source.Length; i++)
+            {
+                if (source[i] != 0)
+                {
+                    nonZero++;
+                    if (nonZero >= 64)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            TraceAgcShader(
+                $"agc.texture_source addr=0x{descriptor.Address:X16} " +
+                $"fmt={descriptor.Format} num={descriptor.NumberType} tile={descriptor.TileMode} " +
+                $"size={descriptor.Width}x{descriptor.Height} pitch={descriptor.Pitch} " +
+                $"dst=0x{descriptor.DstSelect:X3} " +
+                $"bytes={source.Length} logical_bytes={sourceByteCount} nonzero64={nonZero}");
+        }
+        DumpTextureSourceIfRequested(descriptor, sourceWidth, source);
+
+        if (_gpuDetileLog && descriptor.TileMode != 0)
+        {
+            lock (_gpuDetileGateDiag)
+            {
+                if (_gpuDetileGateDiag.Add(descriptor.TileMode))
+                {
+                    var eq = hasElementLayout
+                        ? GnmTiling.GetDetileParams(
+                            descriptor.TileMode, bytesPerElement, elementsWide, elementsHigh).Equation
+                        : DetileEquation.None;
+                    Console.Error.WriteLine(
+                        $"[GPU-DETILE] gate mode={descriptor.TileMode} fmt={descriptor.Format} " +
+                        $"bpp={bytesPerElement} hasLayout={hasElementLayout} mipTail={baseMipInTail} " +
+                        $"storage={isStorage} arrayed={isArrayed} eq={eq} -> " +
+                        $"{(hasElementLayout && !baseMipInTail && IsGpuDetileBytesPerElement(bytesPerElement) && IsGpuDetileEquation(eq) ? "GPU" : "CPU")}");
+                }
+            }
+        }
+
+        // GPU detile: for the 4/8/16-bytes/element base-mip case the backend can
+        // deswizzle on the GPU (exact-XOR and block-table equations, including
+        // block-compressed formats), so ship the raw tiled bytes + params rather
+        // than paying the CPU detile. Everything else keeps the CPU path below.
+        //
+        // Arrayed textures are handled by the arrayed branch above (they package
+        // every layer's tiled slice); this branch is the single-layer case.
+        if (_gpuDetileEnabled && hasElementLayout && !baseMipInTail &&
+            IsGpuDetileBytesPerElement(bytesPerElement) && !isArrayed &&
+            IsGpuDetileTextureType(descriptor.Type))
+        {
+            var gpuDetileParams = GnmTiling.GetDetileParams(
+                descriptor.TileMode, bytesPerElement, elementsWide, elementsHigh);
+            if (IsGpuDetileEquation(gpuDetileParams.Equation) &&
+                (long)elementsWide * elementsHigh * bytesPerElement <= source.Length)
+            {
+                NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+            texture = new GuestDrawTexture(
+                    descriptor.Address,
+                    descriptor.Width,
+                    descriptor.Height,
+                    descriptor.Format,
+                    descriptor.NumberType,
+                    [],
+                    IsFallback: false,
+                    IsStorage: isStorage,
+                    MipLevels: descriptor.MipLevels,
+                    MipLevel: mipLevel,
+                    BaseMipLevel: descriptor.ViewBaseLevel,
+                    ResourceMipLevels: descriptor.ResourceMipLevels,
+                    Pitch: sourceWidth,
+                    TileMode: descriptor.TileMode,
+                    DstSelect: descriptor.DstSelect,
+                    Sampler: ToGuestSampler(samplerDescriptor),
+                    WriteGeneration: hasWriteGeneration ? writeGeneration : -1,
+                    ArrayedView: isArrayed,
+                    Type: descriptor.Type,
+                    Depth: textureDepth,
+                    TiledSource: source,
+                    Detile: gpuDetileParams,
+                    MetadataAddress: descriptor.MetadataAddress,
+                    DescriptorFlags: descriptor.DescriptorFlags,
+                    BcSwizzle: descriptor.BcSwizzle,
+                    HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+                return true;
+            }
+        }
+
+        var rgba = TryDetileTextureSource(
+            descriptor,
+            sourceWidth,
+            checked((int)sourceByteCount),
+            source,
+            baseMipInTail,
+            mipTailElementX,
+            mipTailElementY) ?? source.AsSpan(0, checked((int)sourceByteCount)).ToArray();
+        DumpLinearTextureIfRequested(descriptor, sourceWidth, rgba);
+        texture = new GuestDrawTexture(
+            descriptor.Address,
+            descriptor.Width,
+            descriptor.Height,
+            descriptor.Format,
+            descriptor.NumberType,
+            rgba,
+            IsFallback: false,
+            IsStorage: isStorage,
+            MipLevels: descriptor.MipLevels,
+            MipLevel: mipLevel,
+            BaseMipLevel: descriptor.ViewBaseLevel,
+            ResourceMipLevels: descriptor.ResourceMipLevels,
+            Pitch: sourceWidth,
+            TileMode: descriptor.TileMode,
+            DstSelect: descriptor.DstSelect,
+            Sampler: ToGuestSampler(samplerDescriptor),
+            WriteGeneration: hasWriteGeneration ? writeGeneration : -1,
+            ArrayedView: isArrayed,
+            Type: descriptor.Type,
+            Depth: textureDepth,
+            MetadataAddress: descriptor.MetadataAddress,
+            DescriptorFlags: descriptor.DescriptorFlags,
+            BcSwizzle: descriptor.BcSwizzle,
+            HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
+        return true;
+    }
+
+
+
+    /// <summary>
+    /// On PS5 render targets alias guest memory, so pixels the game wrote with
+    /// the CPU are visible before the first GPU draw (Chowdren pre-fills its
+    /// fog/overlay layers that way). Seed newly created Vulkan guest images
+    /// with the current guest memory contents to preserve that base layer.
+    /// </summary>
+    private static void ProvideRenderTargetInitialData(
+        CpuContext ctx,
+        RenderTargetDescriptor target)
+    {
+        if (!GuestGpu.Current.GuestImageWantsInitialData(target.Address))
+        {
+            return;
+        }
+
+        var byteCount = VulkanVideoPresenter.GetGuestImageByteCount(
+            target.Format,
+            target.Width,
+            target.Height);
+        if (byteCount == 0 || byteCount > MaxPresentedTextureBytes)
+        {
+            return;
+        }
+
+        var initialData = new byte[byteCount];
+        // SHARPEMU_DEMONSSOULS_UI_RT_ALIAS_READ_V73_0_19
+        // CPU-prefilled UI/font render targets can live in tracked libc memory
+        // or through the packed low-46-bit GPU alias used by Gen5 descriptors.
+        var readOk = TryReadTextureGuestMemory(
+            ctx,
+            target.Address,
+            initialData);
+        var nonZero = readOk && initialData.AsSpan().IndexOfAnyExcept((byte)0) >= 0;
+        if (_traceDraws && _rtSeedTraced.Add(target.Address))
+        {
+            Console.Error.WriteLine(
+                $"[RTSEED] addr=0x{target.Address:X} {target.Width}x{target.Height} " +
+                $"read={readOk} nonZero={nonZero}");
+        }
+
+        if (nonZero)
+        {
+            GuestGpu.Current.ProvideGuestImageInitialData(target.Address, initialData);
+        }
+    }
+
+    private static readonly HashSet<ulong> _rtSeedTraced = new();
+
+    private static void TraceDrawCompact(
+        ulong sequence,
+        TranslatedGuestDraw draw,
+        IReadOnlyList<GuestDrawTexture> textures,
+        IReadOnlyList<GuestVertexBuffer> vertexBuffers)
+    {
+        if (!_traceDraws)
+        {
+            return;
+        }
+
+        var target = draw.RenderTargets.FirstOrDefault();
+        var blend = draw.RenderState.Blend;
+        var viewport = draw.RenderState.Viewport is { } vp
+            ? $"{vp.X:0.#},{vp.Y:0.#},{vp.Width:0.#}x{vp.Height:0.#}"
+            : "none";
+        var textureList = string.Join(
+            '|',
+            textures.Select(texture =>
+                $"0x{texture.Address:X}:{texture.Width}x{texture.Height}" +
+                $":f{texture.Format}/n{texture.NumberType}/d{texture.DstSelect:X3}" +
+                (texture.IsFallback ? ":FALLBACK" : string.Empty)));
+        var positions = string.Empty;
+        var positionBuffer = vertexBuffers.FirstOrDefault(buffer => buffer.Location == 0);
+        if (positionBuffer is { Length: >= 8 })
+        {
+            var stride = Math.Max(positionBuffer.Stride, 4u);
+            var vertexTotal = (int)((positionBuffer.Length - positionBuffer.OffsetBytes) / stride);
+            var sampled = new List<string>();
+            foreach (var vertex in new[] { 0, 1, vertexTotal - 1 })
+            {
+                var baseOffset = (int)(positionBuffer.OffsetBytes + vertex * stride);
+                if (vertex < 0 || baseOffset + 8 > positionBuffer.Length)
+                {
+                    continue;
+                }
+
+                sampled.Add(
+                    $"{BitConverter.ToSingle(positionBuffer.Data, baseOffset):0.##}," +
+                    $"{BitConverter.ToSingle(positionBuffer.Data, baseOffset + 4):0.##}");
+            }
+
+            positions = string.Join(';', sampled);
+        }
+
+        Console.Error.WriteLine(
+            $"[DRAW] seq={sequence} es=0x{draw.ExportShaderAddress:X} ps=0x{draw.PixelShaderAddress:X} " +
+            $"target=0x{target.Address:X}:{target.Width}x{target.Height}:f{target.Format}/n{target.NumberType} " +
+            $"prim=0x{draw.PrimitiveType:X} verts={draw.VertexCount} indexed={draw.IndexBuffer is not null} " +
+            $"blend={(blend.Enable ? 1 : 0)}:{blend.ColorSrcFactor}/{blend.ColorDstFactor}/{blend.ColorFunc}" +
+            $":a{blend.AlphaSrcFactor}/{blend.AlphaDstFactor}/{blend.AlphaFunc}/s{(blend.SeparateAlphaBlend ? 1 : 0)} " +
+            $"mask=0x{blend.WriteMask:X} viewport={viewport} textures={textureList} pos={positions} " +
+            $"ps_s0..3={string.Join(',', draw.PixelUserData.Take(4).Select(value => BitConverter.UInt32BitsToSingle(value).ToString("0.###")))} " +
+            $"rawblend=0x{draw.RawBlendControl:X8} info=0x{draw.RawColorInfo:X8}");
+    }
+
+    private static void TraceDrawCompactMiss(ulong sequence, uint vertexCount, string error)
+    {
+        if (!_traceDraws)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[DRAW] seq={sequence} MISS verts={vertexCount} error={error}");
+    }
+
+    private static int _grassTraceCount;
+
+    private static void TraceGrassDrawVertices(
+        TranslatedGuestDraw draw,
+        IReadOnlyList<GuestDrawTexture> textures,
+        IReadOnlyList<GuestVertexBuffer> vertexBuffers)
+    {
+        if (_grassTraceCount >= 6 ||
+            !textures.Any(texture => texture.Width == 288 && texture.Height == 160) ||
+            vertexBuffers.Count == 0 ||
+            Interlocked.Increment(ref _grassTraceCount) > 6)
+        {
+            return;
+        }
+
+        var text = new System.Text.StringBuilder();
+        text.Append($"agc.grassdraw prim=0x{draw.PrimitiveType:X} verts={draw.VertexCount} ");
+        text.Append($"indexed={draw.IndexBuffer is not null} buffers={vertexBuffers.Count}");
+        foreach (var buffer in vertexBuffers)
+        {
+            text.Append(
+                $"\n  loc={buffer.Location} fmt={buffer.DataFormat}/{buffer.NumberFormat}x{buffer.ComponentCount} " +
+                $"stride={buffer.Stride} offset={buffer.OffsetBytes} bytes={buffer.Length}");
+            var stride = Math.Max(buffer.Stride, 4u);
+            var maxVerts = Math.Min(6, (int)((buffer.Length - buffer.OffsetBytes) / stride));
+            for (var vertex = 0; vertex < maxVerts; vertex++)
+            {
+                var baseOffset = (int)(buffer.OffsetBytes + vertex * stride);
+                var components = Math.Min(4, (int)((buffer.Length - baseOffset) / 4));
+                text.Append($"\n    v{vertex}:");
+                for (var c = 0; c < components; c++)
+                {
+                    text.Append($" {BitConverter.ToSingle(buffer.Data, baseOffset + c * 4):0.#####}");
+                }
+            }
+        }
+
+        TraceAgcShader(text.ToString());
+    }
+
+    private static int _rectListTraceCount;
+
+    private static void TraceRectListVertices(
+        TranslatedGuestDraw draw,
+        IReadOnlyList<GuestVertexBuffer> vertexBuffers)
+    {
+        if (!AgcPrimitiveHelpers.IsRectListPrimitive(draw.PrimitiveType) ||
+            _rectListTraceCount >= 16 ||
+            Interlocked.Increment(ref _rectListTraceCount) > 16)
+        {
+            return;
+        }
+
+        var expanded = AgcPrimitiveHelpers.GetRectListDrawVertexCount(
+            draw.PrimitiveType,
+            draw.VertexCount,
+            indexed: draw.IndexBuffer is not null,
+            hasVertexBuffers: vertexBuffers.Count > 0);
+        var text = new System.Text.StringBuilder();
+        text.Append(
+            $"agc.rectlist prim=0x{draw.PrimitiveType:X} verts={draw.VertexCount}->{expanded} " +
+            $"indexed={(draw.IndexBuffer is not null ? 1 : 0)} vb={vertexBuffers.Count}");
+
+        if (vertexBuffers.Count > 0)
+        {
+            var buffer = vertexBuffers[0];
+            var stride = Math.Max(buffer.Stride, 4u);
+            text.Append(
+                $" stride={buffer.Stride} " +
+                $"fmt={buffer.DataFormat}/{buffer.NumberFormat}x{buffer.ComponentCount}");
+            for (var vertex = 0; vertex < 3; vertex++)
+            {
+                var baseOffset = (int)(buffer.OffsetBytes + vertex * stride);
+                if (baseOffset + 16 > buffer.Length)
+                {
+                    break;
+                }
+
+                var x = BitConverter.ToSingle(buffer.Data, baseOffset);
+                var y = BitConverter.ToSingle(buffer.Data, baseOffset + 4);
+                var z = BitConverter.ToSingle(buffer.Data, baseOffset + 8);
+                var w = BitConverter.ToSingle(buffer.Data, baseOffset + 12);
+                text.Append($" v{vertex}=({x:0.###},{y:0.###},{z:0.###},{w:0.###})");
+            }
+        }
+        else
+        {
+            text.Append(" procedural=1");
+        }
+
+        TraceAgcShader(text.ToString());
+    }
+
+    private static int _textureDumpCount;
+    private static readonly ConcurrentDictionary<string, int> _textureDumpKeys = new();
+
+    /// <summary>
+    /// Writes raw sampled-texture bytes (as read from guest memory) when
+    /// SHARPEMU_TEXTURE_DUMP_DIR is set, so upload-time content can be
+    /// inspected offline. File name records size and effective pitch.
+    /// </summary>
+    private static void DumpTextureSourceIfRequested(
+        in TextureDescriptor descriptor,
+        uint sourcePitch,
+        byte[] source)
+    {
+        var directory = Environment.GetEnvironmentVariable("SHARPEMU_TEXTURE_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return;
+        }
+
+        var key = $"0x{descriptor.Address:X}-{descriptor.Width}x{descriptor.Height}";
+        var occurrence = _textureDumpKeys.AddOrUpdate(key, 1, static (_, count) => count + 1);
+        // First uses plus periodic later snapshots (the game reuses the same
+        // allocation for successive full-screen images).
+        if ((occurrence > 3 && occurrence % 500 >= 3) ||
+            Interlocked.Increment(ref _textureDumpCount) > 200)
+        {
+            return;
+        }
+
+        var index = _textureDumpCount;
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(
+                directory,
+                $"{index:D3}-0x{descriptor.Address:X}-{descriptor.Width}x{descriptor.Height}" +
+                $"-p{sourcePitch}-f{descriptor.Format}-t{descriptor.TileMode}.bin");
+            File.WriteAllBytes(path, source);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Writes the bytes after detiling when SHARPEMU_TEXTURE_LINEAR_DUMP_DIR is
+    /// set. Keeping this separate from the raw-source dump makes AddrLib
+    /// equation changes directly inspectable with ordinary image tools.
+    /// </summary>
+    private static void DumpLinearTextureIfRequested(
+        in TextureDescriptor descriptor,
+        uint sourcePitch,
+        byte[] source)
+    {
+        var directory = Environment.GetEnvironmentVariable("SHARPEMU_TEXTURE_LINEAR_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return;
+        }
+
+        var key = $"linear-0x{descriptor.Address:X}-{descriptor.Width}x{descriptor.Height}";
+        var occurrence = _textureDumpKeys.AddOrUpdate(key, 1, static (_, count) => count + 1);
+        if ((occurrence > 3 && occurrence % 500 >= 3) ||
+            Interlocked.Increment(ref _textureDumpCount) > 200)
+        {
+            return;
+        }
+
+        var index = _textureDumpCount;
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(
+                directory,
+                $"{index:D3}-0x{descriptor.Address:X}-{descriptor.Width}x{descriptor.Height}" +
+                $"-p{sourcePitch}-f{descriptor.Format}-t{descriptor.TileMode}.linear.bin");
+            File.WriteAllBytes(path, source);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private static GuestDrawTexture CreateFallbackGuestDrawTexture(
+        bool isStorage,
+        uint format,
+        uint numberType,
+        bool isArrayed = false,
+        uint type = Gen5TextureType2D,
+        uint depth = 1)
+    {
+        var fallbackFormat = format == 0 ? 10u : format;
+        var fallbackNumberType = numberType;
+        return new(
+            0,
+            1,
+            1,
+            fallbackFormat,
+            fallbackNumberType,
+            [0, 0, 0, 255],
+            IsFallback: true,
+            IsStorage: isStorage,
+            MipLevels: 1,
+            MipLevel: 0,
+            ArrayedView: isArrayed,
+            Type: type,
+            Depth: GetTextureVolumeDepth(type, depth));
+    }
+
+    private static GuestSampler ToGuestSampler(IReadOnlyList<uint> descriptor) =>
+        descriptor.Count >= 4
+            ? new GuestSampler(
+                descriptor[0],
+                descriptor[1],
+                descriptor[2],
+                descriptor[3])
+            : default;
+
+    private static byte[] ConvertRgba16FloatToRgba8(ReadOnlySpan<byte> source, uint width, uint height)
+    {
+        var destination = new byte[checked((int)((ulong)width * height * 4))];
+        var pixelCount = destination.Length / 4;
+        for (var pixel = 0; pixel < pixelCount; pixel++)
+        {
+            var sourceOffset = pixel * 8;
+            var destinationOffset = pixel * 4;
+            destination[destinationOffset + 0] = HalfToByte(BinaryPrimitives.ReadUInt16LittleEndian(source[sourceOffset..]));
+            destination[destinationOffset + 1] = HalfToByte(BinaryPrimitives.ReadUInt16LittleEndian(source[(sourceOffset + 2)..]));
+            destination[destinationOffset + 2] = HalfToByte(BinaryPrimitives.ReadUInt16LittleEndian(source[(sourceOffset + 4)..]));
+            destination[destinationOffset + 3] = HalfToByte(BinaryPrimitives.ReadUInt16LittleEndian(source[(sourceOffset + 6)..]));
+        }
+
+        return destination;
+    }
+
+    private static byte HalfToByte(ushort bits)
+    {
+        var value = (float)BitConverter.UInt16BitsToHalf(bits);
+        if (!float.IsFinite(value))
+        {
+            return 0;
+        }
+
+        return (byte)Math.Clamp((int)MathF.Round(value * 255.0f), 0, 255);
+    }
+
+    private static void TraceV26IndirectTable(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong baseAddress,
+        string phase)
+    {
+        if (!_traceIndirectArgsV26 || baseAddress == 0)
+        {
+            return;
+        }
+
+        var queue = state.QueueName ?? string.Empty;
+        var baseKey = (queue, state.ActiveSubmissionId, baseAddress);
+        if (phase == "set-base")
+        {
+            lock (_v26IndirectTraceGate)
+            {
+                if (!_v26IndirectBaseSnapshots.Add(baseKey))
+                {
+                    return;
+                }
+            }
+        }
+
+        var readable = 0;
+        var nonzeroX = 0;
+        var zeroX = 0;
+        var samples = new List<string>(16);
+        for (var index = 0; index < V26IndirectTupleProbeCount; index++)
+        {
+            var tupleAddress = baseAddress + (ulong)(index * 12);
+            if (!TryReadUInt32(ctx, tupleAddress, out var x) ||
+                !TryReadUInt32(ctx, tupleAddress + 4, out var y) ||
+                !TryReadUInt32(ctx, tupleAddress + 8, out var z))
+            {
+                continue;
+            }
+
+            readable++;
+            if (x == 0)
+            {
+                zeroX++;
+            }
+            else
+            {
+                nonzeroX++;
+            }
+
+            lock (_v26IndirectTraceGate)
+            {
+                _v26IndirectBaseline.TryAdd(
+                    (queue, state.ActiveSubmissionId, tupleAddress),
+                    (x, y, z));
+            }
+
+            if ((x != 0 || y != 1 || z != 1) && samples.Count < 16)
+            {
+                samples.Add($"{index}:{x}/{y}/{z}");
+            }
+        }
+
+        var trace = Interlocked.Increment(ref _v26IndirectTraceCount);
+        Console.Error.WriteLine(
+            $"[V26][INDIRECT] table phase={phase} trace={trace} queue={queue} " +
+            $"submission={state.ActiveSubmissionId} base=0x{baseAddress:X16} " +
+            $"readable={readable} nonzero_x={nonzeroX} zero_x={zeroX} " +
+            $"samples=[{string.Join(',', samples)}]");
+    }
+
+    private static void TraceV26IndirectTuple(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong dimensionsAddress,
+        ulong packetAddress,
+        string phase)
+    {
+        if (!_traceIndirectArgsV26 || dimensionsAddress == 0)
+        {
+            return;
+        }
+
+        var queue = state.QueueName ?? string.Empty;
+        uint x = 0;
+        uint y = 0;
+        uint z = 0;
+        var readable = TryReadUInt32(ctx, dimensionsAddress, out x) &&
+            TryReadUInt32(ctx, dimensionsAddress + 4, out y) &&
+            TryReadUInt32(ctx, dimensionsAddress + 8, out z);
+        if (!readable)
+        {
+            Console.Error.WriteLine(
+                $"[V26][INDIRECT] tuple phase={phase} queue={queue} " +
+                $"submission={state.ActiveSubmissionId} packet=0x{packetAddress:X16} " +
+                $"addr=0x{dimensionsAddress:X16} readable=0");
+            return;
+        }
+
+        var baselineFound = false;
+        var baseline = (X: 0u, Y: 0u, Z: 0u);
+        lock (_v26IndirectTraceGate)
+        {
+            baselineFound = _v26IndirectBaseline.TryGetValue(
+                (queue, state.ActiveSubmissionId, dimensionsAddress),
+                out baseline);
+        }
+
+        var becameNonzero = baselineFound &&
+            ((baseline.X == 0 && x != 0) ||
+             (baseline.Y == 0 && y != 0) ||
+             (baseline.Z == 0 && z != 0));
+        var clobber = baselineFound &&
+            ((baseline.X != 0 && x == 0) ||
+             (baseline.Y != 0 && y == 0) ||
+             (baseline.Z != 0 && z == 0));
+        var hasBase = state.IndirectArgsAddress != 0 &&
+            dimensionsAddress >= state.IndirectArgsAddress;
+        var delta = hasBase ? dimensionsAddress - state.IndirectArgsAddress : ulong.MaxValue;
+        var tupleIndex = hasBase && delta % 12 == 0 ? delta / 12 : ulong.MaxValue;
+        var indexText = tupleIndex == ulong.MaxValue ? "na" : tupleIndex.ToString();
+        var baselineText = baselineFound
+            ? $"{baseline.X}/{baseline.Y}/{baseline.Z}"
+            : "na";
+
+        Console.Error.WriteLine(
+            $"[V26][INDIRECT] tuple phase={phase} queue={queue} " +
+            $"submission={state.ActiveSubmissionId} packet=0x{packetAddress:X16} " +
+            $"base=0x{state.IndirectArgsAddress:X16} addr=0x{dimensionsAddress:X16} " +
+            $"index={indexText} xyz={x}/{y}/{z} baseline={baselineText} " +
+            $"became_nonzero={(becameNonzero ? 1 : 0)} clobber={(clobber ? 1 : 0)}");
+    }
+    private static bool TryReadComputeDispatch(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        ulong packetAddress,
+        uint packetLength,
+        uint opcode,
+        out ComputeDispatch dispatch,
+        out ulong indirectDimsRetryAddress)
+    {
+        dispatch = default;
+        // Non-zero only when this is an INDIRECT dispatch whose dimensions read as
+        // zero â€” meaning the producing GPU dispatch that computes them has not run
+        // yet. The caller suspends on this address instead of dropping the work.
+        indirectDimsRetryAddress = 0;
+        ulong dimensionsAddress;
+        uint initiator;
+        string dispatchSource;
+        if (opcode == ItDispatchDirect)
+        {
+            if (packetLength < 5 ||
+                !TryReadUInt32(ctx, packetAddress + 16, out initiator))
+            {
+                return false;
+            }
+
+            dimensionsAddress = packetAddress + 4;
+            dispatchSource = "direct";
+        }
+        else if (packetLength >= 4)
+        {
+            if (!TryReadUInt64(ctx, packetAddress + 4, out dimensionsAddress) ||
+                !TryReadUInt32(ctx, packetAddress + 12, out initiator))
+            {
+                return false;
+            }
+
+            dispatchSource = "absolute-indirect";
+        }
+        else
+        {
+            if (packetLength < 3 ||
+                state.IndirectArgsAddress == 0 ||
+                !TryReadUInt32(ctx, packetAddress + 4, out var dataOffset) ||
+                !TryReadUInt32(ctx, packetAddress + 8, out initiator))
+            {
+                return false;
+            }
+
+            dimensionsAddress = state.IndirectArgsAddress + dataOffset;
+            dispatchSource = "base-indirect";
+        }
+
+        if ((initiator & 1) == 0 ||
+            !TryReadUInt32(ctx, dimensionsAddress, out var dispatchEndX) ||
+            !TryReadUInt32(ctx, dimensionsAddress + 4, out var dispatchEndY) ||
+            !TryReadUInt32(ctx, dimensionsAddress + 8, out var dispatchEndZ))
+        {
+            return false;
+        }
+
+        if (opcode == ItDispatchIndirect)
+        {
+            TraceV26IndirectTuple(
+                ctx,
+                state,
+                dimensionsAddress,
+                packetAddress,
+                phase: "dispatch-read");
+        }
+
+        // [V72.4.3.2.18][INDIRECT_ZERO_VISIBILITY_RESTORE]
+        // Do not finalize CPU-observed 0/1/1 indirect args before GPU visibility.
+        // The generic zero-dimension path below sets indirectDimsRetryAddress;
+        // HandleSubmittedIndirectDimsWait then performs the existing global ordered
+        // visibility point and re-reads the real indirect argument buffer.
+if (dispatchEndX == 0 || dispatchEndY == 0 || dispatchEndZ == 0)
+        {
+            // V74.0.31.2: a zero-sized indirect dispatch is a legal no-op for
+            // this Kyty-compatible A/B. Do not convert it into a synthetic
+            // GpuWaitRegistry waiter or a global visibility action.
+            if (opcode == ItDispatchIndirect && _kytyZeroIndirectNoopV740312)
+            {
+                indirectDimsRetryAddress = 0;
+                var noopTrace = Interlocked.Increment(
+                    ref _v740312IndirectZeroNoopTraceCount);
+                if (noopTrace <= 256 || (noopTrace & (noopTrace - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.31.2][INDIRECT_ZERO_NOOP] count={noopTrace} " +
+                        $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                        $"dims=0x{dimensionsAddress:X16} " +
+                        $"raw={dispatchEndX:X8}/{dispatchEndY:X8}/{dispatchEndZ:X8} " +
+                        $"initiator=0x{initiator:X8} source={dispatchSource}");
+                }
+
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    "zero-dimension-legal-noop");
+            }
+
+            // Legacy accumulated behavior remains available when the gate is off.
+            if (opcode == ItDispatchIndirect)
+            {
+                indirectDimsRetryAddress = dispatchEndX == 0
+                    ? dimensionsAddress
+                    : dispatchEndY == 0
+                        ? dimensionsAddress + sizeof(uint)
+                        : dimensionsAddress + 2u * sizeof(uint);
+            }
+
+            return RejectComputeDispatch(
+                dimensionsAddress,
+                initiator,
+                dispatchSource,
+                dispatchEndX,
+                dispatchEndY,
+                dispatchEndZ,
+                "zero-dimension");
+        }
+
+        // When FORCE_START_AT_000 is clear, RDNA2 interprets the three packet
+        // values as end coordinates, not group counts. Vulkan expresses the
+        // same operation as vkCmdDispatchBase(base, end - base). Ignoring the
+        // COMPUTE_START registers turned small high-base clears into apparent
+        // multi-million/billion-group dispatches and forced an unsafe cap.
+        const uint forceStartAtZero = 1u << 2;
+        const uint partialThreadGroupEnabled = 1u << 1;
+        const uint useThreadDimensions = 1u << 5;
+        uint baseGroupX = 0;
+        uint baseGroupY = 0;
+        uint baseGroupZ = 0;
+        if ((initiator & forceStartAtZero) == 0)
+        {
+            state.ShRegisters.TryGetValue(ComputeStartX, out baseGroupX);
+            state.ShRegisters.TryGetValue(ComputeStartY, out baseGroupY);
+            state.ShRegisters.TryGetValue(ComputeStartZ, out baseGroupZ);
+        }
+
+        var localSizeX = GetComputeLocalSize(state.ShRegisters, ComputeNumThreadX);
+        var localSizeY = GetComputeLocalSize(state.ShRegisters, ComputeNumThreadY);
+        var localSizeZ = GetComputeLocalSize(state.ShRegisters, ComputeNumThreadZ);
+        uint groupCountX;
+        uint groupCountY;
+        uint groupCountZ;
+        var threadCountX = uint.MaxValue;
+        var threadCountY = uint.MaxValue;
+        var threadCountZ = uint.MaxValue;
+        if ((initiator & useThreadDimensions) != 0)
+        {
+            // In thread-dimension mode the packet contains thread counts, not
+            // group end coordinates. Vulkan still dispatches whole workgroups,
+            // so round up and pass the exact exclusive thread bounds to the
+            // translated shader. Its entry guard disables invocations in the
+            // partially populated final group before any guest instruction.
+            var startThreadX = (ulong)baseGroupX * localSizeX;
+            var startThreadY = (ulong)baseGroupY * localSizeY;
+            var startThreadZ = (ulong)baseGroupZ * localSizeZ;
+            if ((ulong)dispatchEndX <= startThreadX ||
+                (ulong)dispatchEndY <= startThreadY ||
+                (ulong)dispatchEndZ <= startThreadZ)
+            {
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    $"thread-end-not-after-base(" +
+                    $"{startThreadX}x{startThreadY}x{startThreadZ})");
+            }
+
+            groupCountX = CeilDivide((ulong)dispatchEndX - startThreadX, localSizeX);
+            groupCountY = CeilDivide((ulong)dispatchEndY - startThreadY, localSizeY);
+            groupCountZ = CeilDivide((ulong)dispatchEndZ - startThreadZ, localSizeZ);
+            threadCountX = dispatchEndX;
+            threadCountY = dispatchEndY;
+            threadCountZ = dispatchEndZ;
+        }
+        else
+        {
+            if (dispatchEndX <= baseGroupX ||
+                dispatchEndY <= baseGroupY ||
+                dispatchEndZ <= baseGroupZ)
+            {
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    $"end-not-after-base({baseGroupX}x{baseGroupY}x{baseGroupZ})");
+            }
+
+            groupCountX = dispatchEndX - baseGroupX;
+            groupCountY = dispatchEndY - baseGroupY;
+            groupCountZ = dispatchEndZ - baseGroupZ;
+        }
+
+        if ((initiator & partialThreadGroupEnabled) != 0)
+        {
+            var partialSizeX = GetComputePartialSize(state.ShRegisters, ComputeNumThreadX);
+            var partialSizeY = GetComputePartialSize(state.ShRegisters, ComputeNumThreadY);
+            var partialSizeZ = GetComputePartialSize(state.ShRegisters, ComputeNumThreadZ);
+            if (partialSizeX == 0 || partialSizeX > localSizeX ||
+                partialSizeY == 0 || partialSizeY > localSizeY ||
+                partialSizeZ == 0 || partialSizeZ > localSizeZ)
+            {
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    $"invalid-partial-size({partialSizeX}x{partialSizeY}x{partialSizeZ}/" +
+                    $"{localSizeX}x{localSizeY}x{localSizeZ})");
+            }
+
+            if (partialSizeX != localSizeX ||
+                partialSizeY != localSizeY ||
+                partialSizeZ != localSizeZ)
+            {
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    $"unrepresentable-partial-group({partialSizeX}x{partialSizeY}x{partialSizeZ}/" +
+                    $"{localSizeX}x{localSizeY}x{localSizeZ})");
+            }
+        }
+
+        var waveLaneCount = (initiator & (1u << 15)) != 0 ? 32u : 64u;
+
+        if (_traceAgcShader &&
+            ((ulong)groupCountX * groupCountY * groupCountZ >= 1_000_000UL ||
+             groupCountX >= 1_000_000u))
+        {
+            lock (_submitTraceGate)
+            {
+                if (_tracedDispatchArguments.Add(
+                        (dimensionsAddress, groupCountX, groupCountY, groupCountZ)))
+                {
+                    TraceAgcShader(
+                        $"agc.dispatch_args source={dispatchSource} op=0x{opcode:X2} " +
+                        $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                        $"packet=0x{packetAddress:X16} len={packetLength} " +
+                        $"dims=0x{dimensionsAddress:X16} " +
+                        $"raw={dispatchEndX:X8}/{dispatchEndY:X8}/{dispatchEndZ:X8} " +
+                        $"base={baseGroupX:X8}/{baseGroupY:X8}/{baseGroupZ:X8} " +
+                        $"count={groupCountX:X8}/{groupCountY:X8}/{groupCountZ:X8} " +
+                        $"wave={waveLaneCount} " +
+                        $"initiator=0x{initiator:X8} " +
+                        $"indirect_base=0x{state.IndirectArgsAddress:X16}");
+                }
+            }
+        }
+
+        dispatch = new ComputeDispatch(
+            groupCountX,
+            groupCountY,
+            groupCountZ,
+            baseGroupX,
+            baseGroupY,
+            baseGroupZ,
+            waveLaneCount,
+            IsIndirect: opcode == ItDispatchIndirect,
+            threadCountX,
+            threadCountY,
+            threadCountZ);
+        return true;
+    }
+
+    private static uint CeilDivide(ulong value, uint divisor) =>
+        checked((uint)((value + divisor - 1) / divisor));
+
+    private static bool RejectComputeDispatch(
+        ulong dimensionsAddress,
+        uint initiator,
+        string source,
+        uint rawX,
+        uint rawY,
+        uint rawZ,
+        string reason)
+    {
+        lock (_submitTraceGate)
+        {
+            if (_rejectedDispatchArguments.Count < 256 &&
+                _rejectedDispatchArguments.Add((dimensionsAddress, initiator, reason)))
+            {
+                var level = string.Equals(
+                    reason,
+                    "zero-dimension",
+                    StringComparison.Ordinal)
+                        ? "TRACE"
+                        : "WARN";
+
+                var eventName =
+                    level == "TRACE"
+                        ? "agc.dispatch_noop"
+                        : "agc.dispatch_reject";
+
+                Console.Error.WriteLine(
+                    $"[LOADER][{level}] {eventName} source={source} " +
+                    $"dims=0x{dimensionsAddress:X16} raw={rawX:X8}/{rawY:X8}/{rawZ:X8} " +
+                    $"initiator=0x{initiator:X8} reason={reason}");
+            }
+        }
+
+        return false;
+    }
+
+    private static void ObserveComputeDispatch(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        SubmittedDcbState state,
+        ComputeDispatch dispatch)
+    {
+        if (!TryGetShaderAddress(
+                state.ShRegisters,
+                ComputePgmLo,
+                ComputePgmHi,
+                out var shaderAddress))
+        {
+            return;
+        }
+
+        var sequence = ++gpuState.WorkSequence;
+        ulong shaderHeader;
+        lock (_submitTraceGate)
+        {
+            _shaderHeadersByCode.TryGetValue(shaderAddress, out shaderHeader);
+        }
+
+        var computeSystemRegisters = DecodeComputeSystemRegisters(state.ShRegisters);
+        if (!Gen5ShaderTranslator.TryCreateState(
+                ctx,
+                shaderAddress,
+                shaderHeader,
+                state.ShRegisters,
+                ComputeUserDataRegister,
+                out var shaderState,
+                out var error,
+                computeSystemRegisters) ||
+            // [V61.13.18][PRE_SNAPSHOT_CAPTURE_GATE]
+            // Gen5ShaderScalarEvaluator snapshots guest global buffers. Gate
+            // before evaluation so cinematic backpressure does not retain
+            // already-captured 4K/global arrays on blocked producer threads.
+            !SharpEmu.Libs.Media.BinkHostPlaybackAssist.WaitForGuestGpuCapturePermit() ||
+            !Gen5ShaderScalarEvaluator.TryEvaluate(
+                ctx,
+                shaderState,
+                out var evaluation,
+                out error))
+        {
+            lock (_submitTraceGate)
+            {
+                if (_tracedComputeShaders.Add(shaderAddress))
+                {
+                    // V61.18.0_UPSTREAM_SHADER_FAILURE_REPORTING
+                    // Compute translation/evaluation failures must be visible on a normal run.
+                    // A failed compute shader can remove a producer/resource stage without a crash,
+                    // which otherwise looks like an unrelated WAIT/dispatch stall later.
+                    Console.Error.WriteLine(
+                        $"[COMPAT][SHADER] compute cs=0x{shaderAddress:X16} error={error}");
+                }
+            }
+
+            return;
+        }
+
+        var bindings = evaluation.ImageBindings;
+        var descriptions = new List<string>(bindings.Count);
+        var translatedBindings = new List<TranslatedImageBinding>(bindings.Count);
+        var hasStorageBinding = false;
+        foreach (var binding in bindings)
+        {
+            var isStorage = Gen5ShaderTranslator.RequiresStorageImage(binding, bindings);
+            var writesStorage = Gen5ShaderTranslator.IsStorageImageOperation(binding.Opcode);
+            var descriptorValid = TryDecodeTextureDescriptor(binding.ResourceDescriptor, out var texture);
+            if (!descriptorValid)
+            {
+                texture = CreateFallbackTextureDescriptor(binding.ResourceDescriptor);
+            }
+
+            translatedBindings.Add(
+                new TranslatedImageBinding(
+                    texture,
+                    isStorage,
+                    binding.MipLevel ?? 0,
+                    binding.SamplerDescriptor,
+                    Gen5ShaderTranslator.IsArrayedImageBinding(binding)));
+            hasStorageBinding |= isStorage;
+
+            var descriptorState = descriptorValid ? string.Empty : "/invalid-desc";
+            descriptions.Add(
+                $"{binding.Opcode}@0x{binding.Pc:X}:" +
+                $"0x{texture.Address:X16}:{texture.Width}x{texture.Height}:" +
+                $"fmt{texture.Format}/num{texture.NumberType}/tile{texture.TileMode}" +
+                $"{descriptorState}/{ProbeTexture(ctx, texture)}");
+            if (writesStorage && descriptorValid && texture.Address != 0)
+            {
+                if (IsTarget45DIdentityV74041(
+                        texture.Address,
+                        texture.MetadataAddress))
+                {
+                    TraceTarget45DProducerV74041(
+                        "compute_storage",
+                        $"seq={sequence} addr=0x{texture.Address:X16} " +
+                        $"meta=0x{texture.MetadataAddress:X16} " +
+                        $"size={texture.Width}x{texture.Height} " +
+                        $"fmt={texture.Format}/{texture.NumberType} tile={texture.TileMode} " +
+                        $"cs=0x{shaderAddress:X16} op={binding.Opcode}");
+                }
+
+                gpuState.ComputeImageWriters[texture.Address] = new ComputeImageWriter(
+                    sequence,
+                    shaderAddress,
+                    binding.Opcode);
+
+                TraceAgcShader(
+                    $"agc.compute_writer addr=0x{texture.Address:X16} " +
+                    $"fmt={texture.Format} num={texture.NumberType} tile={texture.TileMode} " +
+                    $"size={texture.Width}x{texture.Height} " +
+                    $"cs=0x{shaderAddress:X16} op={binding.Opcode}");
+            }
+        }
+
+        var localSizeX = GetComputeLocalSize(state.ShRegisters, ComputeNumThreadX);
+        var localSizeY = GetComputeLocalSize(state.ShRegisters, ComputeNumThreadY);
+        var localSizeZ = GetComputeLocalSize(state.ShRegisters, ComputeNumThreadZ);
+        if (_traceComputeShaderAddress == shaderAddress)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] agc.compute_dispatch_trace seq={sequence} " +
+                $"cs=0x{shaderAddress:X16} " +
+                $"groups={dispatch.GroupCountX}x{dispatch.GroupCountY}x{dispatch.GroupCountZ} " +
+                $"base={dispatch.BaseGroupX}x{dispatch.BaseGroupY}x{dispatch.BaseGroupZ} " +
+                $"local={localSizeX}x{localSizeY}x{localSizeZ} " +
+                $"bindings=[{string.Join(',', descriptions)}]");
+        }
+
+        var writesGlobalMemory = evaluation.GlobalMemoryBindings.Any(static binding =>
+            binding.Writable);
+        var gpuDispatch = false;
+        var evaluationHandledByCpu = false;
+        IReadOnlyList<GuestMemoryBuffer>? computeSubmissionBuffers = null;
+        var computeError = string.Empty;
+        // Empty SRT/EUD with a recorded null-base scalar pointer fallback
+        // produces Address-0 storage that can lose the Vulkan device on submit.
+        var emptyResourceTables =
+            shaderState.Metadata is
+            {
+                ShaderResourceTableSizeDwords: 0,
+                ExtendedUserDataSizeDwords: 0,
+            };
+        if (emptyResourceTables &&
+            (Gen5ShaderScalarEvaluator.WasEmptySrtScalarPointerFallback(shaderAddress) ||
+             (translatedBindings.All(static binding => binding.Descriptor.Address == 0) &&
+              !evaluation.GlobalMemoryBindings.Any(static binding => binding.BaseAddress != 0))))
+        {
+            computeError = Gen5ShaderScalarEvaluator.WasEmptySrtScalarPointerFallback(shaderAddress)
+                ? "empty-srt-scalar-pointer-fallback"
+                : "empty-srt-no-usable-resources";
+            lock (_submitTraceGate)
+            {
+                if (_tracedComputeShaders.Add(shaderAddress))
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][WARN] agc.compute_reject cs=0x{shaderAddress:X16} " +
+                        $"source={(dispatch.IsIndirect ? "indirect" : "direct")} " +
+                        $"groups={dispatch.GroupCountX}x{dispatch.GroupCountY}x{dispatch.GroupCountZ} " +
+                        $"reason={computeError}");
+                }
+            }
+        }
+        else if (!hasStorageBinding &&
+            writesGlobalMemory &&
+            TrySubmitMaskedDwordCopyKernel(
+                ctx,
+                shaderState.Program,
+                evaluation,
+                dispatch,
+                localSizeX,
+                localSizeY,
+                localSizeZ,
+                out var semanticCopySequence,
+                out var copyDescription))
+        {
+            gpuDispatch = true;
+            evaluationHandledByCpu = true;
+            TraceAgcShader(
+                $"agc.compute_semantic_fast_path cs=0x{shaderAddress:X16} " +
+                $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                copyDescription);
+            // The scalar evaluator snapshots guest buffers while parsing the
+            // command stream.  Do not let another submission (or the CPU)
+            // observe that snapshot until the semantic replacement has
+            // reached the same CPU-visible completion point as a translated
+            // writable-buffer dispatch below.  Returning early here allowed
+            // the guest to reuse a transient heap while its delayed clear was
+            // still queued, so the clear could erase newly constructed CPU
+            // objects.  Waiting on the work sequence also retires preceding
+            // Vulkan writes before the next evaluator snapshot is captured.
+            if (!GuestGpu.Current.WaitForGuestWork(semanticCopySequence))
+            {
+                computeError =
+                    $"semantic-global-write-sync-timeout sequence={semanticCopySequence}";
+            }
+        }
+        else if (!hasStorageBinding &&
+            writesGlobalMemory &&
+            TrySubmitConstantFillKernel(
+                ctx,
+                shaderState.Program,
+                evaluation,
+                dispatch,
+                localSizeX,
+                localSizeY,
+                localSizeZ,
+                out var semanticFillSequence,
+                out var fillDescription))
+        {
+            gpuDispatch = true;
+            evaluationHandledByCpu = true;
+            TraceAgcShader(
+                $"agc.compute_semantic_fast_path cs=0x{shaderAddress:X16} " +
+                $"queue={state.QueueName} submission={state.ActiveSubmissionId} " +
+                fillDescription);
+            if (!GuestGpu.Current.WaitForGuestWork(semanticFillSequence))
+            {
+                computeError =
+                    $"semantic-global-write-sync-timeout sequence={semanticFillSequence}";
+            }
+        }        else if ((hasStorageBinding || writesGlobalMemory) &&
+            (ulong)localSizeX * localSizeY * localSizeZ <= 1024)
+        {
+            var shaderKey = (
+                shaderAddress,
+                _bakeScalars
+                    ? ComputeShaderStateFingerprint(evaluation)
+                    : ComputeShaderStructuralFingerprint(evaluation),
+                localSizeX,
+                localSizeY,
+                localSizeZ,
+                dispatch.WaveLaneCount,
+                _storageBufferOffsetAlignment);
+            var guestGlobalBufferCount = evaluation.GlobalMemoryBindings.Count;
+            var totalGlobalBufferCount = _bakeScalars
+                ? guestGlobalBufferCount
+                : guestGlobalBufferCount + 1;
+            _computeShaderCache.TryGetValue(shaderKey, out var computeShader);
+
+            if (computeShader is null &&
+                GuestGpu.Current.TryCompileComputeShader(
+                    shaderState,
+                    evaluation,
+                    localSizeX,
+                    localSizeY,
+                    localSizeZ,
+                    out computeShader,
+                    out computeError,
+                    totalGlobalBufferCount,
+                    initialScalarBufferIndex: _bakeScalars
+                        ? -1
+                        : guestGlobalBufferCount,
+                    waveLaneCount: dispatch.WaveLaneCount,
+                    storageBufferOffsetAlignment:
+                        _storageBufferOffsetAlignment))
+            {
+                DumpCompiledShader(
+                    "cs",
+                    shaderAddress,
+                    shaderKey.Item2,
+                    computeShader!,
+                    shaderState.Program);
+            }
+
+            if (computeShader is not null)
+            {
+                if (_computeShaderCache.Count < _maxComputeShaderCacheEntries)
+                {
+                    _computeShaderCache.TryAdd(shaderKey, computeShader);
+                }
+
+                // SHARPEMU_V73_16_COMPUTE_TEXTURE_PRODUCER_PROVENANCE
+                // Preserve graphics/compute writer provenance for compute texture inputs.
+                var renderProducerInputs = translatedBindings.Count(binding =>
+                    binding.Descriptor.Address != 0 &&
+                    state.RenderTargetWriters.ContainsKey(binding.Descriptor.Address));
+                var computeProducerInputs = translatedBindings.Count(binding =>
+                    binding.Descriptor.Address != 0 &&
+                    gpuState.ComputeImageWriters.ContainsKey(binding.Descriptor.Address));
+                if (_traceAgcShader && (renderProducerInputs != 0 || computeProducerInputs != 0))
+                {
+                    TraceAgcShader(
+                        $"agc.compute_texture_provenance cs=0x{shaderAddress:X16} " +
+                        $"render_inputs={renderProducerInputs} compute_inputs={computeProducerInputs}");
+                }
+                var textures = CreateGuestDrawTextures(
+                    ctx,
+                    translatedBindings,
+                    out _,
+                    gpuState,
+                    state);
+                computeSubmissionBuffers =
+                    CreateTranslatedComputeGlobalBuffers(evaluation);
+                var globalMemoryBuffers = computeSubmissionBuffers;
+                var dispatchWorkSequence = GuestGpu.Current.SubmitComputeDispatch(
+                    shaderAddress,
+                    computeShader,
+                    textures,
+                    globalMemoryBuffers,
+                    dispatch.GroupCountX,
+                    dispatch.GroupCountY,
+                    dispatch.GroupCountZ,
+                    dispatch.BaseGroupX,
+                    dispatch.BaseGroupY,
+                    dispatch.BaseGroupZ,
+                    localSizeX,
+                    localSizeY,
+                    localSizeZ,
+                    dispatch.IsIndirect,
+                    writesGlobalMemory,
+                    dispatch.ThreadCountX,
+                    dispatch.ThreadCountY,
+                    dispatch.ThreadCountZ);
+
+                // SHARPEMU_V74_0_56_26_COMPUTE_DCC_PRODUCER_SEED
+                // Do not seed merely because an SRD was decoded. Seed only
+                // after the backend accepted the compute dispatch, so history
+                // always represents a real queued producer.
+                if (dispatchWorkSequence > 0)
+                {
+                    var producerBindingCount = Math.Min(
+                        bindings.Count,
+                        translatedBindings.Count);
+
+                    for (var bindingIndex = 0;
+                         bindingIndex < producerBindingCount;
+                         bindingIndex++)
+                    {
+                        var producerBinding = bindings[bindingIndex];
+
+                        if (!Gen5ShaderTranslator.IsStorageImageOperation(
+                                producerBinding.Opcode))
+                        {
+                            continue;
+                        }
+
+                        RememberDccComputeProducerV7405626(
+                            translatedBindings[bindingIndex].Descriptor,
+                            sequence,
+                            shaderAddress,
+                            producerBinding.Opcode);
+                    }
+                }
+
+                // RootFix V13: completion labels are not restricted to PM4
+                // RELEASE_MEM/WRITE_DATA. Guest compute shaders also write
+                // synchronization words through storage/global buffers.
+                //
+                // VulkanVideoPresenter makes all prior work on this logical
+                // guest queue CPU-visible before running an OrderedGuestAction
+                // (fence -> WriteBackAllDirtyGuestBuffers -> Action). Publish
+                // the resulting label values into GpuWaitRegistry at exactly
+                // that point so a graphics/compute waiter on another guest
+                // queue can be latched and resumed. Without this, the shader
+                // genuinely writes the label but AGC reports
+                // producer=none-observed and the dependent resource/SRT state
+                // never executes.
+                if (dispatchWorkSequence > 0 &&
+                    writesGlobalMemory)
+                {
+                    QueueComputeGlobalWritePublication(
+                        ctx,
+                        gpuState,
+                        state,
+                        shaderAddress,
+                        globalMemoryBuffers);
+                }
+
+                // A zero work sequence means the backend rejected/dropped the
+                // dispatch before ownership of pooled submission buffers moved
+                // to a presenter consumer. Treat it as non-GPU work so the
+                // cleanup path below reclaims both evaluator buffers and the
+                // synthetic runtime-scalar buffer used when scalars are not baked.
+                gpuDispatch = dispatchWorkSequence > 0;
+            }
+        }
+
+        const int blitCount = 0;
+
+        lock (_submitTraceGate)
+        {
+            if (_tracedComputeShaders.Add(shaderAddress))
+            {
+                var globalBuffers = evaluation.GlobalMemoryBindings.Count == 0
+                    ? string.Empty
+                    : $" global_buffers=[{string.Join(',', evaluation.GlobalMemoryBindings.Select(
+                        binding => $"0x{binding.BaseAddress:X16}:{binding.DataLength}"))}]";
+                var scalarProbe = string.Join(
+                    ',',
+                    evaluation.InitialScalarRegisters
+                        .Take(16)
+                        .Select((value, index) => $"s{index}={value:X8}"));
+                var globalProbes = evaluation.GlobalMemoryBindings.Count == 0
+                    ? string.Empty
+                    : $" global_heads=[{string.Join(',', evaluation.GlobalMemoryBindings.Select(
+                        binding =>
+                            $"0x{binding.BaseAddress:X16}:" +
+                            Convert.ToHexString(binding.Data.AsSpan(
+                                0,
+                                Math.Min(binding.DataLength, 16)))))}]";
+                var globalDescriptors = evaluation.GlobalMemoryBindings.Count == 0
+                    ? string.Empty
+                    : $" global_descriptors=[{string.Join(',', evaluation.GlobalMemoryBindings.Select(
+                        binding =>
+                            $"s{binding.ScalarAddress}=" +
+                            string.Join(':', evaluation.ScalarRegisters
+                                .Skip(checked((int)binding.ScalarAddress))
+                                .Take(4)
+                                .Select(value => $"{value:X8}"))))}]";
+                var opcodes = string.Join(
+                    ',',
+                    shaderState.Program.Instructions
+                        .Select(instruction => instruction.Opcode)
+                        .Distinct()
+                        .Take(48));
+                if (!gpuDispatch && computeError.Length != 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[COMPAT][SHADER] compute cs=0x{shaderAddress:X16} " +
+                        $"compile_error={computeError} " +
+                        $"groups={dispatch.GroupCountX}x{dispatch.GroupCountY}x{dispatch.GroupCountZ} " +
+                        $"local={localSizeX}x{localSizeY}x{localSizeZ}");
+                }
+
+                TraceAgcShader(
+                    $"agc.compute_shader cs=0x{shaderAddress:X16} " +
+                    $"groups={dispatch.GroupCountX}x{dispatch.GroupCountY}x{dispatch.GroupCountZ} " +
+                    $"base={dispatch.BaseGroupX}x{dispatch.BaseGroupY}x{dispatch.BaseGroupZ} " +
+                    $"wave={dispatch.WaveLaneCount} " +
+                    $"local={localSizeX}x{localSizeY}x{localSizeZ} " +
+                    $"sys={DescribeComputeSystemRegisters(computeSystemRegisters)} " +
+                    $"gpu={gpuDispatch} blits={blitCount} globals={evaluation.GlobalMemoryBindings.Count} " +
+                    $"global_writes={writesGlobalMemory}" +
+                    (computeError.Length == 0 ? string.Empty : $" error={computeError}") +
+                    $" sgprs=[{scalarProbe}]" +
+                    globalBuffers +
+                    globalProbes +
+                    globalDescriptors +
+                    $" opcodes=[{opcodes}]" +
+                    $" bindings=[{string.Join(',', descriptions)}]");
+            }
+        }
+
+        if (evaluationHandledByCpu || !gpuDispatch)
+        {
+            if (computeSubmissionBuffers is not null)
+            {
+                ReturnPooledComputeSubmissionArrays(evaluation, computeSubmissionBuffers);
+            }
+            else
+            {
+                ReturnPooledEvaluationArrays(evaluation);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Recognizes the SDK's masked-dword resource initialization kernel and
+    /// executes its exact semantics over the guest-memory window that the
+    /// emulator can map. The guest dispatches this kernel over multi-gigabyte
+    /// virtual heaps (up to ~67 million 64-lane workgroups); translating every
+    /// out-of-window invocation to Vulkan dominated startup despite those
+    /// stores being bounds-discarded. This is a semantic kernel replacement,
+    /// not a generic dispatch cap: the complete instruction shape and SGPR
+    /// bindings must match before the ordered CPU action is used.
+    /// </summary>
+    private static bool TrySubmitMaskedDwordCopyKernel(
+        CpuContext ctx,
+        Gen5ShaderProgram program,
+        Gen5ShaderEvaluation evaluation,
+        ComputeDispatch dispatch,
+        uint localSizeX,
+        uint localSizeY,
+        uint localSizeZ,
+        out long workSequence,
+        out string description)
+    {
+        workSequence = 0;
+        description = string.Empty;
+        var instructions = program.Instructions;
+        string[] expectedOpcodes =
+        [
+            "SMovB32",
+            "STtraceData",
+            "SInstPrefetch",
+            "VLshlAddU32",
+            "SBufferLoadDword",
+            "SWaitcnt",
+            "VCmpxGtU32",
+            "SCbranchExecz",
+            "SBufferLoadDword",
+            "SWaitcnt",
+            "VAndB32",
+            "BufferLoadFormatX",
+            "SWaitcnt",
+            "BufferStoreFormatX",
+            "SEndpgm",
+        ];
+        if (instructions.Count != expectedOpcodes.Length ||
+            !instructions.Select(static instruction => instruction.Opcode)
+                .SequenceEqual(expectedOpcodes) ||
+            !IsExactMaskedDwordCopyInstructionShape(instructions) ||
+            dispatch.BaseGroupX != 0 ||
+            dispatch.BaseGroupY != 0 ||
+            dispatch.BaseGroupZ != 0 ||
+            dispatch.GroupCountY != 1 ||
+            dispatch.GroupCountZ != 1 ||
+            localSizeX != 64 ||
+            localSizeY != 1 ||
+            localSizeZ != 1 ||
+            evaluation.ComputeSystemRegisters?.WorkGroupXRegister != 12)
+        {
+            return false;
+        }
+
+        var control = evaluation.GlobalMemoryBindings.SingleOrDefault(
+            static binding => binding.ScalarAddress == 8 && !binding.Writable);
+        var source = evaluation.GlobalMemoryBindings.SingleOrDefault(
+            static binding => binding.ScalarAddress == 0 && !binding.Writable);
+        var destination = evaluation.GlobalMemoryBindings.SingleOrDefault(
+            static binding => binding.ScalarAddress == 4 &&
+                              binding.Writable &&
+                              binding.WriteBackToGuest);
+        if (control is null || source is null || destination is null ||
+            control.DataLength < 2 * sizeof(uint) ||
+            source.DataLength < sizeof(uint) ||
+            destination.BaseAddress == 0 ||
+            destination.DataLength < sizeof(uint) ||
+            !IsExactMaskedDwordCopyDescriptor(
+                evaluation.InitialScalarRegisters,
+                source.ScalarAddress,
+                source.BaseAddress) ||
+            !IsExactMaskedDwordCopyDescriptor(
+                evaluation.InitialScalarRegisters,
+                destination.ScalarAddress,
+                destination.BaseAddress))
+        {
+            return false;
+        }
+
+        var elementCount = BinaryPrimitives.ReadUInt32LittleEndian(
+            control.Data.AsSpan(0, sizeof(uint)));
+        var sourceMask = BinaryPrimitives.ReadUInt32LittleEndian(
+            control.Data.AsSpan(sizeof(uint), sizeof(uint)));
+        var dispatchedThreads = dispatch.ThreadCountX != uint.MaxValue
+            ? dispatch.ThreadCountX
+            : Math.Min(
+                (ulong)uint.MaxValue,
+                (ulong)dispatch.GroupCountX * localSizeX);
+        var writableDwords = (uint)(destination.DataLength / sizeof(uint));
+        var outputDwords = (uint)Math.Min(
+            Math.Min((ulong)elementCount, dispatchedThreads),
+            writableDwords);
+        if (outputDwords == 0)
+        {
+            return false;
+        }
+
+        var output = new byte[checked((int)outputDwords * sizeof(uint))];
+        var outputWords = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, uint>(
+            output.AsSpan());
+        if (sourceMask == 0)
+        {
+            outputWords.Fill(BinaryPrimitives.ReadUInt32LittleEndian(
+                source.Data.AsSpan(0, sizeof(uint))));
+        }
+        else
+        {
+            var sourceWords = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, uint>(
+                source.Data.AsSpan(0, source.DataLength - (source.DataLength % sizeof(uint))));
+            for (uint index = 0; index < outputDwords; index++)
+            {
+                var sourceIndex = index & sourceMask;
+                outputWords[(int)index] = sourceIndex < (uint)sourceWords.Length
+                    ? sourceWords[(int)sourceIndex]
+                    : 0;
+            }
+        }
+
+        var destinationAddress = destination.BaseAddress;
+        workSequence = GuestGpu.Current.SubmitOrderedGuestAction(
+            () =>
+            {
+                if (!ctx.Memory.TryWrite(destinationAddress, output))
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][ERROR] AGC masked-copy fast path failed " +
+                        $"dst=0x{destinationAddress:X16} bytes={output.Length}");
+                    return;
+                }
+
+                RecordProducedLabelsInRange(
+                    ctx,
+                    destinationAddress,
+                    (ulong)output.Length);
+                SignalGpuWaitMonitor(ctx.Memory);
+
+                GuestImageWriteTracker.Track(
+                    destinationAddress,
+                    (ulong)output.Length,
+                    GuestGpu.Current.CurrentGuestWorkSequenceForDiagnostics,
+                    "agc.masked-dword-copy");
+            },
+            $"masked_dword_copy dst=0x{destinationAddress:X16} bytes={output.Length}");
+        description =
+            $"dst=0x{destinationAddress:X16} bytes={output.Length} " +
+            $"elements={elementCount} mask=0x{sourceMask:X8} " +
+            $"dispatch={dispatch.GroupCountX}x{localSizeX}";
+        return workSequence > 0;
+    }
+
+    private static bool IsExactMaskedDwordCopyInstructionShape(
+        IReadOnlyList<Gen5ShaderInstruction> instructions)
+    {
+        static bool IsOperand(
+            Gen5Operand operand,
+            Gen5OperandKind kind,
+            uint value) =>
+            operand.Kind == kind && operand.Value == value;
+
+        static bool IsBufferControl(
+            Gen5ShaderInstruction instruction,
+            uint vectorAddress,
+            uint vectorData,
+            uint scalarResource) =>
+            instruction.Control is Gen5BufferMemoryControl
+            {
+                DwordCount: 1,
+                OffsetBytes: 0,
+                IndexEnabled: true,
+                OffsetEnabled: false,
+            } control &&
+            control.VectorAddress == vectorAddress &&
+            control.VectorData == vectorData &&
+            control.ScalarResource == scalarResource;
+
+        static bool IsScalarLoad(
+            Gen5ShaderInstruction instruction,
+            int offsetBytes) =>
+            instruction.Control is Gen5ScalarMemoryControl
+            {
+                DestinationCount: 1,
+                DynamicOffsetRegister: null,
+            } control &&
+            control.ImmediateOffsetBytes == offsetBytes &&
+            instruction.Destinations.Count == 1 &&
+            IsOperand(
+                instruction.Destinations[0],
+                Gen5OperandKind.ScalarRegister,
+                106) &&
+            instruction.Sources.Count >= 1 &&
+            IsOperand(
+                instruction.Sources[0],
+                Gen5OperandKind.ScalarRegister,
+                8);
+
+        // This replacement depends on the operands as much as the opcode
+        // sequence. Reversing V_CMPX_GT or enabling offen on either MUBUF
+        // operation changes the set or address of written lanes.
+        var globalId = instructions[3];
+        var compare = instructions[6];
+        var sourceIndex = instructions[10];
+        var load = instructions[11];
+        var store = instructions[13];
+        return
+            globalId.Destinations.Count == 1 &&
+            IsOperand(globalId.Destinations[0], Gen5OperandKind.VectorRegister, 0) &&
+            globalId.Sources.Count == 3 &&
+            IsOperand(globalId.Sources[0], Gen5OperandKind.ScalarRegister, 12) &&
+            IsOperand(globalId.Sources[1], Gen5OperandKind.EncodedConstant, 134) &&
+            IsOperand(globalId.Sources[2], Gen5OperandKind.VectorRegister, 0) &&
+            IsScalarLoad(instructions[4], offsetBytes: 0) &&
+            compare.Sources.Count == 2 &&
+            IsOperand(compare.Sources[0], Gen5OperandKind.ScalarRegister, 106) &&
+            IsOperand(compare.Sources[1], Gen5OperandKind.VectorRegister, 0) &&
+            instructions[7].Words.Count == 1 &&
+            (instructions[7].Words[0] & 0xFFFFu) == 9 &&
+            IsScalarLoad(instructions[8], offsetBytes: sizeof(uint)) &&
+            sourceIndex.Destinations.Count == 1 &&
+            IsOperand(sourceIndex.Destinations[0], Gen5OperandKind.VectorRegister, 1) &&
+            sourceIndex.Sources.Count == 2 &&
+            IsOperand(sourceIndex.Sources[0], Gen5OperandKind.ScalarRegister, 106) &&
+            IsOperand(sourceIndex.Sources[1], Gen5OperandKind.VectorRegister, 0) &&
+            IsBufferControl(load, vectorAddress: 1, vectorData: 1, scalarResource: 0) &&
+            IsBufferControl(store, vectorAddress: 0, vectorData: 1, scalarResource: 4);
+    }
+
+    /// <summary>
+    /// Upstream 0.0.3 semantic replacement for the exact 16-byte constant-fill
+    /// compute kernel. The translated Vulkan form was measured upstream at
+    /// roughly 2.2 seconds per dispatch; this guarded replacement executes the
+    /// identical record fill on the host and preserves ordered guest visibility.
+    /// </summary>
+    private static bool TrySubmitConstantFillKernel(
+        CpuContext ctx,
+        Gen5ShaderProgram program,
+        Gen5ShaderEvaluation evaluation,
+        ComputeDispatch dispatch,
+        uint localSizeX,
+        uint localSizeY,
+        uint localSizeZ,
+        out long workSequence,
+        out string description)
+    {
+        workSequence = 0;
+        description = string.Empty;
+        var instructions = program.Instructions;
+        string[] expectedOpcodes =
+        [
+            "VLshlAddU32",
+            "VMovB32",
+            "VMovB32",
+            "VMovB32",
+            "VMovB32",
+            "BufferStoreFormatXyzw",
+            "SEndpgm",
+        ];
+        if (instructions.Count != expectedOpcodes.Length ||
+            !instructions.Select(static instruction => instruction.Opcode)
+                .SequenceEqual(expectedOpcodes) ||
+            !IsExactConstantFillInstructionShape(instructions) ||
+            dispatch.BaseGroupX != 0 ||
+            dispatch.BaseGroupY != 0 ||
+            dispatch.BaseGroupZ != 0 ||
+            dispatch.GroupCountY != 1 ||
+            dispatch.GroupCountZ != 1 ||
+            localSizeX != 64 ||
+            localSizeY != 1 ||
+            localSizeZ != 1 ||
+            evaluation.ComputeSystemRegisters?.WorkGroupXRegister != 8)
+        {
+            return false;
+        }
+
+        var destination = evaluation.GlobalMemoryBindings.SingleOrDefault(
+            static binding => binding.ScalarAddress == 0 &&
+                              binding.Writable &&
+                              binding.WriteBackToGuest);
+        var scalars = evaluation.InitialScalarRegisters;
+        if (destination is null ||
+            destination.BaseAddress == 0 ||
+            destination.DataLength < FillRecordBytes ||
+            scalars.Count < 8 ||
+            !IsExactConstantFillDescriptor(scalars, destination.BaseAddress))
+        {
+            return false;
+        }
+
+        var numRecords = scalars[2];
+        var dispatchedThreads = dispatch.ThreadCountX != uint.MaxValue
+            ? dispatch.ThreadCountX
+            : Math.Min(
+                (ulong)uint.MaxValue,
+                (ulong)dispatch.GroupCountX * localSizeX);
+        var writableRecords = (uint)(destination.DataLength / FillRecordBytes);
+        var outputRecords = (uint)Math.Min(
+            Math.Min((ulong)numRecords, dispatchedThreads),
+            writableRecords);
+        if (outputRecords == 0)
+        {
+            return false;
+        }
+
+        var pattern = new byte[FillRecordBytes];
+        BinaryPrimitives.WriteUInt32LittleEndian(pattern.AsSpan(0), scalars[4]);
+        BinaryPrimitives.WriteUInt32LittleEndian(pattern.AsSpan(4), scalars[5]);
+        BinaryPrimitives.WriteUInt32LittleEndian(pattern.AsSpan(8), scalars[6]);
+        BinaryPrimitives.WriteUInt32LittleEndian(pattern.AsSpan(12), scalars[7]);
+        var output = new byte[checked((int)outputRecords * FillRecordBytes)];
+        var outputWindow = output.AsSpan();
+        for (var offset = 0; offset < outputWindow.Length; offset += FillRecordBytes)
+        {
+            pattern.CopyTo(outputWindow[offset..]);
+        }
+
+        var destinationAddress = destination.BaseAddress;
+        workSequence = GuestGpu.Current.SubmitOrderedGuestAction(
+            () =>
+            {
+                if (!ctx.Memory.TryWrite(destinationAddress, output))
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][ERROR] AGC constant-fill fast path failed " +
+                        $"dst=0x{destinationAddress:X16} bytes={output.Length}");
+                    return;
+                }
+
+                GuestImageWriteTracker.Track(
+                    destinationAddress,
+                    (ulong)output.Length,
+                    GuestGpu.Current.CurrentGuestWorkSequenceForDiagnostics,
+                    "agc.constant-fill");
+            },
+            $"constant_fill dst=0x{destinationAddress:X16} bytes={output.Length}");
+        description =
+            $"dst=0x{destinationAddress:X16} bytes={output.Length} " +
+            $"records={outputRecords} pattern=0x{scalars[7]:X8}{scalars[6]:X8}{scalars[5]:X8}{scalars[4]:X8} " +
+            $"dispatch={dispatch.GroupCountX}x{localSizeX}";
+        return workSequence > 0;
+    }
+
+    private const int FillRecordBytes = 4 * sizeof(uint);
+    private const uint BufFmt32323232Uint = 75;
+
+    private static bool IsExactConstantFillInstructionShape(
+        IReadOnlyList<Gen5ShaderInstruction> instructions)
+    {
+        static bool IsOperand(
+            Gen5Operand operand,
+            Gen5OperandKind kind,
+            uint value) =>
+            operand.Kind == kind && operand.Value == value;
+
+        var globalId = instructions[0];
+        var store = instructions[5];
+        if (globalId.Destinations.Count != 1 ||
+            !IsOperand(globalId.Destinations[0], Gen5OperandKind.VectorRegister, 4) ||
+            globalId.Sources.Count != 3 ||
+            !IsOperand(globalId.Sources[0], Gen5OperandKind.ScalarRegister, 8) ||
+            !IsOperand(globalId.Sources[1], Gen5OperandKind.EncodedConstant, 134) ||
+            !IsOperand(globalId.Sources[2], Gen5OperandKind.VectorRegister, 0))
+        {
+            return false;
+        }
+
+        for (var index = 0; index < 4; index++)
+        {
+            var move = instructions[1 + index];
+            if (move.Destinations.Count != 1 ||
+                !IsOperand(
+                    move.Destinations[0],
+                    Gen5OperandKind.VectorRegister,
+                    (uint)index) ||
+                move.Sources.Count != 1 ||
+                !IsOperand(
+                    move.Sources[0],
+                    Gen5OperandKind.ScalarRegister,
+                    (uint)(4 + index)))
+            {
+                return false;
+            }
+        }
+
+        return store.Control is Gen5BufferMemoryControl
+        {
+            DwordCount: 4,
+            OffsetBytes: 0,
+            IndexEnabled: true,
+            OffsetEnabled: false,
+            Glc: false,
+            Slc: false,
+        } control &&
+            control.VectorAddress == 4 &&
+            control.VectorData == 0 &&
+            control.ScalarResource == 0;
+    }
+
+    private static bool IsExactConstantFillDescriptor(
+        IReadOnlyList<uint> scalarRegisters,
+        ulong expectedBaseAddress)
+    {
+        var word0 = scalarRegisters[0];
+        var word1 = scalarRegisters[1];
+        var word3 = scalarRegisters[3];
+        var baseAddress = word0 | ((ulong)(word1 & 0xFFFFu) << 32);
+        var stride = (word1 >> 16) & 0x3FFFu;
+        var cacheSwizzle = (word1 & (1u << 30)) != 0;
+        var swizzleEnabled = (word1 & (1u << 31)) != 0;
+        var unifiedFormat = (word3 >> 12) & 0x7Fu;
+        var addTidEnabled = (word3 & (1u << 23)) != 0;
+        var outOfBoundsSelect = (word3 >> 28) & 0x3u;
+        var type = word3 >> 30;
+        var dstSelectX = word3 & 0x7u;
+
+        var matches = baseAddress == expectedBaseAddress &&
+            stride == FillRecordBytes &&
+            !cacheSwizzle &&
+            !swizzleEnabled &&
+            unifiedFormat == BufFmt32323232Uint &&
+            !addTidEnabled &&
+            outOfBoundsSelect == 0 &&
+            type == 0 &&
+            dstSelectX == 4;
+        if (!matches && baseAddress == expectedBaseAddress && _traceAgcShader)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] agc.constant_fill_descriptor_mismatch " +
+                $"word1=0x{word1:X8} word3=0x{word3:X8} stride={stride} " +
+                $"format={unifiedFormat} oob={outOfBoundsSelect} type={type} " +
+                $"dst_sel_x={dstSelectX}");
+        }
+
+        return matches;
+    }
+    private static bool IsExactMaskedDwordCopyDescriptor(
+        IReadOnlyList<uint> scalarRegisters,
+        uint scalarBase,
+        ulong expectedBaseAddress)
+    {
+        if (scalarBase + 3 >= scalarRegisters.Count)
+        {
+            return false;
+        }
+
+        var word0 = scalarRegisters[(int)scalarBase];
+        var word1 = scalarRegisters[(int)scalarBase + 1];
+        var word3 = scalarRegisters[(int)scalarBase + 3];
+        var baseAddress = word0 | ((ulong)(word1 & 0xFFFFu) << 32);
+        var stride = (word1 >> 16) & 0x3FFFu;
+        var cacheSwizzle = (word1 & (1u << 30)) != 0;
+        var swizzleEnabled = (word1 & (1u << 31)) != 0;
+        var unifiedFormat = (word3 >> 12) & 0x7Fu;
+        var addTidEnabled = (word3 & (1u << 23)) != 0;
+        var outOfBoundsSelect = (word3 >> 28) & 0x3u;
+        var type = word3 >> 30;
+        var dstSelectX = word3 & 0x7u;
+
+        // RDNA2 tables 35 and 37: OOB_SELECT=0 is structured indexing, so
+        // NUM_RECORDS counts stride-sized records. FORMAT=20 is 32_UINT and
+        // dst_sel_x=4 selects its R component. ADD_TID and either swizzle bit
+        // alter addressing and are therefore outside this replacement.
+        return baseAddress == expectedBaseAddress &&
+               stride == sizeof(uint) &&
+               !cacheSwizzle &&
+               !swizzleEnabled &&
+               unifiedFormat == 20 &&
+               !addTidEnabled &&
+               outOfBoundsSelect == 0 &&
+               type == 0 &&
+               dstSelectX == 4;
+    }
+
+    private static Gen5ComputeSystemRegisters DecodeComputeSystemRegisters(
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        registers.TryGetValue(ComputePgmRsrc2, out var rsrc2);
+        var nextRegister = (rsrc2 >> 1) & 0x1Fu;
+        uint? workGroupX = null;
+        uint? workGroupY = null;
+        uint? workGroupZ = null;
+        uint? threadGroupSize = null;
+
+        if ((rsrc2 & (1u << 7)) != 0)
+        {
+            workGroupX = nextRegister++;
+        }
+
+        if ((rsrc2 & (1u << 8)) != 0)
+        {
+            workGroupY = nextRegister++;
+        }
+
+        if ((rsrc2 & (1u << 9)) != 0)
+        {
+            workGroupZ = nextRegister++;
+        }
+
+        if ((rsrc2 & (1u << 10)) != 0)
+        {
+            threadGroupSize = nextRegister++;
+        }
+
+        return new Gen5ComputeSystemRegisters(
+            workGroupX,
+            workGroupY,
+            workGroupZ,
+            threadGroupSize);
+    }
+
+    private static string DescribeComputeSystemRegisters(Gen5ComputeSystemRegisters registers) =>
+        $"x={DescribeRegister(registers.WorkGroupXRegister)}," +
+        $"y={DescribeRegister(registers.WorkGroupYRegister)}," +
+        $"z={DescribeRegister(registers.WorkGroupZRegister)}," +
+        $"size={DescribeRegister(registers.ThreadGroupSizeRegister)}";
+
+    private static string DescribeRegister(uint? register) =>
+        register.HasValue ? $"s{register.Value}" : "-";
+
+    private static uint SelectExportUserDataRegister(
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        // RSRC2 is the authoritative stage selector: its USER_SGPR field
+        // describes the hardware SGPR window even when the shader has zero
+        // user-data dwords and therefore no USER_DATA register was written.
+        // GFX10 NGG export shaders use the GS user-data bank (RSRC2 at 0x8B),
+        // while their program address is carried in the ES/NGG registers.
+        // Looking only for a populated USER_DATA range made those shaders
+        // fall through to ES (0xCC) and reject every graphics draw because
+        // the unrelated ES RSRC2 register at 0xCB was legitimately absent.
+        if (HasShaderResource2(registers, GsUserDataRegister))
+        {
+            return GsUserDataRegister;
+        }
+
+        if (HasShaderResource2(registers, EsUserDataRegister))
+        {
+            return EsUserDataRegister;
+        }
+
+        if (HasShaderResource2(registers, VsUserDataRegister))
+        {
+            return VsUserDataRegister;
+        }
+
+        if (HasUserDataRange(registers, GsUserDataRegister))
+        {
+            return GsUserDataRegister;
+        }
+
+        if (HasUserDataRange(registers, EsUserDataRegister))
+        {
+            return EsUserDataRegister;
+        }
+
+        if (HasUserDataRange(registers, VsUserDataRegister))
+        {
+            return VsUserDataRegister;
+        }
+
+        var esValues = CountUserDataValues(registers, EsUserDataRegister);
+        var vsValues = CountUserDataValues(registers, VsUserDataRegister);
+        return esValues == 0 && vsValues != 0
+            ? VsUserDataRegister
+            : EsUserDataRegister;
+    }
+
+    private static bool HasShaderResource2(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint userDataBaseRegister) =>
+        registers.ContainsKey(userDataBaseRegister - 1);
+
+    private static bool HasUserDataRange(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint startRegister)
+    {
+        for (var index = 0u; index < 16; index++)
+        {
+            if (registers.ContainsKey(startRegister + index))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int CountUserDataValues(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint startRegister)
+    {
+        var count = 0;
+        for (var index = 0u; index < 16; index++)
+        {
+            count += registers.TryGetValue(startRegister + index, out var value) &&
+                     value != 0
+                ? 1
+                : 0;
+        }
+
+        return count;
+    }
+
+    private static uint GetComputeLocalSize(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint register)
+    {
+        return registers.TryGetValue(register, out var value)
+            ? Math.Max(value & 0xFFFFu, 1u)
+            : 1u;
+    }
+
+    private static uint GetComputePartialSize(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint register) =>
+        registers.TryGetValue(register, out var value)
+            ? value >> 16
+            : 0u;
+
+    private static int TryApplySoftwareComputeBlits(
+        CpuContext ctx,
+        ulong shaderAddress,
+        IReadOnlyList<(Gen5ImageBinding Binding, TextureDescriptor Texture)> bindings)
+    {
+        var blits = 0;
+        TextureDescriptor? source = null;
+        foreach (var (binding, texture) in bindings)
+        {
+            if (binding.Opcode.StartsWith("ImageStore", StringComparison.Ordinal))
+            {
+                if (source is { } sourceTexture &&
+                    TrySoftwareTextureBlit(ctx, sourceTexture, texture, out var fingerprint))
+                {
+                    blits++;
+                    var key = (shaderAddress, sourceTexture.Address, texture.Address);
+                    lock (_softwarePresenterGate)
+                    {
+                        if (!_softwareComputeBlitFingerprints.TryGetValue(key, out var previous) ||
+                            previous != fingerprint)
+                        {
+                            _softwareComputeBlitFingerprints[key] = fingerprint;
+                            TraceAgcShader(
+                                $"agc.compute_blit cs=0x{shaderAddress:X16} " +
+                                $"src=0x{sourceTexture.Address:X16}:{sourceTexture.Width}x{sourceTexture.Height}:fmt{sourceTexture.Format}/num{sourceTexture.NumberType}/tile{sourceTexture.TileMode} " +
+                                $"dst=0x{texture.Address:X16}:{texture.Width}x{texture.Height}:fmt{texture.Format}/num{texture.NumberType}/tile{texture.TileMode} " +
+                                $"fingerprint=0x{fingerprint:X16}");
+                        }
+                    }
+                }
+                else if (source is { } cachedSourceTexture &&
+                    GuestGpu.Current.TrySubmitGuestImageBlit(
+                        cachedSourceTexture.Address,
+                        cachedSourceTexture.Width,
+                        cachedSourceTexture.Height,
+                        cachedSourceTexture.Format,
+                        cachedSourceTexture.NumberType,
+                        texture.Address,
+                        texture.Width,
+                        texture.Height,
+                        texture.Format,
+                        texture.NumberType))
+                {
+                    blits++;
+                    TraceAgcShader(
+                        $"agc.compute_gpu_blit cs=0x{shaderAddress:X16} " +
+                        $"src=0x{cachedSourceTexture.Address:X16}:{cachedSourceTexture.Width}x{cachedSourceTexture.Height}:fmt{cachedSourceTexture.Format}/num{cachedSourceTexture.NumberType}/tile{cachedSourceTexture.TileMode} " +
+                        $"dst=0x{texture.Address:X16}:{texture.Width}x{texture.Height}:fmt{texture.Format}/num{texture.NumberType}/tile{texture.TileMode}");
+                }
+
+                continue;
+            }
+
+            if (binding.Opcode.StartsWith("Image", StringComparison.Ordinal))
+            {
+                source = texture;
+            }
+        }
+
+        return blits;
+    }
+
+    private static bool TrySoftwareTextureBlit(
+        CpuContext ctx,
+        TextureDescriptor source,
+        TextureDescriptor destination,
+        out ulong fingerprint)
+    {
+        fingerprint = 0;
+        var bytesPerTexel = GetTextureBytesPerTexel(source.Format);
+        if (bytesPerTexel == 0 ||
+            bytesPerTexel != GetTextureBytesPerTexel(destination.Format) ||
+            source.Type != Gen5TextureType2D ||
+            destination.Type != Gen5TextureType2D ||
+            source.Width == 0 ||
+            source.Height == 0 ||
+            destination.Width == 0 ||
+            destination.Height == 0 ||
+            source.Width > 8192 ||
+            source.Height > 8192 ||
+            destination.Width > 8192 ||
+            destination.Height > 8192)
+        {
+            return false;
+        }
+
+        var sourceBytes = checked((ulong)source.Width * source.Height * bytesPerTexel);
+        var destinationBytes = checked((ulong)destination.Width * destination.Height * bytesPerTexel);
+        if (sourceBytes == 0 ||
+            destinationBytes == 0 ||
+            sourceBytes > MaxPresentedTextureBytes ||
+            destinationBytes > MaxPresentedTextureBytes ||
+            sourceBytes > int.MaxValue ||
+            destinationBytes > int.MaxValue)
+        {
+            return false;
+        }
+
+        var sourceData = new byte[(int)sourceBytes];
+        if (!ctx.Memory.TryRead(source.Address, sourceData))
+        {
+            return false;
+        }
+
+        var nonzero = 0;
+        foreach (var value in sourceData)
+        {
+            if (value != 0)
+            {
+                nonzero++;
+                break;
+            }
+        }
+
+        if (nonzero == 0)
+        {
+            return false;
+        }
+
+        var destinationData = new byte[(int)destinationBytes];
+        for (uint y = 0; y < destination.Height; y++)
+        {
+            var sourceY = (uint)(((ulong)y * source.Height) / destination.Height);
+            for (uint x = 0; x < destination.Width; x++)
+            {
+                var sourceX = (uint)(((ulong)x * source.Width) / destination.Width);
+                var sourceOffset = checked((int)(((ulong)sourceY * source.Width + sourceX) * bytesPerTexel));
+                var destinationOffset = checked((int)(((ulong)y * destination.Width + x) * bytesPerTexel));
+                sourceData.AsSpan(sourceOffset, (int)bytesPerTexel)
+                    .CopyTo(destinationData.AsSpan(destinationOffset, (int)bytesPerTexel));
+            }
+        }
+
+        if (!ctx.Memory.TryWrite(destination.Address, destinationData))
+        {
+            return false;
+        }
+
+        fingerprint = ComputeFingerprint(destinationData);
+        return true;
+    }
+
+    private static string ProbeTexture(CpuContext ctx, TextureDescriptor texture)
+    {
+        if (texture.Width == 0 ||
+            texture.Height == 0)
+        {
+            return "probe=unsupported";
+        }
+
+        var totalBytes = GetTextureByteCount(
+            texture.Format,
+            texture.Width,
+            texture.Height,
+            GetTextureVolumeDepth(texture.Type, texture.Depth));
+        if (totalBytes == 0)
+        {
+            return "probe=unsupported";
+        }
+
+        const int sampleCount = 32;
+        const int sampleSize = 256;
+        var sample = new byte[sampleSize];
+        var reads = 0;
+        var nonzero = 0;
+        const ulong offsetBasis = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offsetBasis;
+        for (var index = 0; index < sampleCount; index++)
+        {
+            var maxOffset = totalBytes > sampleSize ? totalBytes - sampleSize : 0;
+            var offset = sampleCount == 1
+                ? 0
+                : maxOffset * (ulong)index / (sampleCount - 1);
+            if (!ctx.Memory.TryRead(texture.Address + offset, sample))
+            {
+                continue;
+            }
+
+            reads++;
+            foreach (var value in sample)
+            {
+                if (value != 0)
+                {
+                    nonzero++;
+                }
+
+                hash = (hash ^ value) * prime;
+            }
+        }
+
+        var bytesPerTexel = GetTextureBytesPerTexel(texture.Format);
+        var texels = bytesPerTexel is > 0 and <= 16
+            ? string.Join(
+                '/',
+                ProbeTextureTexel(ctx, texture.Address, (int)bytesPerTexel),
+                ProbeTextureTexel(
+                    ctx,
+                    texture.Address +
+                    (((ulong)(texture.Height / 2) * texture.Width) + (texture.Width / 2)) *
+                    bytesPerTexel,
+                    (int)bytesPerTexel),
+                ProbeTextureTexel(
+                    ctx,
+                    texture.Address + totalBytes - bytesPerTexel,
+                    (int)bytesPerTexel))
+            : "unsupported";
+        return $"probe={reads}/{sampleCount}:{nonzero}:0x{hash:X16}:texels={texels}";
+    }
+
+    private static string ProbeTextureTexel(CpuContext ctx, ulong address, int size)
+    {
+        var texel = new byte[size];
+        return ctx.Memory.TryRead(address, texel)
+            ? Convert.ToHexString(texel)
+            : "unreadable";
+    }
+
+    private static ulong GetTextureBytesPerTexel(uint format) =>
+        format switch
+        {
+            1 => 1UL,
+            2 => 2UL,
+            3 => 2UL,
+            4 => 4UL,
+            5 => 4UL,
+            6 => 4UL,
+            7 => 4UL,
+            9 => 4UL,
+            10 => 4UL,
+            11 => 8UL,
+            12 => 8UL,
+            13 => 12UL,
+            14 => 16UL,
+            _ => 0UL,
+        };
+
+    internal static ulong GetTextureByteCount(
+        uint format,
+        uint width,
+        uint height,
+        uint depth = 1)
+    {
+        var bytesPerTexel = GetTextureBytesPerTexel(format);
+        if (bytesPerTexel != 0)
+        {
+            return checked(
+                (ulong)width *
+                height *
+                Math.Max(depth, 1u) *
+                bytesPerTexel);
+        }
+
+        var blockBytes = (ulong)GetBlockCompressedBlockBytes(format);
+        return blockBytes == 0
+            ? 0
+            : checked(
+                ((ulong)width + 3) / 4 *
+                (((ulong)height + 3) / 4) *
+                Math.Max(depth, 1u) *
+                blockBytes);
+    }
+
+    internal static uint GetTextureVolumeDepth(uint type, uint depth) =>
+        type == Gen5TextureType3D
+            ? Math.Max(depth, 1u)
+            : 1u;
+
+    private static uint GetLinearTexturePitch(uint pitch, uint height, uint format)
+    {
+        var bytesPerTexel = GetTextureBytesPerTexel(format);
+        if (bytesPerTexel == 0 || height == 0)
+        {
+            return pitch;
+        }
+
+        // GNM linear surfaces align the row pitch to 256 bytes, so a 32px
+        // RGBA8 texture is stored with a 64px (256-byte) pitch and a 288px
+        // one with 320px. Reading at the unpadded width made every padded
+        // tail land on the next row, which showed as transparent gaps every
+        // other row on small tiles and diagonal dashes on wider surfaces.
+        var pitchBytes = AlignUp((ulong)pitch * bytesPerTexel, 256UL);
+        return checked((uint)(pitchBytes / bytesPerTexel));
+    }
+
+    private static ulong AlignUp(ulong value, ulong alignment) =>
+        (value + alignment - 1) & ~(alignment - 1);
+
+    private static void TraceShaderTranslationMiss(
+        CpuContext ctx,
+        SubmittedDcbState state,
+        uint vertexCount,
+        bool hasExportShader,
+        ulong exportShaderAddress,
+        bool hasPixelShader,
+        ulong pixelShaderAddress,
+        bool hasPsInputEna,
+        uint psInputEna,
+        bool hasPsInputAddr,
+        uint psInputAddr,
+        string? translationError = null)
+    {
+        var firstFailure = false;
+        if (!string.IsNullOrEmpty(translationError))
+        {
+            lock (_submitTraceGate)
+            {
+                firstFailure = _tracedShaderFailures.Add(
+                    (pixelShaderAddress, translationError));
+            }
+        }
+
+        if (!firstFailure &&
+            !ShouldTraceHotPath(ref _shaderTranslationMissTraceCount))
+        {
+            return;
+        }
+
+        // Translation failures are compatibility issues, not merely verbose
+        // shader diagnostics. Report each distinct failure once even when AGC
+        // tracing is disabled so normal runs preserve the missing opcode or
+        // unsupported translation reason needed to fix the game.
+        if (firstFailure)
+        {
+            Console.Error.WriteLine(
+                $"[COMPAT][SHADER] ps=0x{pixelShaderAddress:X16} " +
+                $"es=0x{exportShaderAddress:X16} error={translationError}");
+        }
+
+        if ((!hasPixelShader || !hasPsInputEna || !hasPsInputAddr) &&
+            TryMarkMissingPixelShaderBindingsTrace())
+        {
+            TraceAgcShader(
+                $"agc.shader_register_candidates " +
+                DescribeShaderRegisterCandidates(ctx, state.ShRegisters));
+        }
+
+        if (!hasPixelShader)
+        {
+            state.CxRegisters.TryGetValue(DbDepthControl, out var rawDepthControl);
+            state.CxRegisters.TryGetValue(DbZInfo, out var rawZInfo);
+            state.CxRegisters.TryGetValue(DbDepthSizeXy, out var rawDepthSize);
+            state.CxRegisters.TryGetValue(DbDepthView, out var rawDepthView);
+            var depthState = DecodeDepthState(state.CxRegisters);
+            var depthTarget = DecodeDepthTarget(state.CxRegisters);
+            TraceAgcShader(
+                $"agc.shader_depth_state control=0x{rawDepthControl:X8} " +
+                $"zinfo=0x{rawZInfo:X8} size=0x{rawDepthSize:X8} " +
+                $"view=0x{rawDepthView:X8} " +
+                $"test={(depthState.TestEnable ? 1 : 0)} " +
+                $"write={(depthState.WriteEnable ? 1 : 0)} " +
+                $"func={depthState.CompareOp} " +
+                (depthTarget is null
+                    ? "target=none"
+                    : $"target=0x{depthTarget.Address:X16}:" +
+                      $"{depthTarget.Width}x{depthTarget.Height}:" +
+                      $"fmt{depthTarget.GuestFormat}/sw{depthTarget.SwizzleMode}:" +
+                      $"ro={(depthTarget.ReadOnly ? 1 : 0)}"));
+        }
+
+        var shaderDecode = string.Empty;
+        if (hasExportShader && hasPixelShader)
+        {
+            var shouldDescribe = false;
+            ulong exportShaderHeader;
+            ulong pixelShaderHeader;
+            lock (_submitTraceGate)
+            {
+                shouldDescribe = _tracedShaderDecodePairs.Add((exportShaderAddress, pixelShaderAddress));
+                _shaderHeadersByCode.TryGetValue(exportShaderAddress, out exportShaderHeader);
+                _shaderHeadersByCode.TryGetValue(pixelShaderAddress, out pixelShaderHeader);
+            }
+
+            if (shouldDescribe)
+            {
+                shaderDecode = $" decode={Gen5ShaderTranslator.Describe(ctx, exportShaderAddress, pixelShaderAddress)}";
+                TraceAgcShader(
+                    $"agc.shader_words es=0x{exportShaderAddress:X16} " +
+                    Gen5ShaderTranslator.DescribeWords(ctx, exportShaderAddress));
+                if (Gen5ShaderTranslator.TryCreateState(
+                        ctx,
+                        exportShaderAddress,
+                        exportShaderHeader,
+                        state.ShRegisters,
+                        SelectExportUserDataRegister(state.ShRegisters),
+                        out var exportState,
+                        out _,
+                        userDataScalarRegisterBase: NggUserDataScalarRegisterBase) &&
+                    Gen5ShaderTranslator.TryCreateState(
+                        ctx,
+                        pixelShaderAddress,
+                        pixelShaderHeader,
+                        state.ShRegisters,
+                        PsTextureUserDataRegister,
+                        out var pixelState,
+                        out _))
+                {
+                    TraceAgcShader(
+                        $"agc.shader_state es=0x{exportShaderAddress:X16} " +
+                        Gen5ShaderTranslator.DescribeState(exportState));
+                    TraceAgcShader(
+                        $"agc.shader_state ps=0x{pixelShaderAddress:X16} " +
+                        Gen5ShaderTranslator.DescribeState(pixelState));
+                    if (TryEvaluateShaderWithResourceVisibilityRetry(
+                            ctx,
+                            pixelState,
+                            out var evaluation,
+                            out var bindingError))
+                    {
+                        foreach (var binding in evaluation.ImageBindings)
+                        {
+                            TraceAgcShader(
+                                $"agc.shader_binding ps=0x{pixelShaderAddress:X16} " +
+                                $"pc=0x{binding.Pc:X} op={binding.Opcode} " +
+                                $"resource={FormatShaderDwords(binding.ResourceDescriptor)} " +
+                                $"sampler={FormatShaderDwords(binding.SamplerDescriptor)}");
+                        }
+
+                        foreach (var binding in evaluation.GlobalMemoryBindings)
+                        {
+                            TraceAgcShader(
+                                $"agc.shader_global_binding ps=0x{pixelShaderAddress:X16} " +
+                                $"saddr=s{binding.ScalarAddress} " +
+                                $"base=0x{binding.BaseAddress:X16} bytes={binding.DataLength} " +
+                                $"pcs={string.Join(',', binding.InstructionPcs.Select(pc => $"0x{pc:X}"))}");
+                        }
+
+                        if (GuestGpu.Current.TryCompilePixelShader(
+                                 pixelState,
+                                 evaluation,
+                                 [new(0, 0, Gen5PixelOutputKind.Float)],
+                                 out var compiledPixel,
+                                 out var compileError,
+                                 pixelInputEnable: psInputEna,
+                                 pixelInputAddress: psInputAddr,
+                                 pixelInputCntl: ReadPsInputCntlRegisters(state.CxRegisters),
+                                 storageBufferOffsetAlignment:
+                                     _storageBufferOffsetAlignment))
+                        {
+                            TraceAgcShader(
+                                $"agc.shader_spirv ps=0x{pixelShaderAddress:X16} " +
+                                $"bytes={compiledPixel!.Payload.Length} bindings={evaluation.ImageBindings.Count} " +
+                                $"global_buffers={evaluation.GlobalMemoryBindings.Count}");
+                        }
+                        else
+                        {
+                            TraceAgcShader(
+                                $"agc.shader_spirv_error ps=0x{pixelShaderAddress:X16} " +
+                                compileError.ReplaceLineEndings(" "));
+                        }
+                    }
+                    else
+                    {
+                        TraceAgcShader(
+                            $"agc.shader_binding_error ps=0x{pixelShaderAddress:X16} " +
+                            bindingError);
+                    }
+                }
+            }
+        }
+
+        TraceAgcShader(
+            $"agc.shader_translate_miss vertices={vertexCount} " +
+            $"es={(hasExportShader ? $"0x{exportShaderAddress:X16}" : "missing")} " +
+            $"ps={(hasPixelShader ? $"0x{pixelShaderAddress:X16}" : "missing")} " +
+            $"ps_ena={(hasPsInputEna ? $"0x{psInputEna:X8}" : "missing")} " +
+            $"ps_addr={(hasPsInputAddr ? $"0x{psInputAddr:X8}" : "missing")}" +
+            (string.IsNullOrEmpty(translationError) ? string.Empty : $" error={translationError}") +
+            shaderDecode);
+    }
+
+    private static bool TryMarkMissingPixelShaderBindingsTrace()
+    {
+        lock (_submitTraceGate)
+        {
+            if (_tracedMissingPixelShaderBindings)
+            {
+                return false;
+            }
+
+            _tracedMissingPixelShaderBindings = true;
+            return true;
+        }
+    }
+
+    private static string DescribeShaderRegisterCandidates(
+        CpuContext ctx,
+        IReadOnlyDictionary<uint, uint> registers)
+    {
+        var candidates = new List<(uint Register, ulong Address, ulong Header)>();
+        lock (_submitTraceGate)
+        {
+            foreach (var (register, lo) in registers)
+            {
+                if (!registers.TryGetValue(register + 1, out var hi))
+                {
+                    continue;
+                }
+
+                var address = ((ulong)hi << 40) | ((ulong)lo << 8);
+                if (address != 0 &&
+                    _shaderHeadersByCode.TryGetValue(address, out var header))
+                {
+                    candidates.Add((register, address, header));
+                }
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return "none";
+        }
+
+        return string.Join(
+            ',',
+            candidates
+                .OrderBy(candidate => candidate.Register)
+                .Take(16)
+                .Select(candidate =>
+                {
+                    var type = TryReadByte(
+                        ctx,
+                        candidate.Header + ShaderTypeOffset,
+                        out var shaderType)
+                        ? shaderType.ToString()
+                        : "?";
+                    return
+                        $"sh[0x{candidate.Register:X}/0x{candidate.Register + 1:X}]=" +
+                        $"0x{candidate.Address:X16}:type{type}";
+                }));
+    }
+
+    private static bool TryGetShaderAddress(
+        IReadOnlyDictionary<uint, uint> registers,
+        uint loRegister,
+        uint hiRegister,
+        out ulong address)
+    {
+        address = 0;
+        if (!registers.TryGetValue(loRegister, out var lo) ||
+            !registers.TryGetValue(hiRegister, out var hi))
+        {
+            return false;
+        }
+
+        address = ((ulong)hi << 40) | ((ulong)lo << 8);
+        return address != 0;
+    }
+
+    private static bool TryReadTextureDescriptor(
+        CpuContext ctx,
+        ulong packetAddress,
+        uint packetLength,
+        out TextureDescriptor descriptor)
+    {
+        descriptor = default;
+        if (packetLength < 10 ||
+            !TryReadUInt32(ctx, packetAddress + 4, out var startRegister))
+        {
+            return false;
+        }
+
+        var valueCount = packetLength - 2;
+        if (startRegister > PsTextureUserDataRegister ||
+            startRegister + valueCount < PsTextureUserDataRegister + 8)
+        {
+            return false;
+        }
+
+        var descriptorAddress =
+            packetAddress +
+            8 +
+            ((ulong)(PsTextureUserDataRegister - startRegister) * sizeof(uint));
+        Span<uint> fields = stackalloc uint[8];
+        for (var i = 0; i < fields.Length; i++)
+        {
+            if (!TryReadUInt32(ctx, descriptorAddress + ((ulong)i * sizeof(uint)), out fields[i]))
+            {
+                return false;
+            }
+        }
+
+        return TryDecodeTextureDescriptor(fields.ToArray(), out descriptor);
+    }
+
+    private static bool TryDecodeTextureDescriptor(
+        IReadOnlyList<uint> fields,
+        out TextureDescriptor descriptor)
+    {
+        descriptor = default;
+        if (fields.Count < 4)
+        {
+            return false;
+        }
+
+        // RDNA2 ISA table 45: BASE_ADDRESS is addr[47:8], WIDTH is the full
+        // 16-bit field split across word1/word2, and HEIGHT is word2[29:14].
+        // Keeping the high base byte is required for legal guest VAs above
+        // 1 TiB; it is not descriptor metadata.
+        var address = (((ulong)(fields[1] & 0xFFu) << 32) | fields[0]) << 8;
+        var width = (((fields[1] >> 30) & 0x3u) | ((fields[2] & 0x3FFFu) << 2)) + 1;
+        var height = ((fields[2] >> 14) & 0xFFFFu) + 1;
+        var unifiedFormat = (fields[1] >> 20) & 0x1FFu;
+        if (unifiedFormat == 0 ||
+            !Gfx10UnifiedFormat.TryDecode(
+                unifiedFormat,
+                out var format,
+                out var numberType))
+        {
+            return false;
+        }
+        var tileMode = (fields[3] >> 20) & 0x1Fu;
+        var type = (fields[3] >> 28) & 0xFu;
+        var baseLevel = (fields[3] >> 12) & 0xFu;
+        var lastLevel = (fields[3] >> 16) & 0xFu;
+        var bcSwizzle = (fields[3] >> 25) & 0x7u;
+        var hasExtendedDescriptor = fields.Count >= 8;
+        var word4 = fields.Count >= 5 ? fields[4] : 0u;
+        var depthOrLastSlice = (word4 & 0x1FFFu) + 1;
+        var baseArray = (word4 >> 16) & 0x1FFFu;
+        // In a 256-bit 1D/2D/2D-MSAA descriptor word4[13:0] is
+        // (pitch-1). A zeroed upper half denotes the common 128-bit resource,
+        // where pitch is implicit; use width rather than inventing pitch=1.
+        var pitch = type is 8u or 9u or 14u && word4 != 0
+            ? (word4 & 0x3FFFu) + 1
+            : width;
+        var depth = type is 10u or 11u or 12u or 13u or 15u
+            ? depthOrLastSlice
+            : 1u;
+        var word5 = fields.Count >= 6 ? fields[5] : 0u;
+        var arrayPitch = word5 & 0xFu;
+        var maxMip = (word5 >> 4) & 0xFu;
+        var minLod = (fields[1] >> 8) & 0xFFFu;
+        var minLodWarn = (word5 >> 8) & 0xFFFu;
+        var word6 = fields.Count >= 7 ? fields[6] : 0u;
+        var word7 = fields.Count >= 8 ? fields[7] : 0u;
+        var metadataAddress = ((((ulong)word7 << 8) | (word6 >> 24)) << 8);
+        var descriptorFlags = word6 & 0x00FF_FFFFu;
+        var dstSelect = fields[3] & 0xFFFu;
+        if (address == 0 || width == 0 || height == 0 || type is >= 1 and <= 7)
+        {
+            return false;
+        }
+
+        descriptor = new TextureDescriptor(
+            address,
+            width,
+            height,
+            format,
+            numberType,
+            tileMode,
+            type,
+            baseLevel,
+            lastLevel,
+            pitch,
+            dstSelect,
+            depth,
+            baseArray,
+            arrayPitch,
+            maxMip,
+            minLod,
+            minLodWarn,
+            bcSwizzle,
+            metadataAddress,
+            descriptorFlags,
+            hasExtendedDescriptor);
+        return true;
+    }
+
+    private static TextureDescriptor CreateFallbackTextureDescriptor(IReadOnlyList<uint> fields)
+    {
+        var format = Gen5TextureFormatR8G8B8A8Unorm;
+        var numberType = 0u;
+        var tileMode = 0u;
+        if (fields.Count >= 4)
+        {
+            var unifiedFormat = (fields[1] >> 20) & 0x1FFu;
+            if (!Gfx10UnifiedFormat.TryDecode(
+                    unifiedFormat,
+                    out format,
+                    out numberType))
+            {
+                format = Gen5TextureFormatR8G8B8A8Unorm;
+                numberType = 0;
+            }
+            tileMode = (fields[3] >> 20) & 0x1Fu;
+            if (format == 0)
+            {
+                format = Gen5TextureFormatR8G8B8A8Unorm;
+            }
+        }
+
+        return new TextureDescriptor(
+            Address: 0,
+            Width: 1,
+            Height: 1,
+            Format: format,
+            NumberType: numberType,
+            TileMode: tileMode,
+            Type: Gen5TextureType2D,
+            BaseLevel: 0,
+            LastLevel: 0,
+            Pitch: 1,
+            DstSelect: 0xFAC);
+    }
+
+    private static bool TrySoftwarePresent(
+        CpuContext ctx,
+        TextureDescriptor source,
+        int videoOutHandle,
+        int displayBufferIndex)
+    {
+        if (source.Format != Gen5TextureFormatR8G8B8A8Unorm ||
+            source.TileMode != 0 ||
+            source.Type != Gen5TextureType2D ||
+            source.Width > 8192 ||
+            source.Height > 8192 ||
+            !VideoOutExports.TryGetDisplayBufferInfo(videoOutHandle, displayBufferIndex, out var destination) ||
+            destination.Address == 0 ||
+            destination.Width == 0 ||
+            destination.Height == 0 ||
+            destination.Width > 8192 ||
+            destination.Height > 8192 ||
+            destination.TilingMode != 0 ||
+            destination.PixelFormat is not (
+                VideoOutPixelFormatA8R8G8B8Srgb or
+                VideoOutPixelFormatA8B8G8R8Srgb or
+                VideoOutPixelFormat2R8G8B8A8Srgb or
+                VideoOutPixelFormat2B8G8R8A8Srgb or
+                VideoOutPixelFormat2R10G10B10A2 or
+                VideoOutPixelFormat2B10G10R10A2 or
+                VideoOutPixelFormat2R10G10B10A2Srgb or
+                VideoOutPixelFormat2B10G10R10A2Srgb or
+                VideoOutPixelFormat2R10G10B10A2Bt2100Pq or
+                VideoOutPixelFormat2B10G10R10A2Bt2100Pq))
+        {
+            return false;
+        }
+
+        var sourceByteCount = checked((ulong)source.Width * source.Height * 4);
+        if (sourceByteCount > 256UL * 1024UL * 1024UL)
+        {
+            return false;
+        }
+
+        var sourceBytes = new byte[(int)sourceByteCount];
+        if (!ctx.Memory.TryRead(source.Address, sourceBytes))
+        {
+            return false;
+        }
+
+        var fingerprint = ComputeFingerprint(sourceBytes);
+        var fingerprintKey = (source.Address, destination.Address);
+        lock (_softwarePresenterGate)
+        {
+            if (_softwarePresenterFingerprints.TryGetValue(fingerprintKey, out var previousFingerprint) &&
+                previousFingerprint == fingerprint)
+            {
+                return true;
+            }
+        }
+
+        var destinationPitch = destination.PitchInPixel == 0
+            ? destination.Width
+            : destination.PitchInPixel;
+        if (destinationPitch < destination.Width)
+        {
+            return false;
+        }
+
+        var destinationRow = new byte[checked((int)destinationPitch * 4)];
+        var rgbaDestination = destination.PixelFormat is
+            VideoOutPixelFormatA8B8G8R8Srgb or
+            VideoOutPixelFormat2R8G8B8A8Srgb;
+        var packed10Destination =
+            VideoOutExports.IsPacked10BitPixelFormat(destination.PixelFormat);
+        for (uint y = 0; y < destination.Height; y++)
+        {
+            var sourceY = (uint)(((ulong)y * source.Height) / destination.Height);
+            for (uint x = 0; x < destination.Width; x++)
+            {
+                var sourceX = (uint)(((ulong)x * source.Width) / destination.Width);
+                var sourceOffset = checked((int)(((ulong)sourceY * source.Width + sourceX) * 4));
+                var destinationOffset = checked((int)x * 4);
+                if (packed10Destination)
+                {
+                    if (!VideoOutExports.TryPackRgba8Pixel(
+                            destination.PixelFormat,
+                            sourceBytes[sourceOffset + 0],
+                            sourceBytes[sourceOffset + 1],
+                            sourceBytes[sourceOffset + 2],
+                            sourceBytes[sourceOffset + 3],
+                            out var packed))
+                    {
+                        return false;
+                    }
+
+                    BinaryPrimitives.WriteUInt32LittleEndian(
+                        destinationRow.AsSpan(destinationOffset, sizeof(uint)),
+                        packed);
+                }
+                else if (rgbaDestination)
+                {
+                    destinationRow[destinationOffset + 0] = sourceBytes[sourceOffset + 0];
+                    destinationRow[destinationOffset + 1] = sourceBytes[sourceOffset + 1];
+                    destinationRow[destinationOffset + 2] = sourceBytes[sourceOffset + 2];
+                }
+                else
+                {
+                    destinationRow[destinationOffset + 0] = sourceBytes[sourceOffset + 2];
+                    destinationRow[destinationOffset + 1] = sourceBytes[sourceOffset + 1];
+                    destinationRow[destinationOffset + 2] = sourceBytes[sourceOffset + 0];
+                }
+
+                if (!packed10Destination)
+                {
+                    destinationRow[destinationOffset + 3] = sourceBytes[sourceOffset + 3];
+                }
+            }
+
+            var destinationAddress = destination.Address + ((ulong)y * destinationPitch * 4);
+            if (!ctx.Memory.TryWrite(destinationAddress, destinationRow))
+            {
+                return false;
+            }
+        }
+
+        lock (_softwarePresenterGate)
+        {
+            _softwarePresenterFingerprints[fingerprintKey] = fingerprint;
+        }
+
+        VideoOutExports.SubmitHostRgbaFrame(sourceBytes, source.Width, source.Height);
+        TraceAgc(
+            $"agc.software_presenter src=0x{source.Address:X16} {source.Width}x{source.Height} fmt={source.Format}/num{source.NumberType} " +
+            $"dst=0x{destination.Address:X16} {destination.Width}x{destination.Height} fingerprint=0x{fingerprint:X16}");
+        return true;
+    }
+
+    private static ulong ComputeFingerprint(ReadOnlySpan<byte> bytes)
+    {
+        const ulong fnvOffsetBasis = 14695981039346656037UL;
+        const ulong fnvPrime = 1099511628211UL;
+        var fingerprint = fnvOffsetBasis;
+        foreach (var value in bytes)
+        {
+            fingerprint = (fingerprint ^ value) * fnvPrime;
+        }
+
+        return fingerprint;
+    }
+
+    private static void TraceSubmittedPacket(
+        CpuContext ctx,
+        ulong packetAddress,
+        uint dwordOffset,
+        uint header,
+        uint length,
+        uint op,
+        uint register)
+    {
+        TraceAgc(
+            $"agc.dcb.packet dw={dwordOffset} addr=0x{packetAddress:X16} header=0x{header:X8} len={length} op=0x{op:X2} reg=0x{register:X2}");
+
+        var payloadCount = Math.Min(length - 1, 32u);
+        for (uint i = 0; i < payloadCount; i++)
+        {
+            if (!TryReadUInt32(ctx, packetAddress + ((ulong)(i + 1) * sizeof(uint)), out var value))
+            {
+                return;
+            }
+
+            TraceAgc($"agc.dcb.payload dw={dwordOffset + i + 1} value=0x{value:X8}");
+        }
+
+        if (op != ItNop ||
+            register is not (RCxRegsIndirect or RShRegsIndirect or RUcRegsIndirect) ||
+            length < 4 ||
+            !TryReadUInt32(ctx, packetAddress + 4, out var registerCount) ||
+            !TryReadUInt64(ctx, packetAddress + 8, out var registersAddress))
+        {
+            return;
+        }
+
+        var registerSpace = register == RCxRegsIndirect ? "cx" : register == RShRegsIndirect ? "sh" : "uc";
+        var tracedCount = Math.Min(registerCount, 256u);
+        TraceAgc($"agc.dcb.indirect space={registerSpace} regs=0x{registersAddress:X16} count={registerCount}");
+        for (uint i = 0; i < tracedCount; i++)
+        {
+            var entryAddress = registersAddress + ((ulong)i * 8);
+            if (!TryReadUInt32(ctx, entryAddress, out var registerOffset) ||
+                !TryReadUInt32(ctx, entryAddress + 4, out var value))
+            {
+                TraceAgc($"agc.dcb.indirect_read_failed space={registerSpace} index={i} addr=0x{entryAddress:X16}");
+                return;
+            }
+
+            TraceAgc($"agc.dcb.reg space={registerSpace} index={i} offset=0x{registerOffset:X4} value=0x{value:X8}");
+        }
+
+        if (tracedCount != registerCount)
+        {
+            TraceAgc($"agc.dcb.indirect_truncated space={registerSpace} traced={tracedCount} total={registerCount}");
+        }
+    }
+
+    private static bool PatchShaderProgramRegisters(CpuContext ctx, ulong headerAddress, ulong codeAddress)
+    {
+        if (!TryReadUInt64(ctx, headerAddress + ShaderShRegistersOffset, out var shRegistersAddress) ||
+            !TryReadByte(ctx, headerAddress + ShaderTypeOffset, out var shaderType) ||
+            !TryReadByte(ctx, headerAddress + ShaderNumShRegistersOffset, out var registerCount))
+        {
+            return false;
+        }
+
+        if (shRegistersAddress == 0 || registerCount < 2)
+        {
+            return false;
+        }
+
+        // Type bytes follow the Prospero half/fused enum used by fuse-shader
+        // (#326). Type 3 still patches VS PGM registers on this tree (pre-fuse
+        // CreateShader behavior); type 5 is the HS front half / hull path.
+        var expectedLo = shaderType switch
+        {
+            ComputeShaderType => ComputePgmLo,
+            PsShaderType => SpiShaderPgmLoPs,
+            GsShaderType or GsBackShaderType => SpiShaderPgmLoEs,
+            HsShaderType => SpiShaderPgmLoVs,
+            GsFrontShaderType => SpiShaderPgmLoGs,
+            HsFrontShaderType => SpiShaderPgmLoHs,
+            HsBackShaderType => SpiShaderPgmLoLs,
+            _ => 0u,
+        };
+        var expectedHi = shaderType switch
+        {
+            ComputeShaderType => ComputePgmHi,
+            PsShaderType => SpiShaderPgmHiPs,
+            GsShaderType or GsBackShaderType => SpiShaderPgmHiEs,
+            HsShaderType => SpiShaderPgmHiVs,
+            GsFrontShaderType => SpiShaderPgmHiGs,
+            HsFrontShaderType => SpiShaderPgmHiHs,
+            HsBackShaderType => SpiShaderPgmHiLs,
+            _ => 0u,
+        };
+
+        // GTA V Enhanced hull shaders (type 5) put RSRC1/RSRC2 (0x10A/0x10B) at
+        // the front of the SH default table; PGM_LO/HI sit elsewhere (or are
+        // filled later via SetShRegisterDirect).
+        if (!TryFindShaderProgramRegisterPair(
+                ctx,
+                shRegistersAddress,
+                registerCount,
+                expectedLo,
+                expectedHi,
+                out var loEntryAddress,
+                out var hiEntryAddress,
+                out var foundLo,
+                out var foundHi))
+        {
+            TryReadUInt32(ctx, shRegistersAddress, out var firstLo);
+            // GTA V Enhanced HS headers start at RSRC1/RSRC2 (0x10A/0x10B) and
+            // omit PGM_LO/HI from the default table. Still succeed: the code VA
+            // lives at ShaderCodeOffset and later binder paths republish it.
+            // GS front headers can likewise start at RSRC1_GS (0x8A) instead of
+            // PGM_LO_GS (0x88) - same deal, skip the patch here.
+            if ((shaderType == HsFrontShaderType && firstLo is SpiShaderPgmRsrc1Hs or SpiShaderPgmLoHs) ||
+                (shaderType == GsFrontShaderType && firstLo is SpiShaderPgmRsrc1Gs or SpiShaderPgmLoGs))
+            {
+                TraceCreateShader(
+                    0,
+                    headerAddress,
+                    codeAddress,
+                    $"skip-pgm-patch type={shaderType} first_lo=0x{firstLo:X8}");
+                return true;
+            }
+
+            TraceCreateShader(
+                0,
+                headerAddress,
+                codeAddress,
+                $"unexpected-registers type={shaderType} expected_lo=0x{expectedLo:X8} first_lo=0x{firstLo:X8}");
+            return false;
+        }
+
+        var loValue = (uint)((codeAddress >> 8) & 0xFFFF_FFFFUL);
+        var hiValue = (uint)((codeAddress >> 40) & 0xFFUL);
+        if (!TryWriteUInt32(ctx, loEntryAddress + sizeof(uint), loValue) ||
+            !TryWriteUInt32(ctx, hiEntryAddress + sizeof(uint), hiValue))
+        {
+            return false;
+        }
+
+        if (foundLo != expectedLo || foundHi != expectedHi)
+        {
+            TraceCreateShader(
+                0,
+                headerAddress,
+                codeAddress,
+                $"patched-alt-registers type={shaderType} lo=0x{foundLo:X8} hi=0x{foundHi:X8}");
+        }
+
+        return true;
+    }
+
+    private static readonly (uint Lo, uint Hi)[] ShaderProgramRegisterPairs =
+    [
+        (ComputePgmLo, ComputePgmHi),
+        (SpiShaderPgmLoPs, SpiShaderPgmHiPs),
+        (SpiShaderPgmLoVs, SpiShaderPgmHiVs),
+        (SpiShaderPgmLoEs, SpiShaderPgmHiEs),
+        (SpiShaderPgmLoGs, SpiShaderPgmHiGs),
+        (SpiShaderPgmLoHs, SpiShaderPgmHiHs),
+        (SpiShaderPgmLoLs, SpiShaderPgmHiLs),
+    ];
+
+    private static bool TryFindShaderProgramRegisterPair(
+        CpuContext ctx,
+        ulong shRegistersAddress,
+        byte registerCount,
+        uint preferredLo,
+        uint preferredHi,
+        out ulong loEntryAddress,
+        out ulong hiEntryAddress,
+        out uint foundLo,
+        out uint foundHi)
+    {
+        loEntryAddress = 0;
+        hiEntryAddress = 0;
+        foundLo = 0;
+        foundHi = 0;
+
+        ulong preferredLoAddress = 0;
+        ulong preferredHiAddress = 0;
+        ulong fallbackLoAddress = 0;
+        ulong fallbackHiAddress = 0;
+        uint fallbackLo = 0;
+        uint fallbackHi = 0;
+
+        for (uint index = 0; index < registerCount; index++)
+        {
+            var entryAddress = shRegistersAddress + ((ulong)index * 8);
+            if (!TryReadUInt32(ctx, entryAddress, out var offset))
+            {
+                return false;
+            }
+
+            if (preferredLo != 0 && offset == preferredLo)
+            {
+                preferredLoAddress = entryAddress;
+            }
+            else if (preferredHi != 0 && offset == preferredHi)
+            {
+                preferredHiAddress = entryAddress;
+            }
+
+            if (fallbackLoAddress != 0)
+            {
+                continue;
+            }
+
+            foreach (var pair in ShaderProgramRegisterPairs)
+            {
+                if (offset != pair.Lo)
+                {
+                    continue;
+                }
+
+                // Prefer a contiguous LO/HI pair when present.
+                if (index + 1 < registerCount &&
+                    TryReadUInt32(ctx, entryAddress + 8, out var nextOffset) &&
+                    nextOffset == pair.Hi)
+                {
+                    fallbackLoAddress = entryAddress;
+                    fallbackHiAddress = entryAddress + 8;
+                    fallbackLo = pair.Lo;
+                    fallbackHi = pair.Hi;
+                    break;
+                }
+
+                for (uint hiIndex = 0; hiIndex < registerCount; hiIndex++)
+                {
+                    if (hiIndex == index)
+                    {
+                        continue;
+                    }
+
+                    var hiAddress = shRegistersAddress + ((ulong)hiIndex * 8);
+                    if (!TryReadUInt32(ctx, hiAddress, out var hiOffset) || hiOffset != pair.Hi)
+                    {
+                        continue;
+                    }
+
+                    fallbackLoAddress = entryAddress;
+                    fallbackHiAddress = hiAddress;
+                    fallbackLo = pair.Lo;
+                    fallbackHi = pair.Hi;
+                    break;
+                }
+
+                break;
+            }
+        }
+
+        if (preferredLoAddress != 0 && preferredHiAddress != 0)
+        {
+            loEntryAddress = preferredLoAddress;
+            hiEntryAddress = preferredHiAddress;
+            foundLo = preferredLo;
+            foundHi = preferredHi;
+            return true;
+        }
+
+        if (fallbackLoAddress != 0 && fallbackHiAddress != 0)
+        {
+            loEntryAddress = fallbackLoAddress;
+            hiEntryAddress = fallbackHiAddress;
+            foundLo = fallbackLo;
+            foundHi = fallbackHi;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsEsGeometryShaderType(byte shaderType) =>
+        shaderType is GsShaderType or GsBackShaderType;
+
+    private static int SetIndirectPatchAddress(CpuContext ctx, string registerSpace)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var registersAddress = ctx[CpuRegister.Rsi];
+        if (commandAddress == 0 || registersAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryWriteUInt32(ctx, commandAddress + 8, (uint)(registersAddress & 0xFFFF_FFFFUL)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)(registersAddress >> 32)))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc($"agc.patch_{registerSpace}_addr cmd=0x{commandAddress:X16} regs=0x{registersAddress:X16}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    private static int PatchWriteDataControlByte(CpuContext ctx, int byteIndex)
+    {
+        if (!TryResolveWriteDataPatchArguments(
+                ctx,
+                ctx[CpuRegister.Rdi],
+                ctx[CpuRegister.Rsi],
+                out var commandAddress,
+                out var value) ||
+            !TryReadUInt32(ctx, commandAddress + 4, out var control))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var shift = byteIndex * 8;
+        var patchedControl = (control & ~(0xFFu << shift)) | (((uint)value & 0xFFu) << shift);
+        return TryWriteUInt32(ctx, commandAddress + 4, patchedControl)
+            ? SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK)
+            : SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+    }
+
+    private static bool TryResolveWriteDataPatchArguments(
+        CpuContext ctx,
+        ulong first,
+        ulong second,
+        out ulong commandAddress,
+        out ulong value)
+    {
+        if (IsWriteDataPacket(ctx, first))
+        {
+            commandAddress = first;
+            value = second;
+            return true;
+        }
+
+        if (IsWriteDataPacket(ctx, second))
+        {
+            commandAddress = second;
+            value = first;
+            return true;
+        }
+
+        commandAddress = 0;
+        value = 0;
+        return false;
+    }
+
+    private static bool IsWriteDataPacket(CpuContext ctx, ulong commandAddress)
+    {
+        if (!TryGetPacketIdentity(ctx, commandAddress, out var op, out var register))
+        {
+            return false;
+        }
+
+        return op == ItWriteData || (op == ItNop && register == RWriteData);
+    }
+
+    private static int AddIndirectPatchRegisters(CpuContext ctx, string registerSpace)
+    {
+        var commandAddress = ctx[CpuRegister.Rdi];
+        var registerCount = (uint)ctx[CpuRegister.Rsi];
+        if (commandAddress == 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!TryReadUInt32(ctx, commandAddress + 4, out var currentCount) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, currentCount + registerCount))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc($"agc.patch_{registerSpace}_add cmd=0x{commandAddress:X16} add={registerCount} total={currentCount + registerCount}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    private static int DcbSetRegistersIndirect(CpuContext ctx, uint packetRegister, string registerSpace)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var registersAddress = ctx[CpuRegister.Rsi];
+        var registerCount = (uint)ctx[CpuRegister.Rdx];
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 4, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(4, ItNop, packetRegister)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, registerCount) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)(registersAddress & 0xFFFF_FFFFUL)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)(registersAddress >> 32)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_set_{registerSpace}_indirect buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} regs=0x{registersAddress:X16} count={registerCount}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    private static int DcbSetRegisterDirect(CpuContext ctx, uint op, string registerSpace)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        // Uc/Cx/Sh register is passed by value as {u32 offset, u32 value} in RSI.
+        var packedRegister = ctx[CpuRegister.Rsi];
+        var registerOffset = (uint)(packedRegister & 0xFFFF_FFFFUL);
+        var registerValue = (uint)(packedRegister >> 32);
+        if (commandBufferAddress == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        const uint packetDwords = 3;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, op, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, registerOffset & 0xFFFFu) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, registerValue))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.dcb_set_{registerSpace}_direct buf=0x{commandBufferAddress:X16} " +
+            $"cmd=0x{commandAddress:X16} offset=0x{registerOffset:X4} value=0x{registerValue:X8}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    private static bool TryAllocateCommandDwords(CpuContext ctx, ulong commandBufferAddress, uint sizeDwords, out ulong commandAddress)
+    {
+        commandAddress = 0;
+        if (sizeDwords == 0 ||
+            !TryReadUInt64(ctx, commandBufferAddress + CommandBufferCursorUpOffset, out var cursorUp) ||
+            !TryReadUInt64(ctx, commandBufferAddress + CommandBufferCursorDownOffset, out var cursorDown) ||
+            !TryReadUInt64(ctx, commandBufferAddress + CommandBufferCallbackOffset, out var callback) ||
+            !TryReadUInt64(ctx, commandBufferAddress + CommandBufferUserDataOffset, out var userData) ||
+            !TryReadUInt32(ctx, commandBufferAddress + CommandBufferReservedDwOffset, out var reservedDwords))
+        {
+            return false;
+        }
+
+        var remainingDwords = GetRemainingCommandDwords(cursorUp, cursorDown, reservedDwords);
+        if (sizeDwords > remainingDwords)
+        {
+            TraceAgc($"agc.cmd_alloc_full buf=0x{commandBufferAddress:X16} need={sizeDwords} remaining={remainingDwords} callback=0x{callback:X16}");
+
+            CompleteBuiltDcbEpochBeforeRefillV1829(
+                ctx,
+                commandBufferAddress,
+                cursorUp);
+
+            var scheduler = GuestThreadExecution.Scheduler;
+            ulong callbackResult = 0;
+            string? callbackError = null;
+            if (callback == 0 ||
+                scheduler is null ||
+                !scheduler.TryCallGuestFunction(
+                    ctx,
+                    callback,
+                    commandBufferAddress,
+                    (ulong)sizeDwords + reservedDwords,
+                    userData,
+                    0,
+                    0,
+                    "agc_command_buffer_full",
+                    out callbackResult,
+                    out callbackError))
+            {
+                TraceAgc(
+                    $"agc.cmd_alloc_callback_failed buf=0x{commandBufferAddress:X16} " +
+                    $"callback=0x{callback:X16} result=0x{callbackResult:X16} " +
+                    $"error={callbackError ?? "none"}");
+                return false;
+            }
+
+            TraceAgc(
+                $"agc.cmd_alloc_callback_complete buf=0x{commandBufferAddress:X16} " +
+                $"callback=0x{callback:X16} result=0x{callbackResult:X16}");
+
+            if (!TryReadUInt64(ctx, commandBufferAddress + CommandBufferCursorUpOffset, out cursorUp) ||
+                !TryReadUInt64(ctx, commandBufferAddress + CommandBufferCursorDownOffset, out cursorDown) ||
+                !TryReadUInt32(ctx, commandBufferAddress + CommandBufferReservedDwOffset, out reservedDwords) ||
+                sizeDwords > GetRemainingCommandDwords(cursorUp, cursorDown, reservedDwords))
+            {
+                TraceAgc($"agc.cmd_alloc_callback_no_space buf=0x{commandBufferAddress:X16} need={sizeDwords}");
+                return false;
+            }
+
+            BeginBuiltDcbEpochAfterRefillV1829(
+                ctx,
+                commandBufferAddress,
+                cursorUp,
+                cursorDown);
+        }
+
+        var nextCursor = cursorUp + ((ulong)sizeDwords * sizeof(uint));
+        if (!ctx.TryWriteUInt64(commandBufferAddress + CommandBufferCursorUpOffset, nextCursor))
+        {
+            return false;
+        }
+
+        commandAddress = cursorUp;
+        NoteBuiltDcbAllocationV1830(
+            commandBufferAddress,
+            commandAddress,
+            sizeDwords);
+        return true;
+    }
+
+    private static uint GetRemainingCommandDwords(
+        ulong cursorUp,
+        ulong cursorDown,
+        uint reservedDwords)
+    {
+        var availableDwords = cursorDown >= cursorUp
+            ? Math.Min((cursorDown - cursorUp) / sizeof(uint), uint.MaxValue)
+            : 0;
+        return availableDwords > reservedDwords
+            ? (uint)availableDwords - reservedDwords
+            : 0;
+    }
+
+    private static bool CopyShaderRegister(CpuContext ctx, ulong sourceAddress, ulong destinationAddress)
+    {
+        if (!TryReadUInt32(ctx, sourceAddress, out var offset) ||
+            !TryReadUInt32(ctx, sourceAddress + sizeof(uint), out var value))
+        {
+            return false;
+        }
+
+        return TryWriteUInt32(ctx, destinationAddress, offset) &&
+               TryWriteUInt32(ctx, destinationAddress + sizeof(uint), value);
+    }
+
+    private static bool IsFusedShaderHalfPair(byte frontType, byte backType) =>
+        (frontType == GsFrontShaderType && backType == GsBackShaderType) ||
+        (frontType == HsFrontShaderType && backType == HsBackShaderType);
+
+    private static bool TryFindShaderRegister(
+        CpuContext ctx,
+        ulong registersAddress,
+        int registerCount,
+        uint registerOffset,
+        int occurrence,
+        out ulong entryAddress)
+    {
+        if (registersAddress != 0)
+        {
+            for (var index = 0; index < registerCount; index++)
+            {
+                var address = registersAddress + (ulong)index * 8;
+                if (!TryReadUInt32(ctx, address, out var current) || current != registerOffset)
+                {
+                    continue;
+                }
+
+                if (occurrence == 0)
+                {
+                    entryAddress = address;
+                    return true;
+                }
+
+                occurrence--;
+            }
+        }
+
+        entryAddress = 0;
+        return false;
+    }
+
+    // A missing or unpaired lo/hi register is not an error: the retail library
+    // leaves absent registers untouched, unlike the create-time patch which
+    // requires them.
+    private static bool PatchFusedProgramAddress(
+        CpuContext ctx,
+        ulong registersAddress,
+        int registerCount,
+        uint loRegisterOffset,
+        ulong codeAddress)
+    {
+        if (!TryFindShaderRegister(ctx, registersAddress, registerCount, loRegisterOffset, 0, out var loEntry))
+        {
+            TraceAgc($"agc.fuse_shader_halves.pgm_absent lo=0x{loRegisterOffset:X} regs=0x{registersAddress:X16}");
+            return true;
+        }
+
+        var hiEntry = loEntry + 8;
+        if (hiEntry >= registersAddress + (ulong)registerCount * 8 ||
+            !TryReadUInt32(ctx, hiEntry, out var hiOffset) ||
+            hiOffset != loRegisterOffset + 1)
+        {
+            TraceAgc($"agc.fuse_shader_halves.pgm_unpaired lo=0x{loRegisterOffset:X} regs=0x{registersAddress:X16}");
+            return true;
+        }
+
+        if (!TryReadUInt32(ctx, hiEntry + sizeof(uint), out var hiValue))
+        {
+            return false;
+        }
+
+        return TryWriteUInt32(ctx, loEntry + sizeof(uint), (uint)(codeAddress >> 8)) &&
+               TryWriteUInt32(ctx, hiEntry + sizeof(uint), (hiValue & 0xFFFF_FF00u) | (uint)((codeAddress >> 40) & 0xFFUL));
+    }
+
+    private static bool TryWriteByte(CpuContext ctx, ulong address, byte value)
+    {
+        Span<byte> buffer = [value];
+        return ctx.Memory.TryWrite(address, buffer);
+    }
+
+    private static bool RelocatePointerField(CpuContext ctx, ulong fieldAddress)
+    {
+        if (!TryReadUInt64(ctx, fieldAddress, out var relativeAddress))
+        {
+            return false;
+        }
+
+        if (relativeAddress == 0)
+        {
+            return true;
+        }
+
+        return ctx.TryWriteUInt64(fieldAddress, fieldAddress + relativeAddress);
+    }
+
+    private static int ReturnRegisterDefaults(CpuContext ctx, bool internalDefaults)
+    {
+        var version = (uint)ctx[CpuRegister.Rdi];
+        if (!IsSupportedRegisterDefaultsVersion(version))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryGetRegisterDefaultsAllocation(ctx, out var allocation))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var address = internalDefaults ? allocation.Internal : allocation.Primary;
+        if (version == RegisterDefaultsVersion12)
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] dbfz.agc.version12_defaults internal={internalDefaults} address=0x{address:X16}");
+        }
+
+        TraceAgc($"agc.get_register_defaults internal={internalDefaults} version={version} address=0x{address:X16}");
+        return ReturnPointer(ctx, address);
+    }
+
+    private static bool IsSupportedRegisterDefaultsVersion(uint version)
+    {
+        return version is
+            RegisterDefaultsVersion7 or
+            RegisterDefaultsVersion8 or
+            RegisterDefaultsVersion10 or
+            RegisterDefaultsVersion12 or
+            RegisterDefaultsVersion13;
+    }
+
+    private static bool TryGetRegisterDefaultsAllocation(
+        CpuContext ctx,
+        out RegisterDefaultsAllocation allocation)
+    {
+        lock (_registerDefaultsGate)
+        {
+            if (_registerDefaultsAllocations.TryGetValue(ctx.Memory, out allocation!))
+            {
+                return true;
+            }
+
+            if (!TryBuildRegisterDefaults(
+                    ctx,
+                    PrimaryRegisterDefaults,
+                    cxTableLength: 78,
+                    shTableLength: 29,
+                    ucTableLength: 20,
+                    out var primaryAddress) ||
+                !TryBuildRegisterDefaults(
+                    ctx,
+                    InternalRegisterDefaults,
+                    cxTableLength: 4,
+                    shTableLength: 15,
+                    ucTableLength: 3,
+                    out var internalAddress))
+            {
+                allocation = null!;
+                return false;
+            }
+
+            allocation = new RegisterDefaultsAllocation(primaryAddress, internalAddress);
+            _registerDefaultsAllocations.Add(ctx.Memory, allocation);
+            return true;
+        }
+    }
+
+    private static bool TryBuildRegisterDefaults(
+        CpuContext ctx,
+        RegisterDefaultGroup[] groups,
+        int cxTableLength,
+        int shTableLength,
+        int ucTableLength,
+        out ulong address)
+    {
+        var cxTableOffset = AlignUp(RegisterDefaultsSize, sizeof(ulong));
+        var shTableOffset = cxTableOffset + (cxTableLength * sizeof(ulong));
+        var ucTableOffset = shTableOffset + (shTableLength * sizeof(ulong));
+        var typesOffset = AlignUp(ucTableOffset + (ucTableLength * sizeof(ulong)), sizeof(uint));
+        var registerBlocksOffset = AlignUp(typesOffset + (groups.Length * 3 * sizeof(uint)), sizeof(ulong));
+        var blobLength = registerBlocksOffset + (groups.Length * RegisterDefaultBlockSize);
+
+        if (!KernelMemoryCompatExports.TryAllocateHleData(ctx, (ulong)blobLength, 0x1000, out address))
+        {
+            return false;
+        }
+
+        var blob = new byte[blobLength];
+        WriteBlobUInt64(blob, 0x00, address + (ulong)cxTableOffset);
+        WriteBlobUInt64(blob, 0x08, address + (ulong)shTableOffset);
+        WriteBlobUInt64(blob, 0x10, address + (ulong)ucTableOffset);
+        WriteBlobUInt64(blob, 0x30, address + (ulong)typesOffset);
+        WriteBlobUInt32(blob, 0x38, (uint)groups.Length);
+
+        for (var groupIndex = 0; groupIndex < groups.Length; groupIndex++)
+        {
+            var group = groups[groupIndex];
+            if (group.Registers.Length > 16)
+            {
+                return false;
+            }
+
+            var tableOffset = group.Space switch
+            {
+                0 => cxTableOffset,
+                1 => shTableOffset,
+                2 => ucTableOffset,
+                _ => -1,
+            };
+            var tableLength = group.Space switch
+            {
+                0 => cxTableLength,
+                1 => shTableLength,
+                2 => ucTableLength,
+                _ => 0,
+            };
+            if (tableOffset < 0 || group.Index >= tableLength)
+            {
+                return false;
+            }
+
+            var registerBlockOffset = registerBlocksOffset + (groupIndex * RegisterDefaultBlockSize);
+            WriteBlobUInt64(
+                blob,
+                tableOffset + ((int)group.Index * sizeof(ulong)),
+                address + (ulong)registerBlockOffset);
+
+            var typeEntryOffset = typesOffset + (groupIndex * 3 * sizeof(uint));
+            WriteBlobUInt32(blob, typeEntryOffset, group.Type);
+            WriteBlobUInt32(blob, typeEntryOffset + sizeof(uint), (group.Index * 4) + group.Space);
+
+            for (var registerIndex = 0; registerIndex < group.Registers.Length; registerIndex++)
+            {
+                var register = group.Registers[registerIndex];
+                var registerOffset = registerBlockOffset + (registerIndex * 2 * sizeof(uint));
+                WriteBlobUInt32(blob, registerOffset, register.Offset);
+                WriteBlobUInt32(blob, registerOffset + sizeof(uint), register.Value);
+            }
+        }
+
+        return ctx.Memory.TryWrite(address, blob);
+    }
+
+    private static int AlignUp(int value, int alignment) =>
+        (value + alignment - 1) & -alignment;
+
+    private static void WriteBlobUInt32(Span<byte> blob, int offset, uint value) =>
+        BinaryPrimitives.WriteUInt32LittleEndian(blob[offset..], value);
+
+    private static void WriteBlobUInt64(Span<byte> blob, int offset, ulong value) =>
+        BinaryPrimitives.WriteUInt64LittleEndian(blob[offset..], value);
+
+    private static int ReturnPointer(CpuContext ctx, ulong pointer)
+    {
+        ctx[CpuRegister.Rax] = pointer;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    private static int SetReturn(CpuContext ctx, OrbisGen2Result result)
+    {
+        ctx[CpuRegister.Rax] = unchecked((ulong)(int)result);
+        return (int)result;
+    }
+
+    private static uint Pm4(uint lengthDwords, uint op, uint register) =>
+        0xC0000000u |
+        ((((ushort)lengthDwords - 2u) & 0x3FFFu) << 16) |
+        ((op & 0xFFu) << 8) |
+        ((register & 0x3Fu) << 2);
+
+    private static uint EncodeWaitRegMemPoll(uint pollCycles) =>
+        Math.Min(pollCycles >> 4, 0xFFFFu);
+
+    private static uint EncodeWaitRegMem32Control(uint compareFunction, uint operation, uint cachePolicy) =>
+        0x10u |
+        (compareFunction & 0x7u) |
+        ((operation & 0x3u) << 8) |
+        ((operation & 0xCu) << 4) |
+        ((cachePolicy & 0x3u) << 25);
+
+    private static uint EncodeWaitRegMem64Control(uint compareFunction, uint operation, uint cachePolicy) =>
+        0x10u |
+        (compareFunction & 0x7u) |
+        ((operation & 0x1u) << 8) |
+        ((operation & 0x6u) << 5) |
+        ((cachePolicy & 0x3u) << 25);
+
+    private static uint Pm4Length(uint header) =>
+        ((header >> 16) & 0x3FFFu) + 2u;
+
+    private static bool TryReadByte(CpuContext ctx, ulong address, out byte value)
+    {
+        Span<byte> buffer = stackalloc byte[1];
+        if (!ctx.Memory.TryRead(address, buffer))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = buffer[0];
+        return true;
+    }
+
+    // A submitted command buffer is bulk-copied once per submit and served
+    // from this thread-local window: the previous per-dword reads each took
+    // the guest-memory reader lock and ran a region binary search, which
+    // dominated submit parsing (thousands of locked 4-byte reads per DCB).
+    [ThreadStatic]
+    private static byte[]? _dcbWindowBuffer;
+    [ThreadStatic]
+    private static ulong _dcbWindowStart;
+    [ThreadStatic]
+    private static int _dcbWindowByteLength;
+
+    /// <summary>
+    /// Drops the bulk-read window when a self-patching command buffer writes
+    /// into its own bytes during parse, so subsequent reads see live guest
+    /// memory instead of the pre-write snapshot. Self-patching is rare, so
+    /// paying live-read cost for the rest of that one submit is acceptable.
+    /// </summary>
+    private static void InvalidateDcbWindowIfOverlaps(ulong address, ulong length)
+    {
+        if (_dcbWindowBuffer is null || length == 0)
+        {
+            return;
+        }
+
+        var windowEnd = _dcbWindowStart + (ulong)_dcbWindowByteLength;
+        if (address < windowEnd && address + length > _dcbWindowStart)
+        {
+            _dcbWindowBuffer = null;
+            _dcbWindowByteLength = 0;
+        }
+    }
+
+    private static bool TryReadUInt16(CpuContext ctx, ulong address, out ushort value)
+    {
+        if (_dcbWindowBuffer is { } window &&
+            address >= _dcbWindowStart &&
+            address - _dcbWindowStart + sizeof(ushort) <= (ulong)_dcbWindowByteLength)
+        {
+            value = BinaryPrimitives.ReadUInt16LittleEndian(
+                window.AsSpan((int)(address - _dcbWindowStart)));
+            return true;
+        }
+
+        Span<byte> buffer = stackalloc byte[sizeof(ushort)];
+        if (!ctx.Memory.TryRead(address, buffer))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadUInt16LittleEndian(buffer);
+        return true;
+    }
+
+    private static bool TryReadUInt32(CpuContext ctx, ulong address, out uint value)
+    {
+        if (_dcbWindowBuffer is { } window &&
+            address >= _dcbWindowStart &&
+            address - _dcbWindowStart + sizeof(uint) <= (ulong)_dcbWindowByteLength)
+        {
+            value = BinaryPrimitives.ReadUInt32LittleEndian(
+                window.AsSpan((int)(address - _dcbWindowStart)));
+            return true;
+        }
+
+        Span<byte> buffer = stackalloc byte[sizeof(uint)];
+        if (!ctx.Memory.TryRead(address, buffer))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
+        return true;
+    }
+
+    private static bool TryWriteUInt32(CpuContext ctx, ulong address, uint value)
+    {
+        Span<byte> buffer = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer, value);
+        return ctx.Memory.TryWrite(address, buffer);
+    }
+
+    private static bool TryReadUInt64(CpuContext ctx, ulong address, out ulong value)
+    {
+        if (_dcbWindowBuffer is { } window &&
+            address >= _dcbWindowStart &&
+            address - _dcbWindowStart + sizeof(ulong) <= (ulong)_dcbWindowByteLength)
+        {
+            value = BinaryPrimitives.ReadUInt64LittleEndian(
+                window.AsSpan((int)(address - _dcbWindowStart)));
+            return true;
+        }
+
+        Span<byte> buffer = stackalloc byte[sizeof(ulong)];
+        if (!ctx.Memory.TryRead(address, buffer))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = BinaryPrimitives.ReadUInt64LittleEndian(buffer);
+        return true;
+    }
+
+    private static bool TryReadGuestCString(
+        CpuContext ctx,
+        ulong address,
+        int maximumLength,
+        out byte[] bytes)
+    {
+        if (address == 0)
+        {
+            bytes = [];
+            return true;
+        }
+
+        var values = new List<byte>(Math.Min(maximumLength, 128));
+        for (var index = 0; index < maximumLength; index++)
+        {
+            if (!TryReadByte(ctx, address + (ulong)index, out var value))
+            {
+                bytes = [];
+                return false;
+            }
+
+            if (value == 0)
+            {
+                bytes = [.. values];
+                return true;
+            }
+
+            values.Add(value);
+        }
+
+        bytes = [];
+        return false;
+    }
+
+    private static bool TryGetPacketIdentity(
+        CpuContext ctx,
+        ulong commandAddress,
+        out uint op,
+        out uint register)
+    {
+        op = 0;
+        register = 0;
+        if (commandAddress == 0 || !TryReadUInt32(ctx, commandAddress, out var header))
+        {
+            return false;
+        }
+
+        op = (header >> 8) & 0xFFu;
+        register = (header >> 2) & 0x3Fu;
+        return true;
+    }
+
+    private static bool TryCopyGuestMemory(
+        CpuContext ctx,
+        ulong sourceAddress,
+        ulong destinationAddress,
+        uint byteCount)
+    {
+        if (sourceAddress == destinationAddress)
+        {
+            return true;
+        }
+
+        var buffer = new byte[Math.Min(byteCount, 64u * 1024u)];
+        ulong offset = 0;
+        while (offset < byteCount)
+        {
+            var chunkLength = (int)Math.Min((ulong)buffer.Length, byteCount - offset);
+            var chunk = buffer.AsSpan(0, chunkLength);
+            if (!ctx.Memory.TryRead(sourceAddress + offset, chunk) ||
+                !ctx.Memory.TryWrite(destinationAddress + offset, chunk))
+            {
+                return false;
+            }
+
+            offset += (uint)chunkLength;
+        }
+
+        return true;
+    }
+
+    private static bool TryFillGuestMemory(
+        CpuContext ctx,
+        uint value,
+        ulong destinationAddress,
+        uint byteCount)
+    {
+        var buffer = new byte[Math.Min(byteCount, 64u * 1024u)];
+        Span<byte> encoded = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(encoded, value);
+        for (var offset = 0; offset < buffer.Length; offset += sizeof(uint))
+        {
+            var remaining = Math.Min(sizeof(uint), buffer.Length - offset);
+            encoded[..remaining].CopyTo(buffer.AsSpan(offset, remaining));
+        }
+
+        ulong destinationOffset = 0;
+        while (destinationOffset < byteCount)
+        {
+            var chunkLength = (int)Math.Min(
+                (ulong)buffer.Length,
+                byteCount - destinationOffset);
+            if (!ctx.Memory.TryWrite(
+                    destinationAddress + destinationOffset,
+                    buffer.AsSpan(0, chunkLength)))
+            {
+                return false;
+            }
+
+            destinationOffset += (uint)chunkLength;
+        }
+
+        return true;
+    }
+
+    private static bool ShouldTraceHotPath(ref long counter)
+    {
+        var count = Interlocked.Increment(ref counter);
+        return count <= 8 || count % 100_000 == 0;
+    }
+
+    // Interpolated-string handlers gated on the trace flags: when tracing is
+    // off (the normal case) the compiler skips every AppendFormatted call, so
+    // the interpolation never runs. These functions are on the hottest guest
+    // paths â€” e.g. AddIndirectPatchRegisters fires tens of thousands of times
+    // per second â€” and previously formatted a discarded string every call.
+    [System.Runtime.CompilerServices.InterpolatedStringHandler]
+    private ref struct AgcTraceHandler
+    {
+        private System.Runtime.CompilerServices.DefaultInterpolatedStringHandler _inner;
+        private readonly bool _enabled;
+
+        public AgcTraceHandler(int literalLength, int formattedCount, out bool shouldAppend)
+        {
+            _enabled = _traceAgc;
+            shouldAppend = _enabled;
+            _inner = _enabled
+                ? new System.Runtime.CompilerServices.DefaultInterpolatedStringHandler(literalLength, formattedCount)
+                : default;
+        }
+
+        public void AppendLiteral(string value) => _inner.AppendLiteral(value);
+        public void AppendFormatted<T>(T value) => _inner.AppendFormatted(value);
+        public void AppendFormatted<T>(T value, string? format) => _inner.AppendFormatted(value, format);
+        public string ToStringAndClear() => _enabled ? _inner.ToStringAndClear() : string.Empty;
+    }
+
+    [System.Runtime.CompilerServices.InterpolatedStringHandler]
+    private ref struct AgcShaderTraceHandler
+    {
+        private System.Runtime.CompilerServices.DefaultInterpolatedStringHandler _inner;
+        private readonly bool _enabled;
+
+        public AgcShaderTraceHandler(int literalLength, int formattedCount, out bool shouldAppend)
+        {
+            _enabled = _traceAgcShader;
+            shouldAppend = _enabled;
+            _inner = _enabled
+                ? new System.Runtime.CompilerServices.DefaultInterpolatedStringHandler(literalLength, formattedCount)
+                : default;
+        }
+
+        public void AppendLiteral(string value) => _inner.AppendLiteral(value);
+        public void AppendFormatted<T>(T value) => _inner.AppendFormatted(value);
+        public void AppendFormatted<T>(T value, string? format) => _inner.AppendFormatted(value, format);
+        public string ToStringAndClear() => _enabled ? _inner.ToStringAndClear() : string.Empty;
+    }
+
+    private static void TraceAgc(
+        [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument] ref AgcTraceHandler message)
+    {
+        if (_traceAgc)
+        {
+            Console.Error.WriteLine($"[LOADER][TRACE] {message.ToStringAndClear()}");
+        }
+    }
+
+    private static void TraceAgc(string message)
+    {
+        if (!_traceAgc)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[LOADER][TRACE] {message}");
+    }
+
+    private static void TraceAgcShader(
+        [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument] ref AgcShaderTraceHandler message)
+    {
+        if (_traceAgcShader)
+        {
+            Console.Error.WriteLine($"[LOADER][TRACE] {message.ToStringAndClear()}");
+        }
+    }
+
+    private static void TraceAgcShader(string message)
+    {
+        if (!_traceAgcShader)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[LOADER][TRACE] {message}");
+    }
+
+    private static string FormatShaderDwords(IReadOnlyList<uint> values) =>
+        values.Count == 0
+            ? "none"
+            : string.Join(',', values.Select(static value => $"{value:X8}"));
+
+    private static string FormatTextureDescriptor(TextureDescriptor descriptor) =>
+        $"addr=0x{descriptor.Address:X16} {descriptor.Width}x{descriptor.Height} " +
+        $"fmt={descriptor.Format} num={descriptor.NumberType} tile={descriptor.TileMode} " +
+        $"type={descriptor.Type} depth={descriptor.Depth} base_array={descriptor.BaseArray} " +
+        $"levels={descriptor.BaseLevel}-{descriptor.LastLevel}/max{descriptor.MaxMip} " +
+        $"pitch={descriptor.Pitch} array_pitch={descriptor.ArrayPitch} " +
+        $"lod={descriptor.MinLod:X3}/{descriptor.MinLodWarn:X3} " +
+        $"bc={descriptor.BcSwizzle} meta=0x{descriptor.MetadataAddress:X16} " +
+        $"flags=0x{descriptor.DescriptorFlags:X6} dst=0x{descriptor.DstSelect:X3}";
+
+    private static ulong? ParseOptionalHexAddress(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var span = value.AsSpan().Trim();
+        if (span.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            span = span[2..];
+        }
+
+        return ulong.TryParse(
+            span,
+            System.Globalization.NumberStyles.HexNumber,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var address)
+            ? address
+            : null;
+    }
+
+    private static void DumpCompiledShader(
+        string stage,
+        ulong shaderAddress,
+        ulong stateFingerprint,
+        IGuestCompiledShader shader,
+        Gen5ShaderProgram program)
+    {
+        if (shader.Payload.Length == 0 ||
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_DUMP_SPIRV"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var addressFilter = Environment.GetEnvironmentVariable(
+            "SHARPEMU_DUMP_SPIRV_ADDRESS");
+        if (!string.IsNullOrWhiteSpace(addressFilter))
+        {
+            var span = addressFilter.AsSpan();
+            if (span.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                span = span[2..];
+            }
+
+            if (!ulong.TryParse(
+                    span,
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var filteredAddress) ||
+                shaderAddress != filteredAddress)
+            {
+                return;
+            }
+        }
+
+        var directory = Path.Combine(AppContext.BaseDirectory, "shader-dumps");
+        Directory.CreateDirectory(directory);
+        var name = $"{shaderAddress:X16}-{stateFingerprint:X16}.{stage}";
+        File.WriteAllBytes(
+            Path.Combine(directory, $"{name}.{shader.PayloadFileExtension}"),
+            shader.Payload);
+
+        var lines = new List<string>(program.Instructions.Count + 2)
+        {
+            $"address=0x{program.Address:X16}",
+            "pc words opcode destinations <- sources control",
+        };
+        foreach (var instruction in program.Instructions)
+        {
+            lines.Add(
+                $"0x{instruction.Pc:X4} " +
+                $"{string.Join('_', instruction.Words.Select(static word => $"{word:X8}"))} " +
+                $"{instruction.Opcode} " +
+                $"{string.Join(',', instruction.Destinations)} <- " +
+                $"{string.Join(',', instruction.Sources)} " +
+                $"{instruction.Control}");
+        }
+
+        File.WriteAllLines(Path.Combine(directory, $"{name}.ir.txt"), lines);
+    }
+
+    private static void TraceCreateShader(ulong destinationAddress, ulong headerAddress, ulong codeAddress, string detail)
+    {
+        var isOk = string.Equals(detail, "ok", StringComparison.Ordinal);
+        if (isOk &&
+            (!string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_AGC"), "1", StringComparison.Ordinal) ||
+             !ShouldTraceHotPath(ref _createShaderTraceCount)))
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[LOADER][TRACE] agc.create_shader dst=0x{destinationAddress:X16} header=0x{headerAddress:X16} code=0x{codeAddress:X16} {detail}");
+    }
+
+    // Hardware REWIND is a fixed 2-dword header + body (valid bit 31).
+    [SysAbiExport(
+        Nid = "QIXCsbipds0",
+        ExportName = "sceAgcDcbRewindGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbRewindGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 2u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    // Writes IT_REWIND. When valid=0 the submit parser suspends until
+    // sceAgcRewindPatchSetRewindState sets bit 31 on the body dword.
+    [SysAbiExport(
+        Nid = "zfcxg-ewMK8",
+        ExportName = "sceAgcDcbRewind",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbRewind(CpuContext ctx)
+    {
+        var dcb = ctx[CpuRegister.Rdi];
+        // rsi bit0 = valid; bit1 = offload_enable (PM4 body bits 31 / 24).
+        var flags = ctx[CpuRegister.Rsi];
+        var valid = (flags & 1UL) != 0;
+        var offloadEnable = (flags & 2UL) != 0;
+        if (dcb == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var body = (valid ? RewindValidBit : 0u) |
+                   (offloadEnable ? RewindOffloadEnableBit : 0u);
+        if (!TryAllocateCommandDwords(ctx, dcb, 2, out var cmd) ||
+            !ctx.TryWriteUInt32(cmd, Pm4(2, ItRewind, RZero)) ||
+            !ctx.TryWriteUInt32(cmd + 4, body))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc($"agc.dcb_rewind buf=0x{dcb:X16} cmd=0x{cmd:X16} valid={valid} offload={offloadEnable}");
+        return ReturnPointer(ctx, cmd);
+    }
+
+    // Patches the REWIND body dword's valid bit and wakes any DCB suspended on it.
+    // rdi is the packet pointer returned by sceAgcDcbRewind (header address).
+    [SysAbiExport(
+        Nid = "ziVA3whp3p4",
+        ExportName = "sceAgcRewindPatchSetRewindState",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int RewindPatchSetRewindState(CpuContext ctx)
+    {
+        var packetAddress = ctx[CpuRegister.Rdi];
+        var valid = (ctx[CpuRegister.Rsi] & 1UL) != 0;
+        if (packetAddress == 0 ||
+            (long)packetAddress < 0)
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var bodyAddress = packetAddress;
+        if (TryReadUInt32(ctx, packetAddress, out var header) &&
+            ((header >> 8) & 0xFFu) == ItRewind)
+        {
+            bodyAddress = packetAddress + sizeof(uint);
+        }
+
+        if (!TryReadUInt32(ctx, bodyAddress, out var body) ||
+            !TryWriteUInt32(
+                ctx,
+                bodyAddress,
+                valid ? body | RewindValidBit : body & ~RewindValidBit))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (!TryReadUInt32(ctx, bodyAddress, out var patched))
+        {
+            return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (valid)
+        {
+            GpuWaitRegistry.RecordProduced(CanonicalMemory(ctx.Memory), bodyAddress, patched);
+        }
+
+        TraceAgc($"agc.rewind_patch addr=0x{bodyAddress:X16} valid={valid} body=0x{patched:X8}");
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    // Matches the 4-dword INDIRECT_BUFFER packet DcbJump writes below.
+    // Returning NOT_FOUND here left callers with a null packet pointer and an
+    // immediate write AV on RenderThread.
+    [SysAbiExport(
+        Nid = "VEGu4dixjUg",
+        ExportName = "sceAgcDcbJumpGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbJumpGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 4u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "xSAR0LTcRKM",
+        ExportName = "sceAgcDcbJump",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbJump(CpuContext ctx)
+    {
+        var dcb = ctx[CpuRegister.Rdi];
+        var target = ctx[CpuRegister.Rsi];
+        var sizeDwords = (uint)ctx[CpuRegister.Rdx];
+        if (dcb == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, dcb, 4, out var cmd) ||
+            !ctx.TryWriteUInt32(cmd, Pm4(4, ItIndirectBuffer, RZero)) ||
+            !ctx.TryWriteUInt32(cmd + 4, (uint)(target & 0xFFFF_FFFFUL)) ||
+            !ctx.TryWriteUInt32(cmd + 8, (uint)((target >> 32) & 0xFFFFUL)) ||
+            !ctx.TryWriteUInt32(cmd + 12, sizeDwords & 0xFFFFF))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, cmd);
+    }
+
+    // Upstream 0.0.3 export: records the hardware COND_EXEC packet instead
+    // of leaving the import unresolved. The current packet walker treats an
+    // unhandled COND_EXEC conservatively as predicate-true.
+    [SysAbiExport(
+        Nid = "BIPexNBSGog",
+        ExportName = "sceAgcDcbCondExec",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbCondExec(CpuContext ctx)
+    {
+        var dcb = ctx[CpuRegister.Rdi];
+        var predicateAddress = ctx[CpuRegister.Rsi];
+        var execCountDwords = (uint)ctx[CpuRegister.Rdx];
+        if (dcb == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, dcb, 5, out var cmd) ||
+            !ctx.TryWriteUInt32(cmd, Pm4(5, ItCondExec, RZero)) ||
+            !ctx.TryWriteUInt32(cmd + 4, (uint)(predicateAddress & 0xFFFF_FFFFUL)) ||
+            !ctx.TryWriteUInt32(cmd + 8, (uint)(predicateAddress >> 32)) ||
+            !ctx.TryWriteUInt32(cmd + 12, 0) ||
+            !ctx.TryWriteUInt32(cmd + 16, execCountDwords & 0x3FFF))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, cmd);
+    }
+    // Matches the 4-dword INDIRECT_BUFFER packet CbBranch writes below.
+    [SysAbiExport(
+        Nid = "uZW-mqsxkrM",
+        ExportName = "sceAgcCbBranchGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbBranchGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 4u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    // How a title continues a frame whose command arena filled: it branches from
+    // the tail of the exhausted buffer into a fresh one and submits only the first
+    // buffer, leaving the driver to follow the link. Dropping this packet strands
+    // everything written after the switch -- for UE 4.27 that is the rest of the
+    // frame, including its flip and the end-of-frame labels the guest's AGC
+    // interrupt thread needs before it will trigger the backbuffer event.
+    //
+    // The branch target and its length arrive on the stack, past six register
+    // arguments (verified against a live call: the values matched the continuation
+    // buffer the title had already written into).
+    [SysAbiExport(
+        Nid = "w1KFAHVqpaU",
+        ExportName = "sceAgcCbBranch",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int CbBranch(CpuContext ctx)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        if (commandBufferAddress == 0 ||
+            !TryReadUInt64(ctx, ctx[CpuRegister.Rsp] + (2 * sizeof(ulong)), out var target) ||
+            !TryReadUInt64(ctx, ctx[CpuRegister.Rsp] + (3 * sizeof(ulong)), out var targetDwords))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, 4, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(4, ItIndirectBuffer, RZero)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, (uint)(target & 0xFFFF_FFFFUL)) ||
+            !TryWriteUInt32(ctx, commandAddress + 8, (uint)((target >> 32) & 0xFFFFUL)) ||
+            !TryWriteUInt32(ctx, commandAddress + 12, (uint)targetDwords & 0xFFFFFu))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        TraceAgc(
+            $"agc.cb_branch buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} " +
+            $"target=0x{target:X16} dwords={targetDwords}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "b-oySn+G2tE",
+        ExportName = "sceAgcAcbJumpGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbJumpGetSize(CpuContext ctx)
+    {
+        ctx[CpuRegister.Rax] = 4u * sizeof(uint);
+        return (int)ctx[CpuRegister.Rax];
+    }
+
+    [SysAbiExport(
+        Nid = "e1DFTg+Sd8U",
+        ExportName = "sceAgcAcbJump",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int AcbJump(CpuContext ctx) => DcbJump(ctx);
+
+    // Sony SetCf* range writer â€” SET_CONTEXT_REG packet (same shape as SH range).
+    [SysAbiExport(
+        Nid = "BVFg3CWU6Eo",
+        ExportName = "sceAgcDcbSetCfRegisterRangeDirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetCfRegisterRangeDirect(CpuContext ctx) =>
+        DcbSetRegisterRangeDirect(ctx, ItSetContextReg, "cf");
+
+    // Logged unresolved as LHFXRrlTPD8 during North Yankton load.
+    [SysAbiExport(
+        Nid = "LHFXRrlTPD8",
+        ExportName = "sceAgcDcbSetCxRegisterDirect",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetCxRegisterDirect(CpuContext ctx) =>
+        DcbSetRegisterDirect(ctx, ItSetContextReg, "cx");
+
+    private static int DcbSetRegisterRangeDirect(CpuContext ctx, uint op, string registerSpace)
+    {
+        var commandBufferAddress = ctx[CpuRegister.Rdi];
+        var offset = (uint)ctx[CpuRegister.Rsi];
+        var valuesAddress = ctx[CpuRegister.Rdx];
+        var valueCount = (uint)ctx[CpuRegister.Rcx];
+        if (commandBufferAddress == 0 || valueCount == 0 || valueCount > 0x3FFE)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var packetDwords = valueCount + 2;
+        if (!TryAllocateCommandDwords(ctx, commandBufferAddress, packetDwords, out var commandAddress) ||
+            !TryWriteUInt32(ctx, commandAddress, Pm4(packetDwords, op, 0)) ||
+            !TryWriteUInt32(ctx, commandAddress + 4, offset & 0xFFFFu))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        for (uint i = 0; i < valueCount; i++)
+        {
+            var value = 0u;
+            if (valuesAddress != 0 &&
+                !TryReadUInt32(ctx, valuesAddress + (i * sizeof(uint)), out value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+
+            if (!TryWriteUInt32(ctx, commandAddress + 8 + (i * sizeof(uint)), value))
+            {
+                return ReturnPointer(ctx, 0);
+            }
+        }
+
+        TraceAgc(
+            $"agc.dcb_set_{registerSpace}_range buf=0x{commandBufferAddress:X16} " +
+            $"cmd=0x{commandAddress:X16} offset=0x{offset:X4} count={valueCount}");
+        return ReturnPointer(ctx, commandAddress);
+    }
+
+    [SysAbiExport(
+        Nid = "bbFueFP+J4k",
+        ExportName = "sceAgcDcbSetPredication",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DcbSetPredication(CpuContext ctx)
+    {
+        var dcb = ctx[CpuRegister.Rdi];
+        var condition = (uint)(ctx[CpuRegister.Rsi] & 1u);
+        var operation = (uint)(ctx[CpuRegister.Rdx] & 0x7u);
+        var waitOperation = (uint)(ctx[CpuRegister.Rcx] & 1u);
+        var address = ctx[CpuRegister.R8];
+        if (dcb == 0)
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        var flags = (condition << 8) | (waitOperation << 12) | (operation << 16);
+        if (!TryAllocateCommandDwords(ctx, dcb, 4, out var cmd) ||
+            !ctx.TryWriteUInt32(cmd, Pm4(4, ItSetPredication, RZero)) ||
+            !ctx.TryWriteUInt32(cmd + 4, flags) ||
+            !ctx.TryWriteUInt32(cmd + 8, (uint)address & 0xFFFF_FFF0u) ||
+            !ctx.TryWriteUInt32(cmd + 12, (uint)(address >> 32)))
+        {
+            return ReturnPointer(ctx, 0);
+        }
+
+        return ReturnPointer(ctx, cmd);
+    }
+
+    [SysAbiExport(
+        Nid = "w6Dj1VJt5qY",
+        ExportName = "sceAgcSetPacketPredication",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int SetPacketPredication(CpuContext ctx)
+    {
+        var packetAddress = ctx[CpuRegister.Rdi];
+        var predication = ctx[CpuRegister.Rsi];
+        if (packetAddress == 0 || !TryReadUInt32(ctx, packetAddress, out var header))
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        header = (header & ~1u) | (predication == 1 ? 1u : 0u);
+        return !ctx.TryWriteUInt32(packetAddress, header)
+            ? ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT)
+            : ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    // ABI (reversed from Quake): rdi = array of DCB base addresses (u64 each),
+    // rsi = array of DCB sizes in dwords (u32 each), rdx = buffer count.
+    [SysAbiExport(
+        Nid = "6UzEidRZwkg",
+        ExportName = "sceAgcDriverSubmitMultiDcbs",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverSubmitMultiDcbs(CpuContext ctx)
+    {
+        var addressArray = ctx[CpuRegister.Rdi];
+        var sizeArray = ctx[CpuRegister.Rsi];
+        var bufferCount = (uint)ctx[CpuRegister.Rdx];
+        if (addressArray == 0 || sizeArray == 0 || bufferCount == 0 || bufferCount > 4096)
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var tracePackets = string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_LOG_AGC"), "1", StringComparison.Ordinal);
+
+        var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (gpuState.Gate)
+        {
+            Gen5ShaderScalarEvaluator.BeginGlobalMemoryReadScope();
+            try
+            {
+                // V14: index the complete submission batch before parsing the
+                // first buffer. A WAIT in buffer 0 can therefore see a producer
+                // already submitted in buffer N even though the serial parser
+                // has not reached N yet.
+                for (uint i = 0; i < bufferCount; i++)
+                {
+                    if (!ctx.TryReadUInt64(addressArray + i * 8, out var commandAddress) ||
+                        commandAddress == 0 ||
+                        !ctx.TryReadUInt32(sizeArray + i * 4, out var dwordCount) ||
+                        dwordCount == 0)
+                    {
+                        continue;
+                    }
+
+                    PreindexSubmittedProducerIntents(
+                        ctx,
+                        gpuState.Graphics,
+                        commandAddress,
+                        dwordCount,
+                        gpuState.Graphics.ActiveSubmissionId);
+                }
+
+                for (uint i = 0; i < bufferCount; i++)
+                {
+                    if (!ctx.TryReadUInt64(addressArray + i * 8, out var commandAddress) ||
+                        commandAddress == 0 ||
+                        !ctx.TryReadUInt32(sizeArray + i * 4, out var dwordCount) ||
+                        dwordCount == 0)
+                    {
+                        continue;
+                    }
+
+                    if (tracePackets)
+                    {
+                        TraceAgc(
+                            $"agc.driver_submit_multi_dcbs index={i}/{bufferCount} " +
+                            $"addr=0x{commandAddress:X16} dwords={dwordCount}");
+                    }
+
+                    ParseSubmittedDcb(ctx, gpuState, gpuState.Graphics, commandAddress, dwordCount, tracePackets);
+                }
+
+                DrainResumableDcbs(ctx, gpuState, tracePackets);
+            }
+            finally
+            {
+                Gen5ShaderScalarEvaluator.EndGlobalMemoryReadScope();
+            }
+        }
+
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "AOLcoIkQDgM",
+        ExportName = "sceAgcDriverQueryResourceRegistrationUserMemoryRequirements",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverQueryResourceRegistrationUserMemoryRequirements(CpuContext ctx)
+    {
+        var sizeAddress = ctx[CpuRegister.Rdi];
+        var resourceCount = ctx[CpuRegister.Rsi];
+        var ownerCount = ctx[CpuRegister.Rdx];
+        if (sizeAddress == 0 || resourceCount == 0 || ownerCount == 0)
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        ulong requiredSize;
+        try
+        {
+            requiredSize = checked(
+                resourceCount * ResourceRegistrationBytesPerResource +
+                ownerCount * ResourceRegistrationBytesPerOwner);
+        }
+        catch (OverflowException)
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        if (!ctx.TryWriteUInt64(sizeAddress, requiredSize))
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc(
+            $"agc.driver_query_resource_registration_memory resources={resourceCount} " +
+            $"owners={ownerCount} bytes=0x{requiredSize:X}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "F0Y42t-3e18",
+        ExportName = "sceAgcDriverInitResourceRegistration",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverInitResourceRegistration(CpuContext ctx)
+    {
+        var memoryAddress = ctx[CpuRegister.Rdi];
+        var memorySize = ctx[CpuRegister.Rsi];
+        var ownerCount = ctx[CpuRegister.Rdx];
+        if (memoryAddress == 0 || memorySize == 0 || ownerCount == 0 || ownerCount > uint.MaxValue)
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var state = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (state.Gate)
+        {
+            state.ResourceRegistrationInitialized = true;
+            state.ResourceRegistrationMemory = memoryAddress;
+            state.ResourceRegistrationMemorySize = memorySize;
+            state.ResourceRegistrationMaxOwners = (uint)ownerCount;
+            state.ResourceOwners.Clear();
+            state.RegisteredResources.Clear();
+            state.DefaultOwner = DefaultAgcOwner;
+            state.NextOwner = 1;
+            state.NextResource = 1;
+        }
+
+        TraceAgc(
+            $"agc.driver_init_resource_registration memory=0x{memoryAddress:X16} " +
+            $"bytes=0x{memorySize:X} owners={ownerCount}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "U9ueyEhSkF4",
+        ExportName = "sceAgcDriverRegisterDefaultOwner",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverRegisterDefaultOwner(CpuContext ctx)
+    {
+        var owner = (uint)ctx[CpuRegister.Rdi];
+        var state = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (state.Gate)
+        {
+            state.DefaultOwner = owner;
+        }
+
+        TraceAgc($"agc.driver_register_default_owner owner={owner}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "X-Nm5KLREeg",
+        ExportName = "sceAgcDriverRegisterOwner",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverRegisterOwner(CpuContext ctx)
+    {
+        var ownerAddress = ctx[CpuRegister.Rdi];
+        var nameAddress = ctx[CpuRegister.Rsi];
+        if (ownerAddress == 0 || nameAddress == 0 ||
+            !TryReadGuestCString(
+                ctx,
+                nameAddress,
+                ResourceRegistrationMaxNameLength,
+                out var nameBytes))
+        {
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+        }
+
+        var state = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        uint owner;
+        lock (state.Gate)
+        {
+            if (state.ResourceRegistrationInitialized &&
+                state.ResourceRegistrationMaxOwners != 0 &&
+                state.ResourceOwners.Count >= state.ResourceRegistrationMaxOwners)
+            {
+                return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+            }
+
+            owner = state.NextOwner;
+            while (owner == state.DefaultOwner || state.ResourceOwners.ContainsKey(owner))
+            {
+                owner++;
+                if (owner == 0)
+                {
+                    return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+                }
+            }
+
+            state.NextOwner = owner + 1;
+            state.ResourceOwners.Add(owner, System.Text.Encoding.UTF8.GetString(nameBytes));
+        }
+
+        if (!ctx.TryWriteUInt32(ownerAddress, owner))
+        {
+            lock (state.Gate)
+            {
+                state.ResourceOwners.Remove(owner);
+            }
+
+            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        TraceAgc(
+            $"agc.driver_register_owner out=0x{ownerAddress:X16} owner={owner} " +
+            $"name={System.Text.Encoding.UTF8.GetString(nameBytes)}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    private static int RemoveResourcesForOwner(SubmittedGpuState state, uint owner)
+    {
+        var stale = new List<uint>();
+        foreach (var (handle, resource) in state.RegisteredResources)
+        {
+            if (resource.Owner == owner)
+            {
+                stale.Add(handle);
+            }
+        }
+
+        foreach (var handle in stale)
+        {
+            state.RegisteredResources.Remove(handle);
+        }
+
+        return stale.Count;
+    }
+
+    [SysAbiExport(
+        Nid = "ZLJk9r2+2Aw",
+        ExportName = "sceAgcDriverUnregisterOwnerAndResources",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverUnregisterOwnerAndResources(CpuContext ctx)
+    {
+        var owner = (uint)ctx[CpuRegister.Rdi];
+        var state = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        int resources;
+        lock (state.Gate)
+        {
+            if (!state.ResourceOwners.Remove(owner))
+            {
+                return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+            }
+
+            resources = RemoveResourcesForOwner(state, owner);
+            state.ComputeQueues.Remove(owner);
+        }
+
+        TraceAgc($"agc.driver_unregister_owner owner={owner} resources={resources}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "SCoAN5fYlUM",
+        ExportName = "sceAgcDriverUnregisterAllResourcesForOwner",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverUnregisterAllResourcesForOwner(CpuContext ctx)
+    {
+        var owner = (uint)ctx[CpuRegister.Rdi];
+        var state = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        int resources;
+        lock (state.Gate)
+        {
+            resources = RemoveResourcesForOwner(state, owner);
+        }
+
+        TraceAgc($"agc.driver_unregister_owner_resources owner={owner} resources={resources}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    [SysAbiExport(
+        Nid = "pWLG7WOpVcw",
+        ExportName = "sceAgcDriverUnregisterResource",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgc")]
+    public static int DriverUnregisterResource(CpuContext ctx)
+    {
+        var resourceHandle = (uint)ctx[CpuRegister.Rdi];
+        var state = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (state.Gate)
+        {
+            if (!state.RegisteredResources.Remove(resourceHandle))
+            {
+                return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+            }
+        }
+
+        TraceAgc($"agc.driver_unregister_resource handle={resourceHandle}");
+        return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK);
+    }
+
+    // Tessellation-factor ring and hull-shader off-chip buffers are guest-driver
+    // configuration for on-hardware tessellation memory. Our translator handles
+    // shader execution directly, so there is no guest-side ring to program: the
+    // guest driver only needs these to report success so init proceeds. Games
+    // (e.g. Unity titles) call them during GPU setup and stall if unresolved.
+    [SysAbiExport(
+        Nid = "XlNp7jzGiPo",
+        ExportName = "sceAgcDriverSetTFRing",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverSetTFRing(CpuContext ctx)
+    {
+        var ringAddress = ctx[CpuRegister.Rdi];
+        var requestedRingSize = (uint)ctx[CpuRegister.Rsi];
+        var effectiveRingSize = System.Math.Min(requestedRingSize, V32AgcDriverTfRingMaximumSize);
+        if (ringAddress == 0 || effectiveRingSize == 0 || (ringAddress & 0xFF) != 0 || (effectiveRingSize & 3) != 0)
+        {
+            TraceAgc($"agc.driver_set_tf_ring invalid addr=0x{ringAddress:X16} requested=0x{requestedRingSize:X} effective=0x{effectiveRingSize:X}");
+            return ctx.SetReturn(V32AgcDriverErrorInvalidArgument);
+        }
+        var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+        lock (gpuState.Gate)
+        {
+            gpuState.TfRingConfigured = true;
+            gpuState.TfRingAddress = ringAddress;
+            gpuState.TfRingSize = effectiveRingSize;
+        }
+        TraceAgc($"agc.driver_set_tf_ring addr=0x{ringAddress:X16} requested=0x{requestedRingSize:X} effective=0x{effectiveRingSize:X}");
+        return ctx.SetReturn(0);
+    }
+
+    [SysAbiExport(
+        Nid = "MM4IZSEYytQ",
+        ExportName = "sceAgcDriverSetHsOffchipParam",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAgcDriver")]
+    public static int DriverSetHsOffchipParam(CpuContext ctx)
+    {
+        var requestedFirst = (uint)ctx[CpuRegister.Rdi];
+        var requestedSecond = (uint)ctx[CpuRegister.Rsi];
+        var first = (ushort)requestedFirst;
+        var second = (ushort)requestedSecond;
+        if (!_submittedGpuStates.TryGetValue(CanonicalMemory(ctx.Memory), out var gpuState))
+        {
+            TraceAgc($"agc.driver_set_hs_offchip_param unavailable first=0x{requestedFirst:X8} second=0x{requestedSecond:X8}");
+            return ctx.SetReturn(V32AgcDriverErrorInvalidArgument);
+        }
+        lock (gpuState.Gate)
+        {
+            gpuState.HsOffchipParamPayload = (uint)second | ((uint)first << 16);
+            gpuState.HsOffchipParamConfigured = true;
+        }
+        TraceAgc($"agc.driver_set_hs_offchip_param first=0x{requestedFirst:X8}->0x{first:X4} second=0x{requestedSecond:X8}->0x{second:X4}");
+        return ctx.SetReturn(0);
+    }
+}
+

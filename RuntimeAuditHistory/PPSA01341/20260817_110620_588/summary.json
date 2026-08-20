@@ -1,0 +1,19 @@
+{
+  "Schema": "SharpEmu.RuntimeDebug.V1.2.1",
+  "TitleKey": "PPSA01341",
+  "StartedUtc": "2026-08-17T14:06:20.5873032+00:00",
+  "EndedUtc": "2026-08-17T14:08:03.8355355+00:00",
+  "DurationSeconds": 103.2482323,
+  "StopReason": "user",
+  "SampleCount": 103,
+  "AverageCpuPercent": 0.08780889919991744,
+  "PeakCpuPercent": 2.8582098112751706,
+  "PeakWorkingSetMb": 290.1015625,
+  "PeakPrivateMb": 703.4375,
+  "PeakManagedMb": 57.559303283691406,
+  "MaxThreads": 109,
+  "MaxHandles": 1210,
+  "ExceptionCount": 0,
+  "TouchedFileCount": 3,
+  "BuildFingerprintSha256": "C023669F624F7CAAA373960741BB0C45C9329C851C77856FBF49D0280703C241"
+}

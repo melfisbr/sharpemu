@@ -181,28 +181,28 @@ SPDX-License-Identifier: GPL-2.0-or-later
                           Header="{Binding [Library.Context.Launch], Source={x:Static local:Localization.Instance}}"
                           FontWeight="SemiBold">
                   <MenuItem.Icon>
-                    <TextBlock Text="▶" FontSize="11" Foreground="{StaticResource AccentHoverBrush}"
+                    <TextBlock Text="â–¶" FontSize="11" Foreground="{StaticResource AccentHoverBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </MenuItem.Icon>
                 </MenuItem>
                 <MenuItem x:Name="CtxOpenFolder"
                           Header="{Binding [Library.Context.OpenFolder], Source={x:Static local:Localization.Instance}}">
                   <MenuItem.Icon>
-                    <TextBlock Text="📂" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <TextBlock Text="ðŸ“‚" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </MenuItem.Icon>
                 </MenuItem>
                 <Separator />
                 <MenuItem x:Name="CtxCopyPath"
                           Header="{Binding [Library.Context.CopyPath], Source={x:Static local:Localization.Instance}}">
                   <MenuItem.Icon>
-                    <TextBlock Text="⧉" FontSize="13" Foreground="{StaticResource MutedBrush}"
+                    <TextBlock Text="â§‰" FontSize="13" Foreground="{StaticResource MutedBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </MenuItem.Icon>
                 </MenuItem>
                 <MenuItem x:Name="CtxCopyTitleId"
                           Header="{Binding [Library.Context.CopyTitleId], Source={x:Static local:Localization.Instance}}">
                   <MenuItem.Icon>
-                    <TextBlock Text="⧉" FontSize="13" Foreground="{StaticResource MutedBrush}"
+                    <TextBlock Text="â§‰" FontSize="13" Foreground="{StaticResource MutedBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </MenuItem.Icon>
                 </MenuItem>
@@ -210,7 +210,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
                 <MenuItem x:Name="CtxGameSettings"
                           Header="{Binding [Library.Context.GameSettings], Source={x:Static local:Localization.Instance}}">
                   <MenuItem.Icon>
-                    <TextBlock Text="⚙" FontSize="13" Foreground="{StaticResource MutedBrush}"
+                    <TextBlock Text="âš™" FontSize="13" Foreground="{StaticResource MutedBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </MenuItem.Icon>
                 </MenuItem>
@@ -219,7 +219,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
                           Header="{Binding [Library.Context.Remove], Source={x:Static local:Localization.Instance}}"
                           Foreground="{StaticResource DangerHoverBrush}">
                   <MenuItem.Icon>
-                    <TextBlock Text="✕" FontSize="12" Foreground="{StaticResource DangerHoverBrush}"
+                    <TextBlock Text="âœ•" FontSize="12" Foreground="{StaticResource DangerHoverBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                   </MenuItem.Icon>
                 </MenuItem>
@@ -339,6 +339,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
                       Classes="playButton"
                       Content="Launch"
                       IsEnabled="False" />
+                      <Button x:Name="RuntimeDebugButton" Content="Debug" Click="RuntimeDebugButton_Click" Margin="8,0,0,0" />
               <Button x:Name="GameSettingsButton"
                       Classes="optionsCircle"
                       ToolTip.Tip="{Binding [Library.Context.GameSettings],
@@ -368,7 +369,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
           <StackPanel x:Name="EmptyState" Grid.RowSpan="2"
                       Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center"
                       IsVisible="False">
-            <TextBlock Text="🎮" FontSize="44" HorizontalAlignment="Center" Opacity="0.7" />
+            <TextBlock Text="ðŸŽ®" FontSize="44" HorizontalAlignment="Center" Opacity="0.7" />
             <TextBlock x:Name="EmptyStateTitle" Text="Your library is empty" FontSize="18" FontWeight="SemiBold"
                        HorizontalAlignment="Center" />
             <TextBlock x:Name="EmptyStateHint" Text="Add a folder containing your games to get started."
@@ -1264,7 +1265,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
                           <Button Grid.Column="2"
                                   x:Name="LatestCommitHashText"
                                   Classes="optionAction"
-                                  Content="Loading…"
+                                  Content="Loadingâ€¦"
                                   FontSize="12"
                                   FontFamily="Consolas,monospace"
                                   VerticalAlignment="Center"
@@ -1376,6 +1377,62 @@ SPDX-License-Identifier: GPL-2.0-or-later
                     </StackPanel>
                   </Border>
 
+                  <Border Classes="optionsGroup">
+                    <StackPanel Spacing="8">
+                      <local:SettingRow x:Name="UpscalerEnabledRow"
+                                        Classes="optionRow"
+                                        Label="{Binding [Options.Upscaler.Enabled.Label], Source={x:Static local:Localization.Instance}}"
+                                        Description="{Binding [Options.Upscaler.Enabled.Desc], Source={x:Static local:Localization.Instance}}">
+                        <ToggleSwitch x:Name="UpscalerToggle"
+                                      Classes="optionToggle" />
+                      </local:SettingRow>
+                      <local:SettingRow x:Name="UpscalerBackendRow"
+                                        Classes="optionRow"
+                                        Label="{Binding [Options.Upscaler.Backend.Label], Source={x:Static local:Localization.Instance}}"
+                                        Description="{Binding [Options.Upscaler.Backend.Desc], Source={x:Static local:Localization.Instance}}">
+                        <ComboBox x:Name="UpscalerBackendBox"
+                                  Classes="optionValue"
+                                  ItemTemplate="{StaticResource LocalizedChoiceTemplate}"
+                                  HorizontalContentAlignment="Left"
+                                  VerticalAlignment="Center" />
+                      </local:SettingRow>
+                      <local:SettingRow x:Name="UpscalerQualityRow"
+                                        Classes="optionRow"
+                                        Label="{Binding [Options.Upscaler.Quality.Label], Source={x:Static local:Localization.Instance}}"
+                                        Description="{Binding [Options.Upscaler.Quality.Desc], Source={x:Static local:Localization.Instance}}">
+                        <ComboBox x:Name="UpscalerQualityBox"
+                                  Classes="optionValue"
+                                  ItemTemplate="{StaticResource LocalizedChoiceTemplate}"
+                                  HorizontalContentAlignment="Left"
+                                  VerticalAlignment="Center" />
+                      </local:SettingRow>
+                      <local:SettingRow x:Name="UpscalerRuntimeStatusRow"
+                                        Classes="optionRow"
+                                        Label="{Binding [Options.Upscaler.RuntimeStatus.Label], Source={x:Static local:Localization.Instance}}"
+                                        Description="{Binding [Options.Upscaler.RuntimeStatus.Desc], Source={x:Static local:Localization.Instance}}">
+                        <TextBlock x:Name="UpscalerRuntimeStatusText"
+                                   Text="IDLE"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                      </local:SettingRow>
+                      <local:SettingRow x:Name="UpscalerRuntimeDetailsRow"
+                                        Classes="optionRow"
+                                        Label="{Binding [Options.Upscaler.RuntimeDetails.Label], Source={x:Static local:Localization.Instance}}"
+                                        Description="{Binding [Options.Upscaler.RuntimeDetails.Desc], Source={x:Static local:Localization.Instance}}">
+                        <StackPanel Width="440" Spacing="2" VerticalAlignment="Center">
+                          <TextBlock x:Name="UpscalerRuntimeProviderText"
+                                     Text="Requested: â€” | Active provider: â€”"
+                                     TextWrapping="Wrap" />
+                          <TextBlock x:Name="UpscalerRuntimeInputsText"
+                                     Text="Input: â€” | Color â€” | Depth â€” | Motion â€” | Jitter â€”"
+                                     TextWrapping="Wrap" />
+                          <TextBlock x:Name="UpscalerRuntimeCountersText"
+                                     Text="DLSS 0 | FSR 0 | Fallback 0 | Errors 0"
+                                     TextWrapping="Wrap" />
+                        </StackPanel>
+                      </local:SettingRow>
+                    </StackPanel>
+                  </Border>
                   <Border Classes="optionsGroup">
                     <StackPanel Spacing="8">
                       <local:SettingRow x:Name="WindowModeRow"
@@ -1564,7 +1621,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
             <Button Grid.Column="6"
                     x:Name="CloseConsoleButton"
                     Classes="ghost"
-                    Content="×"
+                    Content="Ã—"
                     AutomationProperties.Name="{Binding [Launch.Console],
                                                         Source={x:Static local:Localization.Instance}}"
                     FontSize="16"
@@ -1652,3 +1709,4 @@ SPDX-License-Identifier: GPL-2.0-or-later
     </Panel>
   </Grid>
 </Window>
+

@@ -1,0 +1,19 @@
+{
+  "name": "SharpEmu_DemonsSouls_LiveLog_NativeStderr_Fix_V74_0_88_4_SAFE",
+  "version": "74.0.88.4",
+  "titleId": "PPSA01341",
+  "safe": true,
+  "requires": [
+    "V74.0.88.3 applied source"
+  ],
+  "writes": [],
+  "fixes": [
+    "Windows PowerShell NativeCommandError on normal SharpEmu stderr",
+    "live runtime logging without redirected temp files"
+  ],
+  "preserves": [
+    "V74.0.88.3 main-menu-only Bink loop scope",
+    "V74.0.88 in-window IME",
+    "V74.0.88 uint Y/UV Bink plane support"
+  ]
+}

@@ -1,0 +1,13 @@
+            {
+                // GPU detile: no CPU staging; the compute pass writes the image directly.
+                contentFingerprint = ComputeTextureContentFingerprint(gpuSource);
+            }
+            else if (gpuDeferredTiledSourceV74088)
+            {
+                // V88: only a sparse execution-time probe is required here. The
+                // full guest backing is copied once, directly into mapped Vulkan
+                // staging below; never build the hundreds-of-MiB managed bridge.
+                contentFingerprint = ComputeDeferredTiledGuestFingerprintV74088(texture, layers);
+            }
+            else
+            {

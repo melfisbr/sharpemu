@@ -256,6 +256,14 @@ public static class SharpEmuLog
         return !IsTrueLike(raw);
     }
 
+    private static long ResolveMaxBytesFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable("SHARPEMU_LOG_MAX_BYTES");
+        return long.TryParse(raw, out var maxBytes) && maxBytes > 0
+            ? maxBytes
+            : 0;
+    }
+
     private static ISharpEmuLogSink ResolveSinkFromEnvironment()
     {
         var consoleSink = new ConsoleLogSink(
@@ -267,7 +275,11 @@ public static class SharpEmuLog
         {
             try
             {
-                var fileSink = new FileLogSink(logFilePath, append: true, includeTimestamp: true);
+                var fileSink = new FileLogSink(
+                    logFilePath,
+                    append: true,
+                    includeTimestamp: true,
+                    maxBytes: ResolveMaxBytesFromEnvironment());
                 _fileCapturesAllLevels = true;
                 return new CompositeLogSink(new MinimumLevelFilterSink(consoleSink), fileSink);
             }

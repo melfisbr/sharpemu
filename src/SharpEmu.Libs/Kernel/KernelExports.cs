@@ -14,6 +14,59 @@ public static class KernelExports
     private static ulong _coredumpHandler;
     private static ulong _coredumpHandlerContext;
 
+    // SHARPEMU_DBFZ_PTHREAD_JOIN_COOPERATIVE_V1_8_37
+    private static long _pthreadJoinCooperativeCountV1837;
+    private static long _pthreadJoinHostFallbackCountV1837;
+    private static readonly bool _traceJoinWaiterV1837 =
+        string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_DBFZ_WAITER_TRACE"), "1", StringComparison.Ordinal);
+
+    private sealed class PthreadJoinBlockWaiterV1837 : IGuestThreadBlockWaiter
+    {
+        private readonly IGuestThreadScheduler _scheduler;
+        private readonly CpuContext _context;
+        private readonly ulong _targetThread;
+        private readonly ulong _returnValueAddress;
+
+        public PthreadJoinBlockWaiterV1837(IGuestThreadScheduler scheduler, CpuContext context, ulong targetThread, ulong returnValueAddress)
+        {
+            _scheduler = scheduler;
+            _context = context;
+            _targetThread = targetThread;
+            _returnValueAddress = returnValueAddress;
+        }
+
+        public bool TryWake()
+        {
+            foreach (var thread in _scheduler.SnapshotThreads())
+            {
+                if (thread.ThreadHandle == _targetThread)
+                {
+                    return string.Equals(thread.State, "Exited", StringComparison.Ordinal) ||
+                        string.Equals(thread.State, "Faulted", StringComparison.Ordinal);
+                }
+            }
+            return true;
+        }
+
+        public int Resume()
+        {
+            if (!_scheduler.TryJoinThread(_context, _targetThread, out var returnValue, out var error))
+            {
+                return string.Equals(error, "thread cannot join itself", StringComparison.Ordinal)
+                    ? (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT
+                    : (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
+            }
+            if (_returnValueAddress != 0 && !_context.TryWriteUInt64(_returnValueAddress, returnValue))
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+            }
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+    }
+
+    private static bool ShouldTraceJoinWaiterV1837(long count) =>
+        _traceJoinWaiterV1837 && (count <= 32 || (count & (count - 1)) == 0);
+
     private readonly record struct CxaDestructorEntry(
         ulong Function,
         ulong Argument,
@@ -391,6 +444,49 @@ public static int InitEnv(CpuContext ctx)
         {
             Console.Error.WriteLine(
                 $"[LOADER][TRACE] pthread_join: thread=0x{threadId:X16} retval_out=0x{returnValueAddress:X16}");
+        }
+
+        if (GuestThreadExecution.CanCooperativelyBlockCurrentThread() &&
+            GuestThreadExecution.Scheduler is { } cooperativeScheduler &&
+            threadId != GuestThreadExecution.CurrentGuestThreadHandle)
+        {
+            var targetKnownV1837 = false;
+            var targetPendingV1837 = false;
+            foreach (var snapshotV1837 in cooperativeScheduler.SnapshotThreads())
+            {
+                if (snapshotV1837.ThreadHandle != threadId)
+                {
+                    continue;
+                }
+                targetKnownV1837 = true;
+                targetPendingV1837 = !string.Equals(snapshotV1837.State, "Exited", StringComparison.Ordinal) &&
+                    !string.Equals(snapshotV1837.State, "Faulted", StringComparison.Ordinal);
+                break;
+            }
+            if (targetKnownV1837 && targetPendingV1837)
+            {
+                var joinWakeKeyV1837 = $"pthread_join:{threadId:X16}";
+                if (GuestThreadExecution.RequestCurrentThreadBlock(
+                        ctx,
+                        "scePthreadJoin",
+                        joinWakeKeyV1837,
+                        new PthreadJoinBlockWaiterV1837(cooperativeScheduler, ctx, threadId, returnValueAddress)))
+                {
+                    var countV1837 = Interlocked.Increment(ref _pthreadJoinCooperativeCountV1837);
+                    if (ShouldTraceJoinWaiterV1837(countV1837))
+                    {
+                        Console.Error.WriteLine($"[DBFZ-WAIT-1837] join_coop n={countV1837} waiter=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} target=0x{threadId:X16}");
+                    }
+                    ctx[CpuRegister.Rax] = 0;
+                    return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+                }
+            }
+        }
+
+        var hostJoinV1837 = Interlocked.Increment(ref _pthreadJoinHostFallbackCountV1837);
+        if (ShouldTraceJoinWaiterV1837(hostJoinV1837))
+        {
+            Console.Error.WriteLine($"[DBFZ-WAIT-1837] join_host n={hostJoinV1837} waiter=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} target=0x{threadId:X16}");
         }
 
         var returnValue = 0UL;

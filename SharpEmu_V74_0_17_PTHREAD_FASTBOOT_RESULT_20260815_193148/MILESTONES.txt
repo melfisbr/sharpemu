@@ -1,7 +1,0 @@
-﻿5,0s pthread_gate_disabled
-15,4s observed_tbb_limit=2
-46,0s main_loop [MSG-Init] Starting main loop: 36.8451s
-81,8s import_progress_8388608 [LOADER][TRACE] dbfz.import_progress.v1892 import=8388608 nid=Q3VBxCXhUHs
-81,8s gather_complete [MSG-Init] ResourcePool::GatherResourceFileInfo() took 00:01:06.87
-158,5s import_progress_16777216 [LOADER][TRACE] dbfz.import_progress.v1892 import=16777216 nid=Q3VBxCXhUHs
-388,7s natural_1 ps_studios_logo.bk2

@@ -1,0 +1,9 @@
+V74.0.87.1
+- Fix V87 locator: scan all GATE_OWNER_WAIT_DRAIN occurrences, not only IndexOf(first).
+- Replace naive brace counting with lexical C# brace pairing that ignores comments/strings/chars/raw strings.
+- Add 4-marker offline regression fixture and transform/idempotence self-test to RUN_1.
+- Add current-checkout read-only structural dry-run to RUN_1; prints candidates before any source write.
+- Remove rigid V85 field anchor; V87.1 fields are inserted structurally immediately before the located V72 method.
+- RUN_3 commits the same in-memory transform already exercised by RUN_1 and verifies method identity after write.
+- Build/runtime capture merges native stderr in cmd.exe before PowerShell and writes UTF-8.
+- Keep automatic rollback on apply/build failure.

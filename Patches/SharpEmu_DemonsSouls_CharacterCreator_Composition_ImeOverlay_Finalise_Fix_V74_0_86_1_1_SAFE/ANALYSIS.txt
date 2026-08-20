@@ -1,0 +1,24 @@
+SharpEmu Demon's Souls V74.0.86.1.1 - structural repair
+
+Why V74.0.86.1 failed:
+- The current accumulated Presenter already contains V74.0.84.2.1 frame ownership.
+- Therefore PumpHostMovieFrame no longer contains the old four-line assignment block.
+- V74.0.86.1 incorrectly tried to insert the same frame-ownership fix a second time and failed with Pump frame assignment anchor count=0.
+- SAFE rollback restored the source, so V74.0.86.1 was not installed.
+
+New source/runtime finding:
+- The supplied V74.0.86 runtime already logs UI_BINK_FRAME_SNAPSHOT, proving V74.0.84.2.1 frame ownership is active.
+- The same runtime has zero UI_BINK_PLANE_LEARN / UI_BINK_STICKY_PLANE messages.
+- In FindHostMovieTextureBindings, the rediscovery path returns new HostMovieTextureBindings(bestLumaIndex,bestChromaIndex) directly.
+- That bypasses RememberHostMovieTextureMappings(), which is exactly where V74.0.84.2.1 learns Y/UV addresses.
+- V74.0.86.1.1 changes only that rediscovery return so every newly discovered Bluepoint pair passes through Remember(), allowing sticky-plane protection to become functional.
+
+Preserved:
+- V74.0.84.2.1 presenter-owned movie frame snapshot
+- V74.0.84.2.1 sticky plane helper
+- V74.0.86 typed DCC guard
+- V74.0.86 IME lifecycle
+- RAD/NIHAV routing already working
+
+Also installs:
+- larger OSK-style host IME overlay from the V74.0.86.1 package.

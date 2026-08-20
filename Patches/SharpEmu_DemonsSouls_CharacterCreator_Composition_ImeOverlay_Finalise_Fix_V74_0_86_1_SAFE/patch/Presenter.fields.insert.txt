@@ -1,0 +1,11 @@
+        // SHARPEMU_V74_0_86_1_DS_UI_BINK_CHARACTER_CREATOR_COMPOSITE
+        // Character Creator and NEW GAME rely on host-decoded UI Bink planes
+        // plus live guest 3D/UI rendering. Keep a presenter-owned frame snapshot
+        // and learn the valid sampled Y/UV planes so we never substitute raw
+        // recycled guest storage or occlude the character-scene render targets.
+        private byte[]? _v740861OwnedUiBinkFramePixels;
+        private readonly HashSet<ulong> _v740861LearnedUiBinkLumaAddresses = new();
+        private readonly HashSet<ulong> _v740861LearnedUiBinkChromaAddresses = new();
+        private long _v740861UiBinkFrameSnapshotCount;
+        private long _v740861UiBinkStickyPlaneCount;
+        private long _v740861UiBinkPlaneLearnCount;

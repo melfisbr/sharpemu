@@ -1,3 +1,0 @@
-SharpEmu V72.4.3.2.31.7.8 SAFE
-Demon's Souls RAD guest-media handoff / EBOOT-owned attract sequence
-Preserves V31.7.7 RAD embedded host, zero-delay media anchor, and V31.7.6 hard gate.

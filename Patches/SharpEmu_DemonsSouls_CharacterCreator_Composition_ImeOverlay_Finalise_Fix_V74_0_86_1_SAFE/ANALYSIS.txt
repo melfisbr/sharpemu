@@ -1,0 +1,14 @@
+SharpEmu Demon's Souls V74.0.86.1 - Character Creator composite + OSK overlay + Finalise stabilization package
+
+Observed from the supplied evidence/logs:
+- The V74.0.86 typed-DCC guard installed, but result telemetry showed typed reject hits without any exact replacement. That means the bad cross-format substitution was blocked, but the renderer still fell back to the wrong path for some Character Creator / NEW GAME surfaces.
+- The visual symptom (green/magenta garbage with menu text still readable) matches the older UI-Bink sampled-plane integrity issue: the guest sees the movie-backed Y/UV planes asynchronously while the presenter may sample recycled raw storage or a partial plane pair.
+- The simple host text dialog proved the IME pipeline is now functional, but the UX is far from the expected PS-style on-screen keyboard.
+- The crash after Finalise is a guest access violation, but it occurs after Character Creator / UI composition has already been in a bad state. This package therefore first hardens the Character Creator composition path and records whether the post-finalise access violation disappears.
+
+V74.0.86.1 corrections:
+1. UI-Bink frame ownership restored on top of the V74.0.86 baseline.
+2. Sticky learned sampled-plane substitution restored for Demon's Souls UI-Bink composition.
+3. Host movie substitution kept scoped to learned Y/UV planes only, preserving the live 3D scene / character model render targets.
+4. IME host panel replaced with a larger OSK-style overlay containing a visible text field, keyboard grid, backspace, clear and Done buttons.
+5. Test/runtime report now explicitly records whether Finalise still hits an access violation.

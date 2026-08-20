@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V74_0_67_2_13_1_DLSS_RAM_MultiCacheAnchorFix_SAFE\native\src\provider_dlss_ngx_vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V74_0_67_2_13_1_DLSS_RAM_MultiCacheAnchorFix_SAFE\native\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{6AA75A5D-96EC-301B-B809-F6EFCD4A53C6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

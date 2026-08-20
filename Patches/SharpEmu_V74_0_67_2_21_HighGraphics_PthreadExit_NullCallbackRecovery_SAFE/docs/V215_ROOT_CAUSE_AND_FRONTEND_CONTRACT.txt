@@ -1,0 +1,28 @@
+V74.0.67.2.15
+
+Confirmed DLSS state:
+- native NGX Evaluate succeeds;
+- selected=dlss;
+- state=active;
+- provider=1;
+- caps=0x9;
+- dispatch_failures=0;
+- dispatch counter advances into the hundreds;
+- process exits code 0.
+
+Remaining RAM symptom:
+- V74.0.64 cache=2/2;
+- 335,544,320-byte snapshots;
+- ttl_ms remains 30000;
+- alloc2s_mb can remain >1.5 GiB.
+
+V2.15:
+1. Preserve the V74.0.64 bounded two-entry cache.
+2. Preserve V2.13 content identity.
+3. Redirect post-declaration V74.0.64 TTL consumers to a new effective TTL.
+4. Effective TTL re-reads SHARPEMU_LARGE_ARRAY_SNAPSHOT_REUSE_MS and permits
+   1,000..120,000 ms.
+5. Frontend launch explicitly sets 120,000 ms and pre-composite.
+6. Provider path remains auto-discovered; no manual native path is required.
+7. RUN_5 removes forced shell overrides before opening the GUI to validate the
+   actual Rendering-menu path.

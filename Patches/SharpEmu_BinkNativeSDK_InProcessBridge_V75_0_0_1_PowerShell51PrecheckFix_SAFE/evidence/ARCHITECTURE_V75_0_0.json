@@ -1,0 +1,29 @@
+{
+  "goal": "in-process Bink SDK playback without radvideo64.exe when licensed SDK adapter is available",
+  "managed": {
+    "stable_abi_loader": "BinkNativeSdkAbiV7500.cs",
+    "decoder": "RadBinkNativeSdkDecoderV7500.cs",
+    "mode": "native-rad",
+    "default_rad_auto_prefers_native_when_abi_valid": true,
+    "fallback": "external RAD",
+    "buffers": 3,
+    "clock": {
+      "embedded_audio_movies": "native adapter clock",
+      "demons_souls_attract": "deterministic AT9 WaveOut cursor when available"
+    }
+  },
+  "native": {
+    "dll": "SharpEmu.BinkNative.dll",
+    "abi_version": "0x00010000",
+    "uses_sdk_header": "bink.h",
+    "decode": "BinkWait -> BinkDoFrame -> BinkCopyToBuffer -> BinkNextFrame",
+    "embedded_audio_provider": "BinkSoundUseXAudio2(0) only if supplied bink.h exposes it",
+    "gpu_zero_copy": false,
+    "bgra_software_copy": true
+  },
+  "safety": {
+    "no_proprietary_sdk_files_in_package": true,
+    "embedded_audio_requires_active_sdk_provider": true,
+    "native_failure_falls_back_external_rad": true
+  }
+}

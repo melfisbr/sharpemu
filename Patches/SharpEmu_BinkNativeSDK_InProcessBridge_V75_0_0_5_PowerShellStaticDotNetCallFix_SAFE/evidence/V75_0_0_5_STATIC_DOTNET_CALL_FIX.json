@@ -1,0 +1,19 @@
+{
+  "package_version": "V75.0.0.5",
+  "runtime_implementation_version": "V75.0.0",
+  "failure_stage": "RUN_2_PRECHECK; RUN_3 stopped by same PRECHECK",
+  "repository_mutated": false,
+  "powershell_error": "Environment.GetEnvironmentVariable is not recognized as a cmdlet/function/program",
+  "root_cause": "C#-style static .NET invocation used as executable PowerShell",
+  "correct_syntax": "[Environment]::GetEnvironmentVariable(...)",
+  "fixed_executable_scripts": [
+    "precheck.ps1",
+    "build_native_adapter.ps1"
+  ],
+  "intentionally_unchanged_text": {
+    "script": "patch_host_movie_bridge_v7500.ps1",
+    "reason": "Environment.GetEnvironmentVariable appears there inside generated C# source and is correct C# syntax"
+  },
+  "new_validator_guard": "PowerShell AST CommandAst detection",
+  "functional_csharp_cpp_changed": false
+}

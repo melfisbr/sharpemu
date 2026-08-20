@@ -1,0 +1,24 @@
+[V74.0.88.1] Deferred Tiled Direct Staging diagnostic
+ExitCode=0
+runtime_log_present=True
+first_frame=1
+device_lost=0
+deferred_tiled_array_max_counter=2048
+deferred_tiled_single_max_counter=5
+direct_guest_staging_max_counter=256
+direct_guest_staging_fallback_max_counter=0
+direct_guest_staging_total_mb=2296
+legacy_array_cache_owner_logged=0
+legacy_large_texture_snapshot_logged=2
+gate_quantum_yield_max_counter=4096
+gate_quantum_elapsed_us_all: count=260 avg=43781,777 p50=3122,200 p90=100114,600 max=1294682,300
+gate_wait_ms_all: count=1245 avg=48,693 p50=26,459 p90=115,991 max=762,091
+gate_wait_ms_steady_le4000: count=1245 avg=48,693 p50=26,459 p90=115,991 max=762,091
+slow_wait_ms_all: count=10 avg=2731,283 p50=3337,622 p90=3347,778 max=3349,857
+slow_wait_ms_steady_le4000: count=10 avg=2731,283 p50=3337,622 p90=3347,778 max=3349,857
+payload_batch_submit_max_counter=16384
+mem_max_alloc2s_mb=1082
+mem_max_working_mb=6444
+mem_max_private_mb=14027
+source_defaults: defer_large_tiled=on threshold_mb=8; SHARPEMU_DEFER_LARGE_TILED_GUEST_READ=0 restores legacy
+target_frame_budget_60fps_ms=16.667

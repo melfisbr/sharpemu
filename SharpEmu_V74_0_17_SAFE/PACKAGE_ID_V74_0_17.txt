@@ -1,4 +1,0 @@
-SharpEmu V74.0.17 SAFE
-Demon's Souls FastBoot - DBFZ pthread opaque-owner hot-path isolation
-Cumulative prerequisites: V74.0.15 large-array single-flight + V74.0.16.1 DCC history source.
-Runtime test disables the ineffective DCC history and disables only the DBFZ-specific opaque-owner shadow synchronization.

@@ -1,2 +1,0 @@
-        var count = Interlocked.Decrement(ref _activeHostMovieDecoders);
-        if (count < 0)

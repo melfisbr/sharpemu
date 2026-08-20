@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Diagnostics;
@@ -41,7 +41,7 @@ internal static class BinkDemonSoulsIntroAudioV7243227
     private const uint SndAsync = 0x0001;
     private const uint SndNodefault = 0x0002;
     private const uint SndFilename = 0x00020000;
-    private const double AttractOffsetSeconds = 12.0;
+    private static double AttractOffsetSeconds => DemonSoulsOpeningTimelineProfileV31716.LogoIntroDurationSeconds;
 
     private static readonly object Gate = new();
 
@@ -54,9 +54,398 @@ internal static class BinkDemonSoulsIntroAudioV7243227
     private static string? _activeMovie;
     private static TimelineMode _activeMode;
     private static bool _timelineStarted;
+    private static bool _timelineArmed;
 
+    // SHARPEMU_DEMONS_STARTUP_GUEST_AUDIO_OWNERSHIP_V1_1_6
+    // Host RAD owns PS Studios audio; the external deterministic WaveOut
+    // sidecar owns attract audio. Guest AudioOut/AudioOut2 must remain alive
+    // for scheduling semantics but must not reach a host audio device while
+    // either startup host owner is active.
+    private static int _v116GuestAudioMuteActive;
+    private static long _v116GuestAudioMuteUntilTick;
+    private static int _v116GuestAudioMuteGeneration;
+
+    // SHARPEMU_DEMONS_POST_ATTRACT_TRANSITION_FENCE_V1_1_12
+    //
+    // The startup owner latch intentionally keeps guest AudioOut/AudioOut2
+    // alive while RAD/the attract WaveOut owns host sound. Attract teardown
+    // used to clear that latch immediately, making guest PCM that accumulated
+    // during the movie audible on the first title frames.
+    //
+    // Keep only a short silent pacing window after attract. No guest thread,
+    // queue, or game state is stopped.
+    private static long _v1112PostAttractGuestDrainUntilTick;
+    private static long _v1112LastAttractStopArmTick;
+    private static int _v1112PostAttractBoundaryPending;
+
+    // SHARPEMU_DEMONS_POST_ATTRACT_TITLE_CHAIN_AUDIO_FENCE_V1_1_13
+    // Keep guest AudioOut/AudioOut2 silent for the entire zero-track
+    // post-attract title chain. Guest threads/pacing continue normally.
+    private static int _v1113PostAttractTitleChainGuestMuteActive;
+    private static long _v1113TitleChainHoldCount;
+
+    private static int ResolvePostAttractGuestDrainMillisecondsV1112()
+    {
+        var configured =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_POST_ATTRACT_GUEST_DRAIN_MS");
+
+        return int.TryParse(configured, out var parsed)
+            ? Math.Clamp(parsed, 250, 5_000)
+            : 1_500;
+    }
+
+    // SHARPEMU_DEMONS_TITLE_LOOP_AUDIO_RELEASE_V1_1_14
+    //
+    // V1.1.13 correctly proved that the attract bleed came through guest
+    // AudioOut/AudioOut2, but it held that mute through logo_intro_loop.
+    // Runtime telemetry now proves logo_intro_loop has host_audio_probe=False
+    // and guest_audio_owner=True, with non-zero AudioOut2 peaks while muted.
+    //
+    // Correct ownership:
+    //   attract end  -> arm guest discard
+    //   logo_intro   -> keep guest discard active
+    //   intro loop   -> stop any old host WaveOut, then release guest audio
+    //                   before the loop starts
+    //   other movie  -> ensure title-chain latch is released
+    internal static void NotifyMovieAttachV1113(
+        string moviePath)
+    {
+        if (string.IsNullOrWhiteSpace(moviePath))
+        {
+            return;
+        }
+
+        var fileName =
+            Path.GetFileName(moviePath);
+
+        if (string.Equals(
+                fileName,
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (string.Equals(
+                fileName,
+                "logo_intro.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // Keep consuming/discarding guest submissions while the one-shot
+            // intro movie runs. This is what removes residual attract PCM
+            // without stopping guest pacing.
+            _ = BinkDeterministicWavePlayerV317152.Stop();
+            _ = PlaySound(null, IntPtr.Zero, 0);
+
+            var wasActive = Interlocked.Exchange(
+                ref _v1113PostAttractTitleChainGuestMuteActive,
+                1);
+
+            var hold = Interlocked.Increment(
+                ref _v1113TitleChainHoldCount);
+
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.14] title_intro_guest_drain_hold " +
+                $"n={hold} file='{fileName}' " +
+                $"already_active={wasActive != 0} " +
+                "waveout_stopped=True playsound_stopped=True " +
+                "guest_audio_muted=True guest_pacing_preserved=True");
+            return;
+        }
+
+        if (string.Equals(
+                fileName,
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // The loop has no host-audio probe in the current title path:
+            // its audio owner is the guest. Do not carry the attract mute into
+            // this movie. Re-stop any stale host owner first, then release the
+            // V1.1.13 lifecycle latch. The older V1.1.12 1500 ms drain remains
+            // authoritative only if an unusually fast skip reaches the loop
+            // before that minimum discard window has elapsed.
+            _ = BinkDeterministicWavePlayerV317152.Stop();
+            _ = PlaySound(null, IntPtr.Zero, 0);
+
+            var wasActive = Interlocked.Exchange(
+                ref _v1113PostAttractTitleChainGuestMuteActive,
+                0);
+
+            var now =
+                Environment.TickCount64;
+
+            var attractStopTick =
+                Volatile.Read(
+                    ref _v1112LastAttractStopArmTick);
+
+            var drainUntil =
+                Volatile.Read(
+                    ref _v1112PostAttractGuestDrainUntilTick);
+
+            var elapsedSinceAttract =
+                attractStopTick > 0 &&
+                now >= attractStopTick
+                    ? now - attractStopTick
+                    : -1;
+
+            var residualDrainMs =
+                drainUntil > now
+                    ? drainUntil - now
+                    : 0;
+
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.14] title_loop_guest_audio_release " +
+                $"file='{fileName}' latch_was_active={wasActive != 0} " +
+                $"elapsed_since_attract_ms={elapsedSinceAttract} " +
+                $"residual_v1112_drain_ms={residualDrainMs} " +
+                "waveout_stopped=True playsound_stopped=True " +
+                "host_audio_probe=False guest_audio_owner=True " +
+                "guest_audio_release_requested=True");
+            return;
+        }
+
+        if (Interlocked.Exchange(
+                ref _v1113PostAttractTitleChainGuestMuteActive,
+                0) != 0)
+        {
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.14] title_intro_guest_drain_released " +
+                $"next='{fileName}' " +
+                "guest_audio_restored=True reason=left-post-attract-intro");
+        }
+    }
+    private static void ArmPostAttractTransitionFenceV1112(
+        string reason)
+    {
+        if (Interlocked.Exchange(
+                ref _v1113PostAttractTitleChainGuestMuteActive,
+                1) == 0)
+        {
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.13] title_chain_guest_mute_armed " +
+                $"reason='{reason}' " +
+                "hold=logo_intro+logo_intro_loop " +
+                "audioout=True audioout2=True guest_pacing_preserved=True");
+        }
+        var now = Environment.TickCount64;
+        var last = Volatile.Read(
+            ref _v1112LastAttractStopArmTick);
+
+        // EndAtNominalMovieBoundary and RadBinkExternalPlayback.Dispose can
+        // converge on the same movie end. Never re-arm after the next title
+        // movie has already consumed the boundary.
+        if (last > 0 &&
+            now >= last &&
+            now - last < 5_000)
+        {
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.12] post_attract_duplicate_stop_ignored " +
+                $"reason='{reason}' elapsed_ms={now - last}");
+            return;
+        }
+
+        Volatile.Write(
+            ref _v1112LastAttractStopArmTick,
+            now);
+
+        var drainMs =
+            ResolvePostAttractGuestDrainMillisecondsV1112();
+
+        var untilTick = checked(now + drainMs);
+
+        Volatile.Write(
+            ref _v1112PostAttractGuestDrainUntilTick,
+            untilTick);
+
+        Interlocked.Exchange(
+            ref _v1112PostAttractBoundaryPending,
+            1);
+
+        // Exact host-owner teardown. The short guest drain below is separate:
+        // it consumes/discards stale guest PCM while preserving guest pacing.
+        _ = BinkDeterministicWavePlayerV317152.Stop();
+        _ = PlaySound(null, IntPtr.Zero, 0);
+
+        Console.Error.WriteLine(
+            "[BINK-AUDIO-OWNER][V1.1.12] post_attract_guest_drain_armed " +
+            $"reason='{reason}' drain_ms={drainMs} until_tick={untilTick} " +
+            "waveout_stopped=True playsound_stopped=True " +
+            "audioout=True audioout2=True guest_pacing_preserved=True");
+    }
+
+    private static bool TryConsumePostAttractHostAudioBlockV1112(
+        string fileName)
+    {
+        if (Volatile.Read(
+                ref _v1112PostAttractBoundaryPending) == 0)
+        {
+            return false;
+        }
+
+        var isPostAttractTitle =
+            string.Equals(
+                fileName,
+                "logo_intro.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "main_menu.bk2",
+                StringComparison.OrdinalIgnoreCase);
+
+        if (!isPostAttractTitle)
+        {
+            return false;
+        }
+
+        if (Interlocked.Exchange(
+                ref _v1112PostAttractBoundaryPending,
+                0) == 0)
+        {
+            return false;
+        }
+
+        lock (Gate)
+        {
+            _ = BinkDeterministicWavePlayerV317152.Stop();
+            _ = PlaySound(null, IntPtr.Zero, 0);
+
+            _activeRoot = null;
+            _activeMovie = null;
+            _activeMode = TimelineMode.None;
+            _timelineStarted = false;
+        }
+
+        Console.Error.WriteLine(
+            "[BINK-AUDIO-OWNER][V1.1.12] post_attract_host_audio_blocked " +
+            $"next='{fileName}' waveout_stopped=True " +
+            "playsound_stopped=True nihav_audio=False ffmpeg_audio=False " +
+            "guest_drain_preserved=True");
+
+        return true;
+    }
+    internal static bool IsStartupGuestAudioMuteActiveV116()
+    {
+        // V1.1.13: title-chain ownership is lifecycle-based, not timer-based.
+        if (Volatile.Read(
+                ref _v1113PostAttractTitleChainGuestMuteActive) != 0)
+        {
+            return true;
+        }
+        var v1112DrainUntil =
+            Volatile.Read(
+                ref _v1112PostAttractGuestDrainUntilTick);
+
+        if (v1112DrainUntil > 0)
+        {
+            var v1112Now =
+                Environment.TickCount64;
+
+            if (v1112Now <= v1112DrainUntil)
+            {
+                return true;
+            }
+
+            if (Interlocked.CompareExchange(
+                    ref _v1112PostAttractGuestDrainUntilTick,
+                    0,
+                    v1112DrainUntil) == v1112DrainUntil)
+            {
+                Console.Error.WriteLine(
+                    "[BINK-AUDIO-OWNER][V1.1.12] post_attract_guest_drain_released " +
+                    $"elapsed_tick={v1112Now} guest_audio_restored=True");
+            }
+        }
+        if (Volatile.Read(ref _v116GuestAudioMuteActive) == 0)
+        {
+            return false;
+        }
+
+        var untilTick = Volatile.Read(
+            ref _v116GuestAudioMuteUntilTick);
+
+        if (Environment.TickCount64 <= untilTick)
+        {
+            return true;
+        }
+
+        if (Interlocked.Exchange(
+                ref _v116GuestAudioMuteActive,
+                0) != 0)
+        {
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.6] guest_mute_released " +
+                "reason=timeout guest_audio_restored=True");
+        }
+
+        return false;
+    }
+
+    private static void ArmStartupGuestAudioMuteV116(
+        string reason,
+        int timeoutMilliseconds)
+    {
+        var timeout = Math.Clamp(
+            timeoutMilliseconds,
+            10_000,
+            360_000);
+
+        var untilTick =
+            Environment.TickCount64 +
+            timeout;
+
+        Volatile.Write(
+            ref _v116GuestAudioMuteUntilTick,
+            untilTick);
+        Interlocked.Exchange(
+            ref _v116GuestAudioMuteActive,
+            1);
+
+        var generation = Interlocked.Increment(
+            ref _v116GuestAudioMuteGeneration);
+
+        Console.Error.WriteLine(
+            "[BINK-AUDIO-OWNER][V1.1.6] guest_mute_armed " +
+            $"generation={generation} reason='{reason}' " +
+            $"timeout_ms={timeout} until_tick={untilTick} " +
+            "audioout=True audioout2=True");
+    }
+
+    private static void ReleaseStartupGuestAudioMuteV116(
+        string reason)
+    {
+        Volatile.Write(
+            ref _v116GuestAudioMuteUntilTick,
+            0);
+
+        if (Interlocked.Exchange(
+                ref _v116GuestAudioMuteActive,
+                0) != 0)
+        {
+            Console.Error.WriteLine(
+                "[BINK-AUDIO-OWNER][V1.1.6] guest_mute_released " +
+                $"reason='{reason}' guest_audio_restored=True");
+        }
+    }
     public static AttachDisposition PrepareAttach(string moviePath)
     {
+        var v1112PostAttractFile =
+            string.IsNullOrWhiteSpace(moviePath)
+                ? string.Empty
+                : Path.GetFileName(moviePath);
+
+        if (TryConsumePostAttractHostAudioBlockV1112(
+                v1112PostAttractFile))
+        {
+            // Returning NewTimeline makes BinkHostAudioBridge stop any generic
+            // audio extraction for this title transition. Video playback is
+            // untouched and remains owned by the selected movie backend.
+            return AttachDisposition.NewTimeline;
+        }
         if (!OperatingSystem.IsWindows() ||
             string.Equals(
                 Environment.GetEnvironmentVariable(
@@ -83,6 +472,9 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 "ps_studios_logo.bk2",
                 StringComparison.OrdinalIgnoreCase))
         {
+            ArmStartupGuestAudioMuteV116(
+                "ps-studios-rad-owner",
+                300_000);
             lock (Gate)
             {
                 _ = EnsureFullTaskLocked(root, music, sfx, vo);
@@ -106,6 +498,7 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 _activeMovie = moviePath;
                 _activeMode = TimelineMode.Full;
                 _timelineStarted = false;
+                _timelineArmed = false;
 
                 _ = EnsureFullTaskLocked(root, music, sfx, vo);
                 _ = EnsureTailTaskLocked(root, music, sfx, vo);
@@ -122,6 +515,9 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 "attract_movie.bk2",
                 StringComparison.OrdinalIgnoreCase))
         {
+            ArmStartupGuestAudioMuteV116(
+                "attract-waveout-owner",
+                180_000);
             // V72.4.3.2.28 ATTRACT_AUDIO_RESYNC
             // Never continue wall-clock audio across a slow logo decoder.
             // Start the cached +12 s tail on attract_movie's own first frame.
@@ -131,6 +527,7 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 _activeMovie = moviePath;
                 _activeMode = TimelineMode.TailFrom12;
                 _timelineStarted = false;
+                _timelineArmed = false;
                 _ = EnsureTailTaskLocked(root, music, sfx, vo);
             }
 
@@ -144,11 +541,254 @@ internal static class BinkDemonSoulsIntroAudioV7243227
         return AttachDisposition.NotHandled;
     }
 
-    public static bool NotifyPresentationStarted(string moviePath)
+    // V31.7.18_PREPARED_ATTRACT_WAVE_FOR_BINKMIX
+    // Returns the same sample-exact V31.7.16 tail that the old waveOut
+    // sidecar used, but does not start a host audio device.  RAD binkmix will
+    // encode this WAV as an audio track in a cached derivative of the BK2.
+    public static bool TryGetPreparedAttractWaveForBinkMix(
+        string moviePath,
+        int timeoutMilliseconds,
+        out string? wavePath)
+    {
+        wavePath = null;
+
+        if (!OperatingSystem.IsWindows() ||
+            !string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            !TryResolveAssets(
+                moviePath,
+                out var root,
+                out var music,
+                out var sfx,
+                out var vo))
+        {
+            return false;
+        }
+
+        Task<string?> task;
+        lock (Gate)
+        {
+            task = EnsureTailTaskLocked(root, music, sfx, vo);
+        }
+
+        try
+        {
+            var timeout = Math.Clamp(
+                timeoutMilliseconds,
+                1_000,
+                180_000);
+
+            if (!task.Wait(timeout))
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_attract_exact_wave_wait_failed " +
+                    $"reason=timeout timeout_ms={timeout}");
+                return false;
+            }
+
+            wavePath = task.GetAwaiter().GetResult();
+            if (!IsPlayableWave(wavePath))
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_attract_exact_wave_wait_failed " +
+                    "reason=wave-unavailable");
+                wavePath = null;
+                return false;
+            }
+
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_attract_exact_wave_for_binkmix " +
+                $"wav='{wavePath}' source=V31.7.20-per-stem-aligned");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                "[LOADER][WARN] bink2.ds_attract_exact_wave_wait_failed " +
+                $"reason=exception type={ex.GetType().Name} " +
+                $"message='{Sanitize(ex.Message)}'");
+            wavePath = null;
+            return false;
+        }
+    }
+    // V31.7.21_VISIBLE_FRAME_AUDIO_LATCH
+    // Prepare the deterministic WaveOut program while RAD is still hidden, but
+    // do not restart the device.  The actual start is released only after the
+    // renderer HWND has been shown.
+    public static bool NotifyPresentationArmed(string moviePath)
     {
         Task<string?>? task;
         TimelineMode mode;
         string? root;
+
+        lock (Gate)
+        {
+            if (!string.Equals(
+                    moviePath,
+                    _activeMovie,
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(_activeRoot))
+            {
+                return false;
+            }
+
+            if (_timelineStarted || _timelineArmed)
+            {
+                return true;
+            }
+
+            mode = _activeMode;
+            root = _activeRoot;
+            task = mode switch
+            {
+                TimelineMode.Full => FullTasks.TryGetValue(root, out var full) ? full : null,
+                TimelineMode.TailFrom12 => TailTasks.TryGetValue(root, out var tail) ? tail : null,
+                _ => null,
+            };
+        }
+
+        if (task is null || !task.IsCompletedSuccessfully)
+        {
+            return false;
+        }
+
+        return ArmIfCurrent(moviePath, mode, task.Result);
+    }
+
+    public static bool IsPresentationArmed(string moviePath)
+    {
+        lock (Gate)
+        {
+            return _timelineArmed &&
+                   !_timelineStarted &&
+                   string.Equals(
+                       moviePath,
+                       _activeMovie,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public static bool NotifyPresentationStarted(string moviePath)
+    {
+        // SHARPEMU_DEMONS_ATTRACT_RAD_VISIBLE_FRAME_RELEASE_V1_1_8
+        // V1.1.6 calls NotifyPresentationStarted after RAD ShowWindow.  Keep
+        // V31.7.21's StartIfCurrent path so it can prepare the deterministic
+        // WaveOut exactly as before, then treat this RAD ShowWindow boundary as
+        // the missing visible-frame event and explicitly waveOutRestart it.
+        if (string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Task<string?>? v118Task;
+            string? v118Root;
+
+            lock (Gate)
+            {
+                if (!string.Equals(
+                        moviePath,
+                        _activeMovie,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(_activeRoot) ||
+                    _activeMode != TimelineMode.TailFrom12)
+                {
+                    return false;
+                }
+
+                v118Root = _activeRoot;
+                v118Task =
+                    TailTasks.TryGetValue(v118Root, out var v118Tail)
+                        ? v118Tail
+                        : null;
+            }
+
+            if (v118Task is null)
+            {
+                Console.Error.WriteLine(
+                    "[BINK-ATTRACT-SYNC][V1.1.8] reveal_release_no_tail_task " +
+                    "file='attract_movie.bk2'");
+                return true;
+            }
+
+            void v118StartAndRelease(string? v118WavePath)
+            {
+                StartIfCurrent(
+                    moviePath,
+                    TimelineMode.TailFrom12,
+                    v118WavePath);
+
+                var v118Released =
+                    BinkDeterministicWavePlayerV317152.
+                        TryResumePreparedAtRendererRevealV118(
+                            out var v118Detail);
+
+                Console.Error.WriteLine(
+                    "[BINK-ATTRACT-SYNC][V1.1.8] rad_visible_frame_release " +
+                    "file='attract_movie.bk2' " +
+                    $"released={v118Released} detail='{v118Detail}' " +
+                    "source=renderer-show " +
+                    "arm_path=StartIfCurrent " +
+                    "guest_audio_owner=waveout-sidecar");
+            }
+
+            if (v118Task.IsCompletedSuccessfully)
+            {
+                v118StartAndRelease(v118Task.Result);
+                return true;
+            }
+
+            _ = v118Task.ContinueWith(
+                completed =>
+                {
+                    if (completed.Status == TaskStatus.RanToCompletion)
+                    {
+                        v118StartAndRelease(completed.Result);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            Console.Error.WriteLine(
+                "[BINK-ATTRACT-SYNC][V1.1.8] reveal_release_waiting_for_tail " +
+                "file='attract_movie.bk2'");
+            return true;
+        }
+        Task<string?>? task;
+        TimelineMode mode;
+        string? root;
+
+        lock (Gate)
+        {
+            if (_timelineArmed &&
+                !_timelineStarted &&
+                string.Equals(
+                    moviePath,
+                    _activeMovie,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                var releaseWatch = Stopwatch.StartNew();
+                if (BinkDeterministicWavePlayerV317152.TryStartPrepared(
+                        out var releaseDetail))
+                {
+                    _timelineArmed = false;
+                    _timelineStarted = true;
+                    Console.Error.WriteLine(
+                        "[LOADER][INFO] bink2.ds_intro_audio_visible_frame_release " +
+                        $"file='{Path.GetFileName(moviePath)}' " +
+                        $"release_ms={releaseWatch.Elapsed.TotalMilliseconds:F3} " +
+                        $"detail='{releaseDetail}'");
+                    return true;
+                }
+
+                _timelineArmed = false;
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_intro_audio_visible_frame_release_failed " +
+                    $"file='{Path.GetFileName(moviePath)}' detail='{releaseDetail}'");
+            }
+        }
 
         lock (Gate)
         {
@@ -213,6 +853,84 @@ internal static class BinkDemonSoulsIntroAudioV7243227
         return true;
     }
 
+    // V31.7.15.2_WAVEOUT_AUDIO_PROGRESS
+    public static bool WaitForPresentationAudioProgress(
+        string moviePath,
+        int targetMilliseconds,
+        int timeoutMilliseconds,
+        out double observedMilliseconds,
+        out double wallWaitMilliseconds)
+    {
+        observedMilliseconds = 0.0;
+        wallWaitMilliseconds = 0.0;
+
+        lock (Gate)
+        {
+            if (!_timelineStarted ||
+                !string.Equals(
+                    moviePath,
+                    _activeMovie,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return BinkDeterministicWavePlayerV317152.WaitForProgress(
+            targetMilliseconds,
+            timeoutMilliseconds,
+            out observedMilliseconds,
+            out wallWaitMilliseconds);
+    }
+    private static bool ArmIfCurrent(
+        string moviePath,
+        TimelineMode mode,
+        string? wavePath)
+    {
+        if (!IsPlayableWave(wavePath))
+        {
+            return false;
+        }
+
+        lock (Gate)
+        {
+            if (!string.Equals(
+                    moviePath,
+                    _activeMovie,
+                    StringComparison.OrdinalIgnoreCase) ||
+                _activeMode != mode ||
+                _timelineStarted)
+            {
+                return false;
+            }
+
+            if (Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_INTRO_WAVEOUT_CLOCK") == "0")
+            {
+                return false;
+            }
+
+            if (!BinkDeterministicWavePlayerV317152.TryPreparePaused(
+                    wavePath!,
+                    out var waveClockDetail))
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_intro_audio_visible_frame_arm_failed " +
+                    $"file='{Path.GetFileName(moviePath)}' detail='{waveClockDetail}'");
+                return false;
+            }
+
+            _timelineArmed = true;
+            _timelineStarted = false;
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_audio_visible_frame_armed " +
+                $"file='{Path.GetFileName(moviePath)}' " +
+                $"mode={(mode == TimelineMode.Full ? "full12" : "tail12")} " +
+                $"detail='{waveClockDetail}'");
+            return true;
+        }
+    }
+
     private static void StartIfCurrent(
         string moviePath,
         TimelineMode mode,
@@ -237,10 +955,25 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 return;
             }
 
-            if (!PlaySound(
+                        // V31.7.15.2_WAVEOUT_AUDIO_CLOCK
+            // PlaySound(SND_ASYNC) only confirms queueing.  Use waveOut by
+            // default so the embedded RAD host can query actual PCM playback
+            // progress before revealing attract_movie.
+            var useDeterministicWaveClock =
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_INTRO_WAVEOUT_CLOCK") != "0";
+
+            string waveClockDetail = "playsound-fallback";
+            var audioStarted = useDeterministicWaveClock
+                ? BinkDeterministicWavePlayerV317152.TryStart(
+                    wavePath!,
+                    out waveClockDetail)
+                : PlaySound(
                     wavePath,
                     IntPtr.Zero,
-                    SndFilename | SndAsync | SndNodefault))
+                    SndFilename | SndAsync | SndNodefault);
+
+            if (!audioStarted)
             {
                 Console.Error.WriteLine(
                     "[LOADER][WARN] bink2.ds_intro_audio_start_failed " +
@@ -248,7 +981,13 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 return;
             }
 
+            _timelineArmed = false;
             _timelineStarted = true;
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_audio_clock " +
+                $"file='{Path.GetFileName(moviePath)}' " +
+                $"backend={(useDeterministicWaveClock ? "waveout-cursor" : "playsound-async")} " +
+                $"detail='{waveClockDetail}'");
 
             Console.Error.WriteLine(
                 "[LOADER][INFO] bink2.ds_intro_audio_start " +
@@ -285,6 +1024,7 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                         return;
                     }
 
+                    _ = BinkDeterministicWavePlayerV317152.Stop();
                     _ = PlaySound(null, IntPtr.Zero, 0);
                     _timelineStarted = false;
 
@@ -298,6 +1038,15 @@ internal static class BinkDemonSoulsIntroAudioV7243227
     // V72.4.3.2.31.6 RAD_ATTRACT_AUDIO_STOP
     public static void StopForMovie(string moviePath)
     {
+        if (!string.IsNullOrWhiteSpace(moviePath) &&
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            ArmPostAttractTransitionFenceV1112(
+                "attract-playback-ended");
+        }
         if (string.IsNullOrWhiteSpace(moviePath))
         {
             return;
@@ -313,21 +1062,31 @@ internal static class BinkDemonSoulsIntroAudioV7243227
                 return;
             }
 
-            if (_timelineStarted)
+            if (_timelineStarted || _timelineArmed)
             {
-                _ = PlaySound(null, IntPtr.Zero, 0);
+                _ = BinkDeterministicWavePlayerV317152.Stop();
+                    _ = PlaySound(null, IntPtr.Zero, 0);
             }
 
             _activeRoot = null;
             _activeMovie = null;
             _activeMode = TimelineMode.None;
             _timelineStarted = false;
+            _timelineArmed = false;
 
             Console.Error.WriteLine(
                 "[LOADER][INFO] bink2.rad_attract_audio_stop " +
                 $"file='{Path.GetFileName(moviePath)}'");
         }
-    }
+    
+        if (string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            ReleaseStartupGuestAudioMuteV116(
+                "attract-playback-ended");
+        }}
 
     private static void ResetStateForNonIntro(string moviePath)
     {
@@ -351,6 +1110,7 @@ internal static class BinkDemonSoulsIntroAudioV7243227
             _activeMovie = null;
             _activeMode = TimelineMode.None;
             _timelineStarted = false;
+            _timelineArmed = false;
         }
     }
 
@@ -489,13 +1249,100 @@ internal static class BinkDemonSoulsIntroAudioV7243227
         }
     }
 
-    private static string? BuildTail(
+        // V31.7.20.3_AT9_FACT_ENCODER_DELAY
+    // V31.7.20.3.1_STRUCTURAL_NEWLINE_SAFE_APPLY
+    // Sony/VGAudio AT9 RIFF fact layout: logical SampleCount followed by
+    // InputOverlapDelaySamples and EncoderDelaySamples. Keep this parser
+    // narrowly scoped to the Demon's Souls host-side intro stem preparation.
+    private readonly record struct At9FactTimelineV317203(
+        long SampleCount,
+        int InputOverlapDelaySamples,
+        int EncoderDelaySamples);
+
+    private static bool TryReadAt9FactTimelineV317203(
+        string path,
+        out At9FactTimelineV317203 timeline)
+    {
+        timeline = default;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            if (stream.Length < 12)
+            {
+                return false;
+            }
+
+            using var reader = new BinaryReader(stream);
+            if (reader.ReadUInt32() != 0x46464952u) // RIFF
+            {
+                return false;
+            }
+
+            _ = reader.ReadUInt32();
+            if (reader.ReadUInt32() != 0x45564157u) // WAVE
+            {
+                return false;
+            }
+
+            while (stream.Position + 8 <= stream.Length)
+            {
+                var chunkId = reader.ReadUInt32();
+                var chunkSize = reader.ReadUInt32();
+                var chunkStart = stream.Position;
+                if (chunkId == 0x74636166u && // fact
+                    chunkSize >= 12 &&
+                    chunkStart + 12 <= stream.Length)
+                {
+                    var logicalSamples = reader.ReadUInt32();
+                    var inputOverlapDelay = reader.ReadInt32();
+                    var encoderDelay = reader.ReadInt32();
+                    if (logicalSamples == 0 ||
+                        inputOverlapDelay < 0 ||
+                        encoderDelay < 0)
+                    {
+                        return false;
+                    }
+
+                    timeline = new At9FactTimelineV317203(
+                        logicalSamples,
+                        inputOverlapDelay,
+                        encoderDelay);
+                    return true;
+                }
+
+                var paddedSize = (long)chunkSize + (chunkSize & 1u);
+                var next = chunkStart + paddedSize;
+                if (next < chunkStart || next > stream.Length)
+                {
+                    return false;
+                }
+                stream.Position = next;
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+private static string? BuildTail(
         string root,
         string music,
         string sfx,
         string vo,
         string fullMix)
     {
+        // V31.7.20_PER_STEM_ATTRACT_ALIGNMENT
+        //
+        // Do not infer a single cut after the three streams have already been
+        // mixed. Music/SFX/VO are separate guest stream assets and may not
+        // share the same encoded timeline origin. Decode each one to 48 kHz
+        // PCM, inspect its own sample length, choose its own logical attract
+        // origin, normalize it to the exact BK2 duration, and only then amix.
+        _ = fullMix;
+
         try
         {
             var ffmpeg = FindFfmpegPath();
@@ -508,85 +1355,489 @@ internal static class BinkDemonSoulsIntroAudioV7243227
             Directory.CreateDirectory(cacheDirectory);
 
             var key = BuildAssetKey(music, sfx, vo);
-            var attractTempo =
-                ResolveV724329AttractTempo();
+            const int RequiredSampleRate = 48_000;
 
-            var tempoTag =
-                attractTempo
-                    .ToString(
-                        "0.000",
-                        System.Globalization.CultureInfo.InvariantCulture)
-                    .Replace('.', 'p');
-
-            var output =
-                Path.Combine(
-                    cacheDirectory,
-                    $"demons-souls-intro-{key}-from12-v29-{tempoTag}.wav");
-
-            if (IsPlayableWave(output))
+            string? EnsureDecodedStem(
+                string source,
+                string label,
+                out long sampleFrames)
             {
+                sampleFrames = 0;
+                var pcm = Path.Combine(
+                    cacheDirectory,
+                    $"demons-souls-intro-{key}-v31720-{label}-pcm.wav");
+
+                if (IsPlayableWave(pcm) &&
+                    TryReadPcmWaveSampleFramesV31716(
+                        pcm,
+                        out var cachedRate,
+                        out var cachedFrames) &&
+                    cachedRate == RequiredSampleRate &&
+                    cachedFrames > 0)
+                {
+                    sampleFrames = cachedFrames;
+                    return pcm;
+                }
+
+                TryDelete(pcm);
+                var temporary =
+                    pcm + ".tmp-" + Guid.NewGuid().ToString("N") + ".wav";
+
+                var args = new[]
+                {
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-nostdin",
+                    "-y",
+                    "-i", source,
+                    "-map", "0:a:0",
+                    "-c:a", "pcm_s16le",
+                    "-ar", "48000",
+                    "-ac", "2",
+                    temporary,
+                };
+
+                if (!RunFfmpeg(ffmpeg, args) ||
+                    !IsPlayableWave(temporary) ||
+                    !TryReadPcmWaveSampleFramesV31716(
+                        temporary,
+                        out var resultRate,
+                        out var resultFrames) ||
+                    resultRate != RequiredSampleRate ||
+                    resultFrames <= 0)
+                {
+                    TryDelete(temporary);
+                    return null;
+                }
+
+                File.Move(temporary, pcm, true);
+                sampleFrames = resultFrames;
+                return pcm;
+            }
+
+            var musicPcm = EnsureDecodedStem(
+                music,
+                "music",
+                out var musicSamples);
+            var sfxPcm = EnsureDecodedStem(
+                sfx,
+                "sfx",
+                out var sfxSamples);
+            var voPcm = EnsureDecodedStem(
+                vo,
+                "vo-en",
+                out var voSamples);
+            var musicHasFact = TryReadAt9FactTimelineV317203(music, out var musicFact);
+            var sfxHasFact = TryReadAt9FactTimelineV317203(sfx, out var sfxFact);
+            var voHasFact = TryReadAt9FactTimelineV317203(vo, out var voFact);
+
+            if (musicPcm is null ||
+                sfxPcm is null ||
+                voPcm is null)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_intro_per_stem_failed " +
+                    "reason=stem-decode");
+                return null;
+            }
+
+            var logoSamples = checked(
+                (long)Math.Round(
+                    DemonSoulsOpeningTimelineProfileV31716
+                        .LogoIntroDurationSeconds * RequiredSampleRate,
+                    MidpointRounding.AwayFromZero));
+
+            var targetSamples = checked(
+                (long)Math.Round(
+                    DemonSoulsOpeningTimelineProfileV31716
+                        .AttractDurationSeconds * RequiredSampleRate,
+                    MidpointRounding.AwayFromZero));
+
+            var fullOpeningSamples =
+                checked(logoSamples + targetSamples);
+
+            // 500 ms tolerance covers AT9/decoder padding without ever
+            // confusing an actual 12-second opening segment with codec delay.
+            var classificationTolerance =
+                RequiredSampleRate / 2L;
+
+                                    // V31.7.20.4_FACT_TAIL_ATTRACT_ALIGNMENT
+            long SelectStemStart(
+                long decodedSamples,
+                bool hasFact,
+                At9FactTimelineV317203 fact,
+                out string policy,
+                out long logicalSamples,
+                out long decodedExcess,
+                out long primingSamples)
+            {
+                logicalSamples =
+                    hasFact && fact.SampleCount > 0
+                        ? fact.SampleCount
+                        : decodedSamples;
+                decodedExcess = Math.Max(0, decodedSamples - logicalSamples);
+
+                var reportedEncoderDelay =
+                    hasFact ? Math.Max(0, fact.EncoderDelaySamples) : 0;
+                primingSamples =
+                    reportedEncoderDelay > 0 &&
+                    decodedExcess >= reportedEncoderDelay
+                        ? reportedEncoderDelay
+                        : 0;
+
+                // FACT is authoritative for the logical stream length. The
+                // Demon's Souls opening stems contain a prefix followed by the
+                // attract program. Tail-align the exact attract duration against
+                // SampleCount, then map logical sample zero into decoded PCM by
+                // adding only the proven front encoder priming.
+// SHARPEMU_DEMONS_ATTRACT_STEM_HEAD_ALIGNMENT_V1_1_10
+//
+// Runtime V1.1.9 proves the device start boundary is correct:
+// waveOutRestart succeeds and the cursor advances. The remaining
+// desync is therefore content mapping. The old FACT policy
+// discarded ~12.07 s from the *front* of every stem
+// (logicalSamples-targetSamples), which advances soundtrack
+// content by that same amount relative to attract frame zero.
+//
+// Default to the logical stream HEAD for standalone
+// attract_movie and preserve only proven AT9 front priming.
+// An explicit "tail" opt-out keeps the prior behavior for A/B.
+if (hasFact && logicalSamples >= targetSamples)
+{
+    var logicalPrefixSamples =
+        checked(logicalSamples - targetSamples);
+
+    var requestedAlignment =
+        Environment.GetEnvironmentVariable(
+            "SHARPEMU_DS_ATTRACT_STEM_ALIGNMENT");
+
+    var useLegacyTail =
+        string.Equals(
+            requestedAlignment,
+            "tail",
+            StringComparison.OrdinalIgnoreCase);
+
+    if (useLegacyTail)
+    {
+        policy = primingSamples > 0
+            ? "v1110-optout-fact-tail-attract+at9-encoder-delay"
+            : "v1110-optout-fact-tail-attract";
+        return checked(
+            logicalPrefixSamples +
+            primingSamples);
+    }
+
+    var oldTailStart = checked(
+        logicalPrefixSamples +
+        primingSamples);
+    var newHeadStart = primingSamples;
+    var contentDelayAddedSamples = Math.Max(
+        0L,
+        oldTailStart - newHeadStart);
+
+    policy = primingSamples > 0
+        ? "v1110-fact-head-attract+at9-encoder-delay"
+        : "v1110-fact-head-attract";
+
+    Console.Error.WriteLine(
+        "[BINK-ATTRACT-SYNC][V1.1.10] stem_content_alignment " +
+        $"mode=head old_tail_start={oldTailStart} " +
+        $"new_head_start={newHeadStart} " +
+        $"content_delay_added_samples={contentDelayAddedSamples} " +
+        $"content_delay_added_ms={contentDelayAddedSamples * 1000.0 / RequiredSampleRate:F3} " +
+        $"logical_samples={logicalSamples} target_samples={targetSamples}");
+
+    return newHeadStart;
+}
+
+                // Metadata unavailable/inapplicable: retain the prior heuristic
+                // rather than inventing a tail boundary.
+                if (decodedSamples >=
+                    fullOpeningSamples - classificationTolerance)
+                {
+                    policy = primingSamples > 0
+                        ? "fallback-full-opening+at9-encoder-delay"
+                        : "fallback-full-opening";
+                    return checked(logoSamples + primingSamples);
+                }
+
+                if (decodedSamples >=
+                    targetSamples - classificationTolerance)
+                {
+                    policy = primingSamples > 0
+                        ? "fallback-attract-only+at9-encoder-delay"
+                        : "fallback-attract-only";
+                    return primingSamples;
+                }
+
+                policy = primingSamples > 0
+                    ? "fallback-short-attract-pad-end+at9-encoder-delay"
+                    : "fallback-short-attract-pad-end";
+                return primingSamples;
+            }
+
+            var musicStart = SelectStemStart(
+                musicSamples, musicHasFact, musicFact,
+                out var musicPolicy, out var musicLogicalSamples,
+                out var musicDecodedExcess, out var musicPrimingSamples);
+            var sfxStart = SelectStemStart(
+                sfxSamples, sfxHasFact, sfxFact,
+                out var sfxPolicy, out var sfxLogicalSamples,
+                out var sfxDecodedExcess, out var sfxPrimingSamples);
+            var voStart = SelectStemStart(
+                voSamples, voHasFact, voFact,
+                out var voPolicy, out var voLogicalSamples,
+                out var voDecodedExcess, out var voPrimingSamples);
+
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_at9_fact " +
+                $"stem=music present={musicHasFact} logical_samples={musicLogicalSamples} " +
+                $"decoded_samples={musicSamples} decoded_excess={musicDecodedExcess} " +
+                $"input_overlap_delay={(musicHasFact ? musicFact.InputOverlapDelaySamples : 0)} " +
+                $"encoder_delay={(musicHasFact ? musicFact.EncoderDelaySamples : 0)} " +
+                $"priming_applied={musicPrimingSamples} trim_start={musicStart}");
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_at9_fact " +
+                $"stem=sfx present={sfxHasFact} logical_samples={sfxLogicalSamples} " +
+                $"decoded_samples={sfxSamples} decoded_excess={sfxDecodedExcess} " +
+                $"input_overlap_delay={(sfxHasFact ? sfxFact.InputOverlapDelaySamples : 0)} " +
+                $"encoder_delay={(sfxHasFact ? sfxFact.EncoderDelaySamples : 0)} " +
+                $"priming_applied={sfxPrimingSamples} trim_start={sfxStart}");
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_at9_fact " +
+                $"stem=vo-en present={voHasFact} logical_samples={voLogicalSamples} " +
+                $"decoded_samples={voSamples} decoded_excess={voDecodedExcess} " +
+                $"input_overlap_delay={(voHasFact ? voFact.InputOverlapDelaySamples : 0)} " +
+                $"encoder_delay={(voHasFact ? voFact.EncoderDelaySamples : 0)} " +
+                $"priming_applied={voPrimingSamples} trim_start={voStart}");
+
+            static double ToSeconds(long samples) =>
+                samples / 48_000.0;
+
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_stem_profile " +
+                $"stem=music samples={musicSamples} " +
+                $"duration_s={ToSeconds(musicSamples):F6} " +
+                $"start_sample={musicStart} " +
+                $"start_s={ToSeconds(musicStart):F6} " +
+                $"policy={musicPolicy}");
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_stem_profile " +
+                $"stem=sfx samples={sfxSamples} " +
+                $"duration_s={ToSeconds(sfxSamples):F6} " +
+                $"start_sample={sfxStart} " +
+                $"start_s={ToSeconds(sfxStart):F6} " +
+                $"policy={sfxPolicy}");
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.ds_intro_stem_profile " +
+                $"stem=vo-en samples={voSamples} " +
+                $"duration_s={ToSeconds(voSamples):F6} " +
+                $"start_sample={voStart} " +
+                $"start_s={ToSeconds(voStart):F6} " +
+                $"policy={voPolicy}");
+
+            var output = Path.Combine(
+                cacheDirectory,
+                $"demons-souls-intro-{key}-v31720-stemalign-" +
+                $"m{musicStart}-s{sfxStart}-v{voStart}-" +
+                $"n{targetSamples}.wav");
+
+            if (IsPlayableWave(output) &&
+                TryReadPcmWaveSampleFramesV31716(
+                    output,
+                    out var cachedOutputRate,
+                    out var cachedOutputSamples) &&
+                cachedOutputRate == RequiredSampleRate &&
+                Math.Abs(cachedOutputSamples - targetSamples) <= 1)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.ds_intro_per_stem_mix " +
+                    $"cache=True target_samples={targetSamples} " +
+                    $"music_start={musicStart} sfx_start={sfxStart} " +
+                    $"vo_start={voStart} wav='{output}'");
                 return output;
             }
 
-            var temporary =
+            TryDelete(output);
+            var tempOutput =
                 output + ".tmp-" + Guid.NewGuid().ToString("N") + ".wav";
 
-            var args = new[]
+            string StemFilter(
+                int index,
+                long start,
+                string outputLabel)
+            {
+                var requestedEnd = checked(start + targetSamples);
+                return
+                    $"[{index}:a]" +
+                    $"atrim=start_sample={start}:end_sample={requestedEnd}," +
+                    "asetpts=PTS-STARTPTS," +
+                    $"apad=whole_len={targetSamples}," +
+                    $"atrim=end_sample={targetSamples}," +
+                    $"asetpts=PTS-STARTPTS[{outputLabel}]";
+            }
+
+            var filter =
+                StemFilter(0, musicStart, "m") + ";" +
+                StemFilter(1, sfxStart, "s") + ";" +
+                StemFilter(2, voStart, "v") + ";" +
+                "[m][s][v]amix=inputs=3:duration=longest:" +
+                "dropout_transition=0:normalize=1," +
+                $"atrim=end_sample={targetSamples}," +
+                "asetpts=PTS-STARTPTS[out]";
+
+            var mixArgs = new[]
             {
                 "-hide_banner",
                 "-loglevel", "error",
                 "-nostdin",
                 "-y",
-                "-ss",
-                AttractOffsetSeconds.ToString(
-                    "0.000",
-                    System.Globalization.CultureInfo.InvariantCulture),
-                "-i", fullMix,
-                // V72.4.3.2.29 ATTRACT_DECODER_RATE_AUDIO
-                // Native/LTO pure decode measured 27.162 fps for the difficult
-                // 30-second attract window. Slow the +12 s audio tail to that
-                // predicted video clock instead of letting wall-clock audio
-                // run ~10% ahead even after CPU isolation.
-                "-filter:a",
-                "atempo=" +
-                    attractTempo.ToString(
-                        "0.0000",
-                        System.Globalization.CultureInfo.InvariantCulture),
+                "-i", musicPcm,
+                "-i", sfxPcm,
+                "-i", voPcm,
+                "-filter_complex", filter,
+                "-map", "[out]",
                 "-c:a", "pcm_s16le",
                 "-ar", "48000",
                 "-ac", "2",
-                temporary,
+                tempOutput,
             };
 
-            if (!RunFfmpeg(ffmpeg, args))
+            if (!RunFfmpeg(ffmpeg, mixArgs))
             {
-                TryDelete(temporary);
+                TryDelete(tempOutput);
                 return null;
             }
 
-            if (!IsPlayableWave(temporary))
+            var finalRate = 0;
+            var finalSamples = 0L;
+            if (!IsPlayableWave(tempOutput) ||
+                !TryReadPcmWaveSampleFramesV31716(
+                    tempOutput,
+                    out finalRate,
+                    out finalSamples) ||
+                finalRate != RequiredSampleRate ||
+                Math.Abs(finalSamples - targetSamples) > 1)
             {
-                TryDelete(temporary);
+                TryDelete(tempOutput);
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_intro_per_stem_failed " +
+                    $"reason=final-sample-count expected={targetSamples} " +
+                    $"actual={finalSamples} rate={finalRate}");
                 return null;
             }
 
-            File.Move(temporary, output, true);
+            File.Move(tempOutput, output, true);
 
             Console.Error.WriteLine(
-                "[LOADER][INFO] bink2.ds_intro_audio_cache_ready " +
-                $"mode=tail12 root='{root}' wav='{output}'");
+                "[LOADER][INFO] bink2.ds_intro_per_stem_mix " +
+                $"cache=False target_samples={targetSamples} " +
+                $"music_start={musicStart} sfx_start={sfxStart} " +
+                $"vo_start={voStart} " +
+                $"policies='{musicPolicy};{sfxPolicy};{voPolicy}' " +
+                $"wav='{output}'");
+
             return output;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine(
                 "[LOADER][WARN] bink2.ds_intro_audio_prepare_failed " +
-                $"mode=tail12 type={ex.GetType().Name} " +
+                $"mode=per-stem-v31720 type={ex.GetType().Name} " +
                 $"message='{Sanitize(ex.Message)}'");
             return null;
         }
     }
 
+    // V31.7.16_PCM_WAVE_SAMPLE_READER
+    private static bool TryReadPcmWaveSampleFramesV31716(
+        string path,
+        out int sampleRate,
+        out long sampleFrames)
+    {
+        sampleRate = 0;
+        sampleFrames = 0;
+
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new BinaryReader(
+                stream,
+                Encoding.ASCII,
+                leaveOpen: false);
+
+            if (stream.Length < 44 ||
+                Encoding.ASCII.GetString(reader.ReadBytes(4)) != "RIFF")
+            {
+                return false;
+            }
+
+            _ = reader.ReadUInt32();
+            if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "WAVE")
+            {
+                return false;
+            }
+
+            ushort blockAlign = 0;
+            long dataBytes = -1;
+
+            while (stream.Position + 8 <= stream.Length)
+            {
+                var id = Encoding.ASCII.GetString(reader.ReadBytes(4));
+                var size = reader.ReadUInt32();
+                var payload = stream.Position;
+
+                if (id == "fmt " && size >= 16)
+                {
+                    var formatTag = reader.ReadUInt16();
+                    _ = reader.ReadUInt16(); // channels
+                    var rate = reader.ReadUInt32();
+                    _ = reader.ReadUInt32(); // avg bytes/sec
+                    var align = reader.ReadUInt16();
+                    _ = reader.ReadUInt16(); // bits/sample
+
+                    if (formatTag != 1 || rate == 0 || align == 0)
+                    {
+                        return false;
+                    }
+
+                    sampleRate = checked((int)rate);
+                    blockAlign = align;
+                }
+                else if (id == "data")
+                {
+                    dataBytes = size;
+                }
+
+                var padded = size + (size & 1u);
+                stream.Position = checked(payload + padded);
+
+                if (sampleRate != 0 &&
+                    blockAlign != 0 &&
+                    dataBytes >= 0)
+                {
+                    break;
+                }
+            }
+
+            if (sampleRate == 0 ||
+                blockAlign == 0 ||
+                dataBytes < 0 ||
+                dataBytes % blockAlign != 0)
+            {
+                return false;
+            }
+
+            sampleFrames = dataBytes / blockAlign;
+            return sampleFrames > 0;
+        }
+        catch
+        {
+            sampleRate = 0;
+            sampleFrames = 0;
+            return false;
+        }
+    }
     private static double ResolveV724329AttractTempo()
     {
         var configured =
@@ -900,3 +2151,9 @@ internal static class BinkDemonSoulsIntroAudioV7243227
         IntPtr hmod,
         uint fdwSound);
 }
+
+
+
+
+
+

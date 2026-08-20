@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
@@ -41,40 +41,42 @@ public static class Gen5ShaderScalarEvaluator
         "0",
         StringComparison.Ordinal);
 
-    // The current ShaderCompiler keeps the decoded Gen5 model in this namespace
-    // and does not expose the experimental Gen5ScalarSsa/IrReachingState layer.
-    // Keep the descriptor guard functional with a conservative local analysis.
+    // Upstream 0.0.3 SSA guard reconnected to the current IR namespace.
+    // The Gen5ScalarSsa implementation is already present in this source tree;
+    // the V74 evaluator had fallen back to a linear writer-count heuristic.
+    private static readonly ConditionalWeakTable<Gen5ShaderProgram, IR.Gen5ScalarSsa> _scalarSsaCache = [];
+
+    private static IR.Gen5ScalarSsa GetScalarSsa(Gen5ShaderState state) =>
+        _scalarSsaCache.GetValue(
+            state.Program,
+            program => IR.Gen5ScalarSsa.Build(program.Instructions, state.UserData));
+
     private static bool IsOffsetFromUnmodelledWriter(
         Gen5ShaderState state,
         Gen5ShaderInstruction instruction,
         Gen5ScalarMemoryControl control)
     {
-        if (!_divergentDescriptorGuard ||
-            control.DynamicOffsetRegister is not { } offsetRegister)
+        if (!_divergentDescriptorGuard || control.DynamicOffsetRegister is not { } offsetRegister)
         {
             return false;
         }
 
-        for (var index = state.Program.Instructions.Count - 1; index >= 0; index--)
+        var ssa = GetScalarSsa(state);
+        var reaching = ssa.GetReachingDefinitionAt(instruction.Pc, offsetRegister);
+        if (reaching.State == IR.IrReachingState.Multiple)
         {
-            var candidate = state.Program.Instructions[index];
-            if (candidate.Pc >= instruction.Pc)
-            {
-                continue;
-            }
-
-            var writesOffset = candidate.Destinations.Any(destination =>
-                destination.Kind == Gen5OperandKind.ScalarRegister &&
-                destination.Value == offsetRegister);
-            if (!writesOffset)
-            {
-                continue;
-            }
-
-            return WritesVccImplicitly(candidate);
+            return true;
         }
 
-        return false;
+        if (reaching.State != IR.IrReachingState.Single ||
+            reaching.DefinitionPc == uint.MaxValue)
+        {
+            return false;
+        }
+
+        var writer = state.Program.Instructions
+            .FirstOrDefault(candidate => candidate.Pc == reaching.DefinitionPc);
+        return writer is not null && IR.Gen5ScalarSsa.WritesVccImplicitly(writer);
     }
 
     private static bool IsDescriptorFromDivergentMerge(
@@ -88,50 +90,28 @@ public static class Gen5ShaderScalarEvaluator
             return false;
         }
 
-        // Without the experimental SSA graph, detect the unsafe case that can be
-        // established locally: the same descriptor SGPR has distinct reaching
-        // writers in different regions before the use. This intentionally avoids
-        // rejecting ordinary sequential rewrites in straight-line code.
-        var hasControlFlow = state.Program.Instructions.Any(candidate =>
-            candidate.Pc < pc &&
-            candidate.Encoding == Gen5ShaderEncoding.Sopp &&
-            candidate.Opcode.Contains("Branch", StringComparison.Ordinal));
-        if (!hasControlFlow)
+        var ssa = GetScalarSsa(state);
+        if (!ssa.Graph.HasControlFlow)
         {
             return false;
         }
 
         for (var offset = 0u; offset < registerCount; offset++)
         {
-            var register = scalarBase + offset;
-            var writerCount = 0;
-            foreach (var candidate in state.Program.Instructions)
+            var reaching = ssa.GetReachingDefinitionAt(pc, scalarBase + offset);
+            if (reaching.State == IR.IrReachingState.Multiple)
             {
-                if (candidate.Pc >= pc)
-                {
-                    break;
-                }
+                return true;
+            }
 
-                if (candidate.Destinations.Any(destination =>
-                        destination.Kind == Gen5OperandKind.ScalarRegister &&
-                        destination.Value == register))
-                {
-                    writerCount++;
-                    if (writerCount > 1)
-                    {
-                        return true;
-                    }
-                }
+            if (ssa.GetScalarAt(pc, scalarBase + offset).State == IR.IrScalarState.Merged)
+            {
+                return true;
             }
         }
 
         return false;
     }
-
-    private static bool WritesVccImplicitly(Gen5ShaderInstruction instruction) =>
-        instruction.Opcode.StartsWith("VCmp", StringComparison.Ordinal) ||
-        instruction.Opcode.StartsWith("VCmpx", StringComparison.Ordinal) ||
-        instruction.Opcode.Contains("Vcc", StringComparison.OrdinalIgnoreCase);
 
     private static void TraceDivergentDescriptor(
         Gen5ShaderState state,

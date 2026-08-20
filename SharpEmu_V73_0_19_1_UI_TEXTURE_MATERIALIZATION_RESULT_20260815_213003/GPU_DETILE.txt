@@ -1,7 +1,0 @@
-[GPU-DETILE] texture tile_mode=27 fmt=5 256x256 (0=linear; GPU covers exact-XOR 5/9/24/27 @ 4bpp).
-[GPU-DETILE] texture tile_mode=9 fmt=2 256x256 (0=linear; GPU covers exact-XOR 5/9/24/27 @ 4bpp).
-[GPU-DETILE] texture tile_mode=24 fmt=4 1024x512 (0=linear; GPU covers exact-XOR 5/9/24/27 @ 4bpp).
-[GPU-DETILE] gate mode=24 fmt=4 bpp=4 hasLayout=True mipTail=False storage=False arrayed=False eq=ExactXor -> GPU
-[GPU-DETILE] active: 1 texture(s) detiled on GPU (latest 1024x512 mode 24).
-[GPU-DETILE] gate mode=27 fmt=5 bpp=4 hasLayout=True mipTail=False storage=False arrayed=False eq=ExactXor -> GPU
-[GPU-DETILE] gate mode=9 fmt=169 bpp=8 hasLayout=True mipTail=True storage=False arrayed=False eq=ExactXor -> CPU

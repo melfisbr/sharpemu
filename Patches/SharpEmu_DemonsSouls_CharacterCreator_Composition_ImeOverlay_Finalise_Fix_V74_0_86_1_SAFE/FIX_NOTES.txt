@@ -1,0 +1,5 @@
+Fix summary:
+- Merge V74.0.84.2.1 UI-Bink frame snapshot + sticky-plane integrity into the V74.0.86 Character Creator baseline.
+- Keep V74.0.86 typed DCC protection in place.
+- Replace the basic text-entry dialog with a larger PS-style OSK overlay.
+- Preserve logs/ZIPs in Patches and add Finalise crash verdicts to the runtime report.

@@ -1,0 +1,24 @@
+SharpEmu Demon's Souls V74.0.88.4 SAFE - RUN_5 NativeCommandError repair
+
+Observed:
+RUN_5 reached the actual SharpEmu.exe invocation, then Windows PowerShell stopped on the first native stderr line:
+  SharpEmu.exe : [LOADER][INFO] bink2.rad_auto_selected ...
+
+This is not a SharpEmu source/build failure. Reaching that line proves the V74.0.88.3 source baseline passed Assert-V740883 before launch.
+
+Cause:
+common.ps1 intentionally uses:
+  $ErrorActionPreference='Stop'
+
+In Windows PowerShell 5.1, stderr emitted by a native executable can be promoted to a NativeCommandError/RemoteException object. With ErrorActionPreference=Stop, the first normal SharpEmu stderr log line becomes a terminating PowerShell error. The direct:
+  & $p.Exe $eboot 2>&1
+therefore cannot be used with the package's strict error policy.
+
+V74.0.88.4 correction:
+- No repository source files are changed.
+- SharpEmu is invoked through cmd.exe.
+- cmd.exe performs 2>&1 before PowerShell sees the stream.
+- PowerShell therefore receives one normal stdout stream from cmd.exe, while keeping ErrorActionPreference=Stop for actual script errors.
+- Every line is still written immediately to the final Patches runtime log using StreamWriter.AutoFlush.
+- No redirected temp stdout/stderr files exist.
+- V74.0.88.3 post-intro main-menu-only loop source remains installed and is now testable.

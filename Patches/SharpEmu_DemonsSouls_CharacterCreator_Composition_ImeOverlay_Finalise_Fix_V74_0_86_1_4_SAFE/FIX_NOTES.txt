@@ -1,0 +1,7 @@
+V74.0.86.1.4
+- Fixes the 655-error C# cascade in ImeDialogExports.cs.
+- Replaces the C# verbatim PowerShell OSK string with UTF-16LE Base64.
+- Validates the embedded OSK PowerShell script during RUN_1.
+- Preserves V74.0.86.1.3 structural final-return Y/UV learning.
+- Preserves V74.0.84.2.1 frame ownership/sticky planes and V74.0.86 typed DCC.
+- SAFE rollback remains enabled on apply/build failure.

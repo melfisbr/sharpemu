@@ -1,0 +1,26 @@
+{
+  "package_version": "V75.0.0.6",
+  "runtime_implementation_version": "V75.0.0",
+  "failure_stage": "RUN_3 real source apply",
+  "failure": "Host audio mode gate not found",
+  "rollback": {
+    "automatic_restore_executed": true,
+    "restored_build": "success",
+    "manual_rollback_required": false
+  },
+  "root_cause": "HostMovieBridge accumulated source no longer matches the old complete if (mode != MovieMode.Rad) { TryStart(hostPath); } shape",
+  "repair": {
+    "audio_ownership": "method-bound locate only the TryStart(hostPath) statement and wrap it in a NativeRad-only suppression guard",
+    "preserve_existing_outer_gate": true,
+    "switch_case": "method-bound",
+    "attach_rad_method": "multiline structural locator",
+    "resolve_mode": "prefix policy inserted at method start; existing accumulated logic preserved",
+    "enum": "structural enum-region member insertion"
+  },
+  "regressions": [
+    "archived HostMovieBridge fixture",
+    "synthetic accumulated audio gate with extra condition"
+  ],
+  "functional_managed_native_decoder_sources_changed": false,
+  "native_cpp_changed": false
+}

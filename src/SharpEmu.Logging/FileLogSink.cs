@@ -12,11 +12,17 @@ public sealed class FileLogSink : ISharpEmuLogSink, IDisposable
     private static readonly TimeSpan FlushInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly object _sync = new();
-    private readonly StreamWriter _writer;
+    private readonly string _path;
+    private readonly long _maxBytes;
+    private StreamWriter _writer;
     private readonly Timer _flushTimer;
     private bool _disposed;
 
-    public FileLogSink(string path, bool append = true, bool includeTimestamp = true)
+    public FileLogSink(
+        string path,
+        bool append = true,
+        bool includeTimestamp = true,
+        long maxBytes = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -26,18 +32,11 @@ public sealed class FileLogSink : ISharpEmuLogSink, IDisposable
             Directory.CreateDirectory(directory);
         }
 
-        var fileStream = new FileStream(
+        _path = path;
+        _maxBytes = Math.Max(0, maxBytes);
+        _writer = OpenWriter(
             path,
-            append ? FileMode.Append : FileMode.Create,
-            FileAccess.Write,
-            FileShare.Read,
-            bufferSize: 65536,
-            FileOptions.SequentialScan);
-
-        _writer = new StreamWriter(fileStream, Encoding.UTF8, bufferSize: 65536)
-        {
-            AutoFlush = false
-        };
+            append ? FileMode.Append : FileMode.Create);
 
         IncludeTimestamp = includeTimestamp;
         _flushTimer = new Timer(
@@ -112,6 +111,64 @@ public sealed class FileLogSink : ISharpEmuLogSink, IDisposable
             if (entry.Level >= LogLevel.Error)
             {
                 _writer.Flush();
+            }
+
+            TryRolloverIfNeeded();
+        }
+    }
+
+    private static StreamWriter OpenWriter(string path, FileMode mode)
+    {
+        var fileStream = new FileStream(
+            path,
+            mode,
+            FileAccess.Write,
+            FileShare.Read,
+            bufferSize: 65536,
+            FileOptions.SequentialScan);
+
+        return new StreamWriter(fileStream, Encoding.UTF8, bufferSize: 65536)
+        {
+            AutoFlush = false
+        };
+    }
+
+    private void TryRolloverIfNeeded()
+    {
+        if (_disposed ||
+            _maxBytes <= 0 ||
+            _writer.BaseStream.Position < _maxBytes)
+        {
+            return;
+        }
+
+        try
+        {
+            _writer.Flush();
+            _writer.Dispose();
+
+            var rolledPath = _path + ".1";
+            if (File.Exists(rolledPath))
+            {
+                File.Delete(rolledPath);
+            }
+
+            if (File.Exists(_path))
+            {
+                File.Move(_path, rolledPath);
+            }
+
+            _writer = OpenWriter(_path, FileMode.Create);
+        }
+        catch
+        {
+            try
+            {
+                _writer = OpenWriter(_path, FileMode.Append);
+            }
+            catch
+            {
+                _disposed = true;
             }
         }
     }
@@ -209,6 +266,7 @@ public sealed class FileLogSink : ISharpEmuLogSink, IDisposable
             }
 
             _writer.Flush();
+            TryRolloverIfNeeded();
         }
     }
 

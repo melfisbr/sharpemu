@@ -1,0 +1,14 @@
+        // SHARPEMU_V74_0_86_DS_CHARACTER_CREATOR_TYPED_DCC
+        // Demon's Souls uses DCC metadata as provenance for many scene/UI surfaces.
+        // V80 provenance recovery may find a recent producer with a view-compatible
+        // bit width but a different typed format. That is not a safe typed-image
+        // substitution for PPSA01341 (for example RGBA8 -> RG16F or R32G32UI ->
+        // RGBA16F). Default to exact Vulkan format for DCC metadata aliases on this
+        // title; SHARPEMU_DS_DCC_EXACT_FORMAT=0 is an explicit diagnostic opt-out.
+        private static readonly bool _v74086DsDccExactFormat =
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_DS_DCC_EXACT_FORMAT"),
+                "0",
+                StringComparison.Ordinal);
+        private static long _v74086DsDccTypedRejectCount;
+        private static long _v74086DsDccExactReplacementCount;

@@ -1,0 +1,21 @@
+Runtime proof checklist
+
+NOT ACTIVE:
+  provider=1
+  selected=off
+  state=fallback
+  dlss_dispatches=0
+
+NGX handshake progress:
+  [V74.0.67.2.8][DLSS][NGX] stage=instance_extension_requirements ...
+  [V74.0.67.2.8][DLSS][NGX] stage=feature_requirements ...
+  [V74.0.67.2.8][DLSS][NGX] stage=device_extension_requirements ...
+  [V74.0.67.2.8][DLSS][NGX] stage=init_project_id ... success=1
+  [V74.0.67.2.8][DLSS][NGX] stage=get_capability_parameters ... success=1
+  [V74.0.67.2.8][DLSS][NGX] stage=create_dlss_feature ... success=1
+  [V74.0.67.2.8][DLSS][NGX] stage=evaluate_dlss ... success=1
+
+FULL ACTIVE:
+  selected=dlss
+  state=active
+  dlss_dispatches>0

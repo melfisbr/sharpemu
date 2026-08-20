@@ -1,0 +1,6 @@
+        Environment.GetEnvironmentVariable("SHARPEMU_GPU_DETILE"),
+        "0",
+        StringComparison.Ordinal);
+
+    // Diagnostics (SHARPEMU_LOG_GPU_DETILE=1): one line per distinct texture tile
+    // mode and per-gate decision, so we can see which swizzle modes/formats a

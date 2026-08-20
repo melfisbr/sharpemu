@@ -1,0 +1,20 @@
+V74.0.88
+- Internal SDL/Vulkan PS-style IME overlay; no PowerShell, no WinForms, no external window.
+- Keyboard input: A-Z/0-9/Space/Backspace/Enter/Escape/arrows.
+- Gamepad input: D-pad, Cross, Circle, Square, Options.
+- UI Bink NumberType=4 support with typed R8Uint/R8G8Uint host plane images.
+- Single-plane Y/UV bootstrap scoped to Demon's Souls UI Binks.
+- Guest-owned UI Bink EOF rewind/loop.
+- Preserves V74.0.84.2.1 frame ownership/sticky planes and V74.0.86 typed DCC guard.
+- Does not fabricate a character mesh. The actual preview remains guest-rendered from game assets.
+
+V74.0.88.1 installer repair:
+- Renames the local PowerShell `$host` text variable to `$hostMovieText`.
+- `$Host` is a case-insensitive automatic read-only PowerShell variable; V74.0.88 therefore stopped in RUN_2 before touching source.
+- Adds a package-validation regression guard so this exact failure cannot recur.
+- C# payload and runtime behavior remain V74.0.88; this revision changes only SAFE installer/diagnostic scripts.
+
+V74.0.88.2:
+- Replaces fragile exact TryDecodeNextFrame completion-block match with method-bound structural insertion.
+- Adds RUN_2 structural probe for `_playback.IsFinished`, `completedPath`, and `CloseActiveLocked()`.
+- C# feature payload remains V74.0.88.

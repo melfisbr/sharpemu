@@ -1,0 +1,51 @@
+{
+  "package_version": "V75.0.0.4",
+  "runtime_implementation_version": "V75.0.0",
+  "failure_stage": "RUN_2_PRECHECK; RUN_3 stopped by same precheck",
+  "repository_mutated": false,
+  "powershell_error": "Cannot overwrite variable Host because it is read-only or constant.",
+  "root_cause": "PowerShell variable names are case-insensitive; $host aliases automatic read-only $Host",
+  "renamed_variable": {
+    "from": "$host",
+    "to": "$hostMovieSourcePath",
+    "scripts": [
+      "precheck.ps1",
+      "apply_build.ps1",
+      "diagnostic.ps1",
+      "rollback.ps1"
+    ]
+  },
+  "new_validation": {
+    "reserved_assignment_guard": true,
+    "reserved_foreach_guard": true,
+    "protected_names": [
+      "Host",
+      "PID",
+      "PSVersionTable",
+      "PSScriptRoot",
+      "PSCommandPath",
+      "PWD",
+      "ShellId",
+      "Error (foreach)"
+    ]
+  },
+  "functional_csharp_cpp_changed": false,
+  "changes": {
+    "precheck.ps1": {
+      "old_host_tokens": 2,
+      "remaining_host_tokens": 0
+    },
+    "apply_build.ps1": {
+      "old_host_tokens": 4,
+      "remaining_host_tokens": 0
+    },
+    "diagnostic.ps1": {
+      "old_host_tokens": 2,
+      "remaining_host_tokens": 0
+    },
+    "rollback.ps1": {
+      "old_host_tokens": 2,
+      "remaining_host_tokens": 0
+    }
+  }
+}

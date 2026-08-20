@@ -39,6 +39,10 @@ internal sealed unsafe class SdlHostWindow : IDisposable, IHostGamepadOutput
     private byte _leftTriggerRumble;
     private byte _rightTriggerRumble;
     private int _closeRequested;
+    // V31.7.13_GUEST_CLOCK_CLOSE_GUARD
+    // Diagnostic-only. Normal close behavior is unchanged unless the test
+    // runner provides an unarmed sentinel path.
+    private int _captureCloseRequestsIgnored;
     private bool _closedByUser;
     private bool _fullscreen;
     private bool _focused = true;
@@ -409,9 +413,28 @@ internal sealed unsafe class SdlHostWindow : IDisposable, IHostGamepadOutput
             {
                 case SDL_EventType.SDL_EVENT_QUIT:
                 case SDL_EventType.SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                {
+                    var captureCloseGuard = Environment.GetEnvironmentVariable(
+                        "SHARPEMU_GUEST_CLOCK_CAPTURE_CLOSE_GUARD");
+                    if (!string.IsNullOrWhiteSpace(captureCloseGuard) &&
+                        !System.IO.File.Exists(captureCloseGuard))
+                    {
+                        var ignored = System.Threading.Interlocked.Increment(
+                            ref _captureCloseRequestsIgnored);
+                        if (ignored <= 8)
+                        {
+                            Console.Error.WriteLine(
+                                $"[LOADER][WARN] capture_close_request_ignored " +
+                                $"type={windowEvent.Type} count={ignored} " +
+                                "reason=v31720-full-attract-capture");
+                        }
+                        break;
+                    }
+
                     _closedByUser = true;
                     Volatile.Write(ref _closeRequested, 1);
                     break;
+                }
                 case SDL_EventType.SDL_EVENT_WINDOW_FOCUS_GAINED:
                     _focused = true;
                     UpdateCursorVisibility();
@@ -475,6 +498,17 @@ internal sealed unsafe class SdlHostWindow : IDisposable, IHostGamepadOutput
     private void HandleKey(SDL_KeyboardEvent keyEvent)
     {
         var down = keyEvent.type == SDL_EventType.SDL_EVENT_KEY_DOWN;
+
+        // SHARPEMU_V74_0_88_IME_IN_WINDOW_SDL_INPUT
+        // libSceImeDialog owns keyboard/gamepad input while its system UI is up.
+        if (SharpEmu.Libs.Ime.ImeInWindowOverlay.Active)
+        {
+            if (down && !keyEvent.repeat)
+            {
+                HandleInWindowImeKeyV74088(keyEvent);
+            }
+            return;
+        }
         if (down && !keyEvent.repeat)
         {
             if (keyEvent.key == SDL_Keycode.SDLK_F1 &&
@@ -503,6 +537,54 @@ internal sealed unsafe class SdlHostWindow : IDisposable, IHostGamepadOutput
         }
     }
 
+    private static void HandleInWindowImeKeyV74088(SDL_KeyboardEvent keyEvent)
+    {
+        var key = keyEvent.key;
+        var shift = (keyEvent.mod & SDL_Keymod.SDL_KMOD_SHIFT) != 0;
+
+        if (key >= SDL_Keycode.SDLK_A && key <= SDL_Keycode.SDLK_Z)
+        {
+            var offset = (int)(key - SDL_Keycode.SDLK_A);
+            var value = (char)((shift ? 'A' : 'a') + offset);
+            SharpEmu.Libs.Ime.ImeInWindowOverlay.InsertCharacter(value);
+            return;
+        }
+
+        if (key >= SDL_Keycode.SDLK_0 && key <= SDL_Keycode.SDLK_9)
+        {
+            SharpEmu.Libs.Ime.ImeInWindowOverlay.InsertCharacter(
+                (char)('0' + (int)(key - SDL_Keycode.SDLK_0)));
+            return;
+        }
+
+        switch (key)
+        {
+            case SDL_Keycode.SDLK_BACKSPACE:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.Backspace();
+                break;
+            case SDL_Keycode.SDLK_ESCAPE:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.Cancel();
+                break;
+            case SDL_Keycode.SDLK_RETURN:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.Confirm();
+                break;
+            case SDL_Keycode.SDLK_SPACE:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.InsertSpace();
+                break;
+            case SDL_Keycode.SDLK_LEFT:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.MoveSelection(-1, 0);
+                break;
+            case SDL_Keycode.SDLK_RIGHT:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.MoveSelection(1, 0);
+                break;
+            case SDL_Keycode.SDLK_UP:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.MoveSelection(0, -1);
+                break;
+            case SDL_Keycode.SDLK_DOWN:
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.MoveSelection(0, 1);
+                break;
+        }
+    }
     private void ToggleFullscreen()
     {
         if (_fullscreen)
@@ -689,6 +771,14 @@ internal sealed unsafe class SdlHostWindow : IDisposable, IHostGamepadOutput
                 Motion = ReadMotion(),
                 Touch = ReadTouch(),
             };
+
+            // SHARPEMU_V74_0_88_IME_IN_WINDOW_GAMEPAD_INPUT
+            if (SharpEmu.Libs.Ime.ImeInWindowOverlay.Active)
+            {
+                SharpEmu.Libs.Ime.ImeInWindowOverlay.HandleGamepadButtons(state.Buttons);
+                state = state with { Buttons = HostGamepadButtons.None };
+            }
+
             HostWindowInput.SetGamepad(
                 DescribeGamepad(),
                 state);

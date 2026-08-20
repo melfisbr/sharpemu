@@ -101,65 +101,18 @@ public static partial class Gen5SpirvTranslator
                 return false;
             }
 
+            if (instruction.Opcode is "VMovrelsB32" or "VMovreldB32" or
+                "VMovrelsdB32" or "VMovrelsd2B32")
+            {
+                return TryEmitMoveRelative(instruction, destination, out error);
+            }
+
             uint result;
             switch (instruction.Opcode)
             {
                 case "VMovB32":
                     result = GetRawSource(instruction, 0);
                     break;
-                case "VMovrelsB32":
-                {
-                    if (instruction.Sources.Count == 0 ||
-                        instruction.Sources[0].Kind != Gen5OperandKind.VectorRegister)
-                    {
-                        error = "VMovrelsB32 expects a VGPR source";
-                        return false;
-                    }
-
-                    var relativeIndex = BitwiseAnd(
-                        IAdd(
-                            UInt(instruction.Sources[0].Value),
-                            LoadS(M0Register)),
-                        UInt(VectorRegisterCount - 1));
-                    result = Load(_uintType, VectorPointerDynamic(relativeIndex));
-                    break;
-                }
-                case "VMovreldB32":
-                {
-                    if (instruction.Sources.Count == 0 ||
-                        instruction.Sources[0].Kind != Gen5OperandKind.VectorRegister)
-                    {
-                        error = "VMovreldB32 expects a VGPR source";
-                        return false;
-                    }
-
-                    var relativeDestination = BitwiseAnd(
-                        IAdd(UInt(destination), LoadS(M0Register)),
-                        UInt(VectorRegisterCount - 1));
-                    var source = LoadV(instruction.Sources[0].Value);
-                    StoreVDynamic(relativeDestination, source);
-                    return true;
-                }
-                case "VMovrelsdB32":
-                {
-                    if (instruction.Sources.Count == 0 ||
-                        instruction.Sources[0].Kind != Gen5OperandKind.VectorRegister)
-                    {
-                        error = "VMovrelsdB32 expects a VGPR source";
-                        return false;
-                    }
-
-                    var m0 = LoadS(M0Register);
-                    var relativeSource = BitwiseAnd(
-                        IAdd(UInt(instruction.Sources[0].Value), m0),
-                        UInt(VectorRegisterCount - 1));
-                    var relativeDestination = BitwiseAnd(
-                        IAdd(UInt(destination), m0),
-                        UInt(VectorRegisterCount - 1));
-                    var source = Load(_uintType, VectorPointerDynamic(relativeSource));
-                    StoreVDynamic(relativeDestination, source);
-                    return true;
-                }
                 case "VWritelaneB32":
                 {
                     // vdst[lane(src1)] = src0
@@ -1128,6 +1081,49 @@ public static partial class Gen5SpirvTranslator
                         vector);
                     break;
                 }
+                // [V74.0.56.9][RDNA2_POST_PS_STUDIOS_SHADER_FIX]
+                case "VCvtPkI16I32":
+                {
+                    // RDNA2 converts each signed i32 to a saturated signed i16
+                    // and packs src0 in bits 15:0, src1 in bits 31:16.
+                    // Keep the SPIR-V module on 32-bit integer capabilities:
+                    // clamp in i32, then take the low 16 bits of each result.
+                    var minI16 = Bitcast(
+                        _intType,
+                        UInt(0xFFFF8000u));
+                    var maxI16 = Bitcast(
+                        _intType,
+                        UInt(0x00007FFFu));
+
+                    var firstSigned = Bitcast(
+                        _intType,
+                        GetRawSource(instruction, 0));
+                    var secondSigned = Bitcast(
+                        _intType,
+                        GetRawSource(instruction, 1));
+
+                    var firstClamped = Ext(
+                        39u,
+                        _intType,
+                        Ext(42u, _intType, firstSigned, minI16),
+                        maxI16);
+                    var secondClamped = Ext(
+                        39u,
+                        _intType,
+                        Ext(42u, _intType, secondSigned, minI16),
+                        maxI16);
+
+                    var low = BitwiseAnd(
+                        Bitcast(_uintType, firstClamped),
+                        UInt(0xFFFFu));
+                    var high = ShiftLeftLogical(
+                        BitwiseAnd(
+                            Bitcast(_uintType, secondClamped),
+                            UInt(0xFFFFu)),
+                        UInt(16));
+                    result = BitwiseOr(low, high);
+                    break;
+                }
                 case "VCvtPknormI16F32":
                 case "VCvtPknormU16F32":
                 {
@@ -1190,6 +1186,62 @@ public static partial class Gen5SpirvTranslator
             }
 
             StoreV(destination, result);
+            return true;
+        }
+
+        // Upstream 0.0.3: complete register-relative move family.
+        // M0 is added at run time, not at translation time. V_MOVRELD accepts
+        // an ordinary src0 (SGPR/constant/VGPR); V_MOVRELSD_2 uses split M0 fields.
+        private bool TryEmitMoveRelative(
+            Gen5ShaderInstruction instruction,
+            uint destination,
+            out string error)
+        {
+            error = string.Empty;
+            if (instruction.Sources.Count == 0)
+            {
+                error = $"missing source for {instruction.Opcode}";
+                return false;
+            }
+
+            var m0 = LoadS(M0Register);
+            uint sourceOffset;
+            uint destinationOffset;
+            if (instruction.Opcode == "VMovrelsd2B32")
+            {
+                sourceOffset = BitwiseAnd(m0, UInt(0x3FF));
+                destinationOffset = BitwiseAnd(ShiftRightLogical(m0, UInt(16)), UInt(0x3FF));
+            }
+            else
+            {
+                sourceOffset = m0;
+                destinationOffset = m0;
+            }
+
+            uint value;
+            if (instruction.Opcode == "VMovreldB32")
+            {
+                value = GetRawSource(instruction, 0);
+            }
+            else
+            {
+                var source = instruction.Sources[0];
+                if (source.Kind != Gen5OperandKind.VectorRegister)
+                {
+                    error = $"{instruction.Opcode} source must be a vector register";
+                    return false;
+                }
+
+                value = LoadVDynamic(IAdd(UInt(source.Value), sourceOffset));
+            }
+
+            if (instruction.Opcode == "VMovrelsB32")
+            {
+                StoreV(destination, value);
+                return true;
+            }
+
+            StoreVDynamic(IAdd(UInt(destination), destinationOffset), value);
             return true;
         }
 

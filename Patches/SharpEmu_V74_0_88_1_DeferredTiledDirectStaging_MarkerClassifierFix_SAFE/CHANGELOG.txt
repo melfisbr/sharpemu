@@ -1,0 +1,5 @@
+[V74.0.88.1] Installer-only correction for V74.0.88.
+- Fix Presenter V88 state classifier to count exact comment markers.
+- Add regression: broad DIRECT_GUEST_STAGING count=2 but exact direct marker count=1.
+- Keep all 11 V88 C# hunks unchanged.
+- RUN_1 still performs current-checkout four-file dry-run, idempotence and C# lexical brace validation before writes.

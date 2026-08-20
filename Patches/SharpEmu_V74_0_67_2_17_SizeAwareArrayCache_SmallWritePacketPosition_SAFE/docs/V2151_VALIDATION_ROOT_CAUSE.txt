@@ -1,0 +1,17 @@
+V74.0.67.2.15.1
+
+Observed:
+- RUN_1 failed before applying source.
+- RUN_2 passed.
+- RUN_3 failed at the same validator.
+- RUN_4 showed V2.15 markers false, as expected because RUN_3 never patched.
+- Existing DLSS V2.14/native provider state remained intact.
+
+Fixed validator defects:
+1. undefined $token interpolation in a double-quoted Contains needle.
+2. $env:SHARPEMU_VK_UPSCALER interpolation in another Contains needle.
+
+New prevention:
+- generic scan of all package PowerShell files for
+  .Contains("...$variable...")
+- regression fixture proving bad form is caught.

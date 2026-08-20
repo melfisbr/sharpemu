@@ -1,0 +1,14 @@
+SharpEmu Demon's Souls IME Dialog Host Text Input Fix V74.0.85.1 SAFE
+
+V74.0.85 did not touch the source: its PRECHECK rejected the correct baseline because it
+counted every textual occurrence of ParamMaxTextLengthOffset and ParamInputTextBufferOffset
+and incorrectly required each identifier to occur exactly once. In the baseline each occurs
+twice (declaration + use), so PRECHECK failed before APPLY.
+
+V74.0.85.1 fixes only that package-side structural guard and carries the same intended IME
+runtime correction forward. It additionally pins the accepted baseline SHA-256:
+DB550450C034EB7B12530F43ECEC27B9D0BCCA2AC1A41B08C3E21E6F7315B459
+
+Runtime target:
+sceImeDialogInit -> RUNNING -> asynchronous Windows text panel -> guest-thread UTF-16
+commit -> FINISHED -> sceImeDialogGetResult -> sceImeDialogTerm.

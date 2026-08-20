@@ -1,0 +1,337 @@
+// Copyright (C) 2026 SharpEmu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+using System.Diagnostics;
+using System.Text.Json;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Threading;
+
+namespace SharpEmu.GUI;
+
+public partial class MainWindow
+{
+    // SHARPEMU_RUNTIME_AUDIT_UI_V1_1
+    private Process? _runtimeAuditProcess;
+    private Button? _runtimeAuditButton;
+
+    private void InstallRuntimeAuditButton()
+    {
+        if (_runtimeAuditButton is not null)
+        {
+            return;
+        }
+
+        var button = new Button
+        {
+            Content = "Audit & Launch",
+            IsEnabled = true,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            MinHeight = Math.Max(40, LaunchButton.Bounds.Height),
+            Padding = new Thickness(18, 10)
+        };
+
+        foreach (var className in LaunchButton.Classes)
+        {
+            button.Classes.Add(className);
+        }
+
+        button.Classes.Add("runtimeAudit");
+        button.Click += OnRuntimeAuditSelectedGame;
+
+        if (LaunchButton.Parent is Panel panel)
+        {
+            var index = panel.Children.IndexOf(LaunchButton);
+            if (index < 0)
+            {
+                index = panel.Children.Count - 1;
+            }
+
+            if (panel is StackPanel stack &&
+                stack.Orientation == Orientation.Vertical)
+            {
+                button.Margin = new Thickness(
+                    LaunchButton.Margin.Left,
+                    8,
+                    LaunchButton.Margin.Right,
+                    LaunchButton.Margin.Bottom);
+            }
+            else
+            {
+                button.Margin = new Thickness(
+                    8,
+                    LaunchButton.Margin.Top,
+                    LaunchButton.Margin.Right,
+                    LaunchButton.Margin.Bottom);
+            }
+
+            panel.Children.Insert(Math.Min(index + 1, panel.Children.Count), button);
+            _runtimeAuditButton = button;
+            Console.Error.WriteLine(
+                "[GUI][RuntimeAudit] Audit & Launch button installed next to Launch.");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                "[GUI][RuntimeAudit] LaunchButton parent is not a Panel; audit button was not installed.");
+        }
+    }
+
+    private void OnRuntimeAuditSelectedGame(object? sender, RoutedEventArgs e)
+    {
+        if (_runtimeAuditProcess is { HasExited: false } || _isRunning)
+        {
+            return;
+        }
+
+        if (GameList.SelectedItem is not GameEntry game ||
+            string.IsNullOrWhiteSpace(game.Path) ||
+            !File.Exists(game.Path))
+        {
+            _runtimeAuditButton!.Content = "Audit unavailable";
+            return;
+        }
+
+        var repositoryRoot = FindRuntimeAuditRepositoryRoot();
+        if (repositoryRoot is null)
+        {
+            _runtimeAuditButton!.Content = "Audit tool missing";
+            Console.Error.WriteLine(
+                "[GUI][RuntimeAudit] Could not locate repository root containing tools/SharpEmu.RuntimeAudit.");
+            return;
+        }
+
+        var auditorDll = FindRuntimeAuditDll(repositoryRoot);
+        if (auditorDll is null)
+        {
+            _runtimeAuditButton!.Content = "Build audit tool";
+            Console.Error.WriteLine(
+                "[GUI][RuntimeAudit] SharpEmu.RuntimeAudit.dll not found. Run the RuntimeAudit UI installer/build.");
+            return;
+        }
+
+        var titleKey = RuntimeAuditTitleKey(game);
+        var historyRoot = Path.Combine(
+            repositoryRoot,
+            "RuntimeAuditHistory",
+            titleKey);
+        Directory.CreateDirectory(historyRoot);
+
+        var configPath = Path.Combine(
+            repositoryRoot,
+            "tools",
+            "SharpEmu.RuntimeAudit",
+            "audit-profile.json");
+
+        var gameRoot = Path.GetDirectoryName(game.Path) ?? repositoryRoot;
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet.exe",
+            WorkingDirectory = repositoryRoot,
+            UseShellExecute = false,
+            CreateNoWindow = false
+        };
+
+        startInfo.ArgumentList.Add(auditorDll);
+        startInfo.ArgumentList.Add("--repo");
+        startInfo.ArgumentList.Add(repositoryRoot);
+        startInfo.ArgumentList.Add("--eboot");
+        startInfo.ArgumentList.Add(game.Path);
+        startInfo.ArgumentList.Add("--game-root");
+        startInfo.ArgumentList.Add(gameRoot);
+        startInfo.ArgumentList.Add("--config");
+        startInfo.ArgumentList.Add(configPath);
+        startInfo.ArgumentList.Add("--output-root");
+        startInfo.ArgumentList.Add(historyRoot);
+
+        _runtimeAuditButton!.IsEnabled = false;
+        _runtimeAuditButton!.Content = "Audit running...";
+
+        try
+        {
+            var process = new Process
+            {
+                StartInfo = startInfo,
+                EnableRaisingEvents = true
+            };
+
+            process.Exited += (_, _) =>
+            {
+                var exitCode = 0;
+                try
+                {
+                    exitCode = process.ExitCode;
+                }
+                catch
+                {
+                    exitCode = -1;
+                }
+
+                var comparison = ReadLatestRuntimeAuditVerdict(historyRoot);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _runtimeAuditButton!.IsEnabled = !_isRunning &&
+                                                   GameList.SelectedItem is GameEntry;
+                    _runtimeAuditButton!.Content = exitCode == 0
+                        ? comparison switch
+                        {
+                            "improved" => "Audit: improved",
+                            "regressed" => "Audit: regressed",
+                            "mixed" => "Audit: mixed",
+                            "baseline" => "Audit: baseline",
+                            _ => "Audit & Launch"
+                        }
+                        : $"Audit failed ({exitCode})";
+                });
+
+                Console.Error.WriteLine(
+                    $"[GUI][RuntimeAudit] completed exit={exitCode} history='{historyRoot}' verdict='{comparison}'.");
+                process.Dispose();
+            };
+
+            if (!process.Start())
+            {
+                process.Dispose();
+                _runtimeAuditButton!.IsEnabled = true;
+                _runtimeAuditButton!.Content = "Audit start failed";
+                return;
+            }
+
+            _runtimeAuditProcess = process;
+            Console.Error.WriteLine(
+                $"[GUI][RuntimeAudit] started pid={process.Id} title='{titleKey}' history='{historyRoot}'.");
+        }
+        catch (Exception exception)
+        {
+            _runtimeAuditButton!.IsEnabled = true;
+            _runtimeAuditButton!.Content = "Audit start failed";
+            Console.Error.WriteLine(
+                $"[GUI][RuntimeAudit] launch failed: {exception}");
+        }
+    }
+
+    private static string? FindRuntimeAuditRepositoryRoot()
+    {
+        var starts = new[]
+        {
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory
+        };
+
+        foreach (var start in starts)
+        {
+            DirectoryInfo? current;
+            try
+            {
+                current = new DirectoryInfo(Path.GetFullPath(start));
+            }
+            catch
+            {
+                continue;
+            }
+
+            for (var depth = 0; current is not null && depth < 12; depth++, current = current.Parent)
+            {
+                var guiProject = Path.Combine(
+                    current.FullName,
+                    "src",
+                    "SharpEmu.GUI",
+                    "SharpEmu.GUI.csproj");
+                var auditProject = Path.Combine(
+                    current.FullName,
+                    "tools",
+                    "SharpEmu.RuntimeAudit",
+                    "SharpEmu.RuntimeAudit.csproj");
+
+                if (File.Exists(guiProject) && File.Exists(auditProject))
+                {
+                    return current.FullName;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindRuntimeAuditDll(string repositoryRoot)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(
+                repositoryRoot,
+                "tools",
+                "SharpEmu.RuntimeAudit",
+                "bin",
+                "Debug",
+                "net10.0",
+                "SharpEmu.RuntimeAudit.dll"),
+            Path.Combine(
+                repositoryRoot,
+                "tools",
+                "SharpEmu.RuntimeAudit",
+                "bin",
+                "Release",
+                "net10.0",
+                "SharpEmu.RuntimeAudit.dll")
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
+    private static string RuntimeAuditTitleKey(GameEntry game)
+    {
+        var value = !string.IsNullOrWhiteSpace(game.TitleId)
+            ? game.TitleId!
+            : Path.GetFileName(Path.GetDirectoryName(game.Path)) ?? game.Name;
+
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+        {
+            value = value.Replace(invalid, '_');
+        }
+
+        return string.IsNullOrWhiteSpace(value)
+            ? "unknown-title"
+            : value;
+    }
+
+    private static string ReadLatestRuntimeAuditVerdict(string historyRoot)
+    {
+        try
+        {
+            var latest = Directory
+                .EnumerateDirectories(
+                    historyRoot,
+                    "SharpEmu_RuntimeAudit_Result_*",
+                    SearchOption.TopDirectoryOnly)
+                .OrderByDescending(Directory.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (latest is null)
+            {
+                return "baseline";
+            }
+
+            var comparisonPath = Path.Combine(
+                latest,
+                "comparison_previous.json");
+            if (!File.Exists(comparisonPath))
+            {
+                return "baseline";
+            }
+
+            using var document = JsonDocument.Parse(
+                File.ReadAllText(comparisonPath));
+            return document.RootElement.TryGetProperty("overall", out var overall)
+                ? overall.GetString() ?? "unknown"
+                : "unknown";
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+}

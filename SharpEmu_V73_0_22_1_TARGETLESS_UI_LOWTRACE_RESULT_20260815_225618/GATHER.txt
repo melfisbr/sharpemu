@@ -1,1 +1,0 @@
-[MSG-Init] ResourcePool::GatherResourceFileInfo() took 35.2158s

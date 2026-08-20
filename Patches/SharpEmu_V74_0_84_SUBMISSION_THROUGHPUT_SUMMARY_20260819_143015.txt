@@ -1,0 +1,23 @@
+﻿[V74.0.84] Submission Headroom + Adaptive Unified Compute diagnostic
+ExitCode=0
+fairness_test=1 adaptive_unified_test=1 nonblocking_visibility_test=1 queue_burst_test=2
+runtime_log_present=True
+first_frame=1
+device_lost=0
+adaptive_unified_max_counter=512
+cross_work_overcommit_max_counter=0
+submission_overcommit_max_counter=0
+legacy_capacity_yield_max_counter=0
+hard_capacity_yield_max_counter=0
+ordered_visibility_defer_max_counter=16384
+queue_timeline_block_max_counter=16384
+payload_batch=count=16384 last_work=1 total_work=17849 avg=1.09
+parser_escape_logged=19
+large_snapshot_logged=92
+slow_wait_steady_le4s: count=27 avg_ms=1662,981 max_ms=2662,216
+slow_wait_video_gt4s: count=0
+gate_wait_le4s: count=1206 avg_ms=72,081 max_ms=3181,586
+mem_max_alloc2s_mb=1843
+mem_max_working_mb=11334
+mem_max_private_mb=19596
+target_frame_budget_60fps_ms=16.667

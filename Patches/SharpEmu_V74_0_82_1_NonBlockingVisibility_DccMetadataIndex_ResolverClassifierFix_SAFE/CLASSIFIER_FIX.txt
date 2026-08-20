@@ -1,0 +1,20 @@
+V74.0.82.1 SAFE installer correction
+
+Observed live precheck:
+  DccMethod=2
+  V812=1
+  DccV80=2
+
+Root cause:
+The V74.0.82 Assert-StructuralContracts regex counted every occurrence of
+TryResolveGuestImageMetadataAliasV7405632(, including the method declaration and
+a normal call/reference from the accumulated V80 provenance path. The apply
+transform itself already used an anchored method-definition regex.
+
+Correction:
+- DccResolverDefinitions counts only lines matching:
+    private bool TryResolveGuestImageMetadataAliasV7405632(
+- DccResolverReferences counts all occurrences for diagnostics only.
+- Precheck requires exactly one definition, not exactly one reference.
+- No runtime C# optimization semantics were changed.
+- V81.2 Vulkan boundaries remain mandatory/preserved.

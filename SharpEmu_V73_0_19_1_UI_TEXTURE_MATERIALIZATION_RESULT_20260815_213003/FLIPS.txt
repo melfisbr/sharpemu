@@ -1,6 +1,0 @@
-[V16][CP4_FLIP] handle=1 index=0 mode=3 arg=0 display=0x0000000457C00000 size=3840x2160 writer=235 frame_floor=0 known_rt=1
-[V16][CP4_FLIP] handle=1 index=1 mode=3 arg=0 display=0x0000000459C00000 size=3840x2160 writer=411 frame_floor=235 known_rt=1
-[V16][CP4_FLIP] handle=1 index=0 mode=3 arg=0 display=0x0000000457C00000 size=3840x2160 writer=585 frame_floor=411 known_rt=1
-[V16][CP4_FLIP] handle=1 index=1 mode=3 arg=0 display=0x0000000459C00000 size=3840x2160 writer=759 frame_floor=585 known_rt=1
-[V16][CP4_FLIP] handle=1 index=0 mode=3 arg=0 display=0x0000000457C00000 size=3840x2160 writer=933 frame_floor=759 known_rt=1
-[V16][CP4_FLIP] handle=1 index=1 mode=3 arg=0 display=0x0000000459C00000 size=3840x2160 writer=1107 frame_floor=933 known_rt=1

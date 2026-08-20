@@ -1,0 +1,6 @@
+            {
+                // GPU detile: no CPU staging; the compute pass writes the image directly.
+                contentFingerprint = ComputeTextureContentFingerprint(gpuSource);
+            }
+            else
+            {

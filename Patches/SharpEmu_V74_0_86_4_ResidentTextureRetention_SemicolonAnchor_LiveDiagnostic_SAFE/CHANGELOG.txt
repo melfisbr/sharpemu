@@ -1,0 +1,7 @@
+V74.0.86.4
+- Fixes V86.3 installer failure "presenter cache registration EOL missing".
+- Presenter insertion anchors on the semicolon of the unique `_cachedTextureIdentities.TryAdd(identity, 0);` statement.
+- AGC helper insertion also anchors on the semicolon of the known cache field; no source EOL lookup remains.
+- No dependency on CRLF/LF, TryCreateGuestDrawTexture, IsTextureContentCached ownership, NoteSampledAddress, or cache-hit body layout.
+- Runtime design unchanged: 3072 MiB resident cache, 10 s large-snapshot TTL, CPU bridge retirement after presenter cache mark, live diagnostic logging.
+- V85/V84/V82 and V81.2 Vulkan boundaries preserved.

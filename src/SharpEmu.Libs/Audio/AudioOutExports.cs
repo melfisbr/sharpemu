@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
@@ -7,6 +7,10 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+
+using SharpEmu.Libs.VideoOut;
+
+using SharpEmu.Libs.Media;
 
 namespace SharpEmu.Libs.Audio;
 
@@ -29,6 +33,9 @@ public static class AudioOutExports
     private static readonly bool _traceOutput = string.Equals(
         Environment.GetEnvironmentVariable("SHARPEMU_LOG_AUDIO_OUT"), "1", StringComparison.Ordinal);
     private static long _outputCount;
+    // SHARPEMU_DEMONS_POST_STUDIOS_GUEST_AUDIO_MUTE_V1_1_5
+    private static long _v115PostStudiosMutedOutputCount;
+    // SHARPEMU_DEMONS_STARTUP_AUDIOOUT_MUTE_V1_1_6
 
     private sealed class PortState : IDisposable
     {
@@ -520,6 +527,28 @@ public static class AudioOutExports
 
     private static void ConvertForHost(PortState port, ReadOnlySpan<byte> source, Span<byte> destination)
     {
+        // Preserve guest RADSS/Bink scheduling and AudioOut cadence, but send
+        // silence to the host backend while the post-Studios cover is active.
+        // RAD's own PS Studios audio and the attract waveout sidecar bypass
+        // this sceAudioOut conversion path.
+        if (BinkDemonSoulsIntroAudioV7243227.IsStartupGuestAudioMuteActiveV116())
+        {
+            destination.Clear();
+
+            var n = Interlocked.Increment(
+                ref _v115PostStudiosMutedOutputCount);
+            if (n <= 8 || n % 200 == 0)
+            {
+                Console.Error.WriteLine(
+                    "[BINK-AUDIO-OWNER][V1.1.6] audioout_silenced " +
+                    $"n={n} frames={port.BufferLength} " +
+                    $"rate={port.Frequency} channels={port.Channels} " +
+                    "reason=startup-host-audio-owner " +
+                    "guest_threads_preserved=True");
+            }
+
+            return;
+        }
         if (port.PreservesGuestFormat)
         {
             AudioPcmConversion.CopyWithVolume(source, destination, port.IsFloat, port.Volume);
@@ -682,3 +711,5 @@ public static class AudioOutExports
         return channels != 0;
     }
 }
+
+

@@ -1,0 +1,7 @@
+V74.0.85
+- Replaces immediate hard-coded IME autofill with real interactive text entry.
+- Async WinForms panel via Windows PowerShell 5.1 child process.
+- Preserves guest UTF-16 buffer ownership and max-length contract.
+- Guest poll commits result and transitions RUNNING -> FINISHED.
+- Cancel/Abort/Term lifecycle supported.
+- SAFE backup + rollback on apply/build failure.

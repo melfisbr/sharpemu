@@ -1,2 +1,0 @@
-SharpEmu V74.0.23 SAFE
-Demon's Souls large-array resident texture-cache validation repair

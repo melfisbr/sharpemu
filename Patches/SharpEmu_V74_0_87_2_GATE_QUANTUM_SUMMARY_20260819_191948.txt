@@ -1,0 +1,19 @@
+[V74.0.87.2] Cooperative Gate Quantum diagnostic
+ExitCode=0
+runtime_log_present=True
+first_frame=1
+device_lost=0
+gate_quantum_yield_max_counter=8192
+gate_owner_wait_drain_max_counter=42724
+dedicated_wait_drain_max_counter=18232
+release_queue_only_max_counter=32768
+local_texture_payload_dedup_max_counter=2048
+cpu_bridge_release_max_counter=6
+adaptive_unified_max_counter=512
+ordered_visibility_defer_max_counter=8192
+payload_batch_submit_max_counter=32768
+parser_escape_logged=20
+slow_wait_ms: count=12 avg=6164,667 p50=8925,226 p90=8994,478 max=9021,447
+gate_wait_ms: count=1490 avg=64,060 p50=44,413 p90=128,571 max=8287,571
+source_defaults: gate_quantum_packets=16 gate_quantum_ms=1; env 0/0 restores legacy
+target_frame_budget_60fps_ms=16.667

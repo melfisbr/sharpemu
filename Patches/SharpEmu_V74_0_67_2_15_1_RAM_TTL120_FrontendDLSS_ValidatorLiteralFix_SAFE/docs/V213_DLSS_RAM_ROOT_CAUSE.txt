@@ -1,0 +1,13 @@
+V74.0.67.2.13
+
+DLSS blocker:
+valid temporal scene inputs reached the pre-composite gate, but the native
+provider was disposed after failed initialization and the same output size was
+not retried. V2.13 retains the provider, retries on a bounded timer and passes
+an explicit NGX feature-DLL path.
+
+RAM blocker:
+the runtime repeatedly handles 320 MiB-class layered texture snapshots.
+The managed heap/private bytes show substantial LOH churn. V2.13 keeps the
+single-flight design but uses a sparse content key and longer reuse window so
+stable large arrays are not recreated on short TTL expiration.

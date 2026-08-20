@@ -1,0 +1,32 @@
+[V74.0.67.2.18] head2_marker=true
+[V74.0.67.2.18] head2_handler=true
+[V74.0.67.2.18] exact_target=true
+[V74.0.67.2.18] exact_rcx2=true
+[V74.0.67.2.18] exact_rax2=true
+[V74.0.67.2.18] exact_primary_r14=true
+[V74.0.67.2.18] exact_head2=true
+[V74.0.67.2.18] exact_adjacent0=true
+[V74.0.67.2.18] helper_signature=true
+[V74.0.67.2.18] caller_mov_r14_cmp=true
+[V74.0.67.2.18] caller_cmp_je=true
+[V74.0.67.2.18] caller_deref_r14_20=true
+[V74.0.67.2.18] caller_end_slot=true
+[V74.0.67.2.18] caller_end_matches_payload=true
+[V74.0.67.2.18] returns_payload=true
+[V74.0.67.2.18] clears_rcx=true
+[V74.0.67.2.18] resumes_guest=true
+[V74.0.67.2.18] telemetry=true
+[V74.0.67.2.18] v211_preserved=true
+[V74.0.67.2.18] v212_preserved=true
+[V74.0.67.2.18] v217_cache=true
+[V74.0.67.2.18] v217_small_write=true
+[V74.0.67.2.18] v217_latency=true
+[V74.0.67.2.18] v215_ttl=true
+[V74.0.67.2.18] v214_dlss=true
+[V74.0.67.2.18] release_host_exists=true
+[V74.0.67.2.18] RECOVERY_SCOPE=target0xA+rcx2+rax2+BPE+tcVi5SivF7Q+rdi-r14+helper-signature+head2+adjacent0+exact-caller+caller-end-payload
+[V74.0.67.2.18] RECOVERY_ACTION=RAX=canonical-payload RCX=0 RIP=rip+4
+[V74.0.67.2.18] ABSOLUTE_GUEST_ADDRESS_GATE=false
+[V74.0.67.2.18] DLSS_CHANGE=false
+[V74.0.67.2.18] V217_CHANGE=preserved-or-cumulative-apply-only
+[V74.0.67.2.18] DIAGNOSTIC PASSED.

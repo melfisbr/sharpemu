@@ -48,7 +48,21 @@ internal sealed record GuestDrawTexture(
     ulong MetadataAddress = 0,
     uint DescriptorFlags = 0,
     uint BcSwizzle = 0,
-    bool HasExtendedDescriptor = false);
+    bool HasExtendedDescriptor = false,
+    // SHARPEMU_V74_0_56_32_DCC_GPU_REFERENCE
+    // True means CPU bytes are intentionally absent because they are DCC-
+    // compressed. The backend must try a GPU image alias before any guest-RAM
+    // snapshot/self-heal path. Appended for source compatibility.
+    bool GpuReferenceOnly = false,
+    // SHARPEMU_V74_0_88_DEFERRED_TILED_GUEST_SOURCE
+    // Large GPU-detile inputs can remain as a guest-memory reference until the
+    // Vulkan render thread owns a mapped staging buffer. This avoids allocating
+    // and filling a hundreds-of-MiB managed TiledSource while AGC holds its Gate.
+    bool DeferredTiledGuestRead = false,
+    ulong DeferredTiledGuestBaseAddress = 0,
+    ulong DeferredTiledGuestSliceStride = 0,
+    ulong DeferredTiledGuestBaseOffset = 0,
+    int DeferredTiledGuestSliceBytes = 0);
 
 /// <summary>Raw guest sampler descriptor dwords, copied verbatim from guest memory.</summary>
 internal readonly record struct GuestSampler(
@@ -195,14 +209,30 @@ internal sealed record GuestRenderState(
         Blends.Count == 0 ? GuestBlendState.Default : Blends[0];
 }
 
-/// <summary>Format/NumberType are raw guest render-target register codes.</summary>
+/// <summary>
+/// Format/NumberType/ComponentSwap are raw guest render-target register codes.
+/// TileMode provenance is independent because it describes the surface layout.
+/// </summary>
 internal sealed record GuestRenderTarget(
     ulong Address,
     uint Width,
     uint Height,
     uint Format,
     uint NumberType,
-    uint MipLevels = 1);
+    uint MipLevels = 1,
+    // KytyPS5 texture-cache parity: the same guest VA/extent can legally be
+    // rebound with a different RDNA2 tile mode. Keep that provenance across
+    // the backend seam so Vulkan image aliases never reuse an incompatible
+    // swizzle/layout merely because the address and dimensions match.
+    uint TileMode = 0,
+    bool TileModeKnown = false,
+    // CB_COLOR_INFO.COMP_SWAP (bits 11..12). Appended so all existing
+    // positional construction remains source-compatible.
+    uint ComponentSwap = 0,
+    // SHARPEMU_V74_0_56_32_DCC_METADATA_SEAM
+    // CB_COLOR DCC metadata identity. The AGC descriptor already carried it,
+    // but the old guest-GPU seam discarded it before Vulkan.
+    ulong MetadataAddress = 0);
 
 /// <summary>Guest DB surface bound alongside a color render target.</summary>
 internal sealed record GuestDepthTarget(

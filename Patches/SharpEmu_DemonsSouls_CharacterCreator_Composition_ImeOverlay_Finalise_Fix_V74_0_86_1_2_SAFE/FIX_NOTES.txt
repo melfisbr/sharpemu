@@ -1,0 +1,7 @@
+V74.0.86.1.2
+- Fix run_test.ps1 missing closing parenthesis.
+- Remove exact return-anchor dependency.
+- Do not repatch PumpHostMovieFrame.
+- Learn Bluepoint Y/UV addresses immediately at the discovered-pair mapping point.
+- Preserve V84.2.1 frame ownership/sticky fallback and V86 typed DCC.
+- Keep the larger OSK host input overlay.

@@ -1,0 +1,16 @@
+{
+  "schema": "SharpEmu.RuntimeDebug.V1.3.0",
+  "startedUtc": "2026-08-17T14:36:34.7566091+00:00",
+  "startedLocal": "2026-08-17T11:36:34.7566107-03:00",
+  "processId": 26608,
+  "processName": "SharpEmu",
+  "commandLine": "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.dll",
+  "currentDirectory": "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Debug\\net10.0\\win-x64",
+  "appBaseDirectory": "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Debug\\net10.0\\win-x64\\",
+  "framework": ".NET 10.0.10",
+  "os": "Microsoft Windows 10.0.19045",
+  "architecture": "X64",
+  "processorCount": 24,
+  "titleKey": "UNKNOWN_TITLE",
+  "selectedContext": {}
+}

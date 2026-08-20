@@ -1,0 +1,7 @@
+V74.0.84.2.1 targets temporal corruption of main_menu.bk2 after V84.1 made the correct internal composition path active.
+It does not modify the eboot, game files, RAD attract path, chroma order, shader translator, DCC, upscaler, or global texture cache policy.
+
+V74.0.84.2.1 packaging repair:
+- V84.2 failed before writing source because it required one exact four-line "best pair missing" block.
+- V84.2.1 locates the method structurally and replaces the LAST `return HostMovieTextureBindings.None;`, preserving the earlier no-frame guard.
+- Plane-learning insertion is anchored to the unique return of RememberHostMovieTextureMappings, not to adjacent assignments/comments.

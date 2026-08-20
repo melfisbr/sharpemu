@@ -1,0 +1,142 @@
+[
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.Core.dll",
+    "Size": 601600,
+    "Sha256": "9248ACE55C51C0C10648FC7F8C6DB94C8E2495973D13A6FBB1EB13A57608A861"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.DebugClient.dll",
+    "Size": 33280,
+    "Sha256": "896DE397979247FF08A169CA49B29724ADFCCE296EED8C3FBB853923FFC9B9D5"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.Debugger.dll",
+    "Size": 53760,
+    "Sha256": "1C4784940FC0B4E5E6AB2230726F6AD5FDDD70126565A355D53A08862AC0B1C6"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.GUI.dll",
+    "Size": 6679040,
+    "Sha256": "83F30581112C935F3DC542BBD835A648CA861E1EC59C536DC1B8F1086A8B3F0C"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.HLE.dll",
+    "Size": 12954624,
+    "Sha256": "A41096283EA0CEAE3E1F184C23D1795E4E9C760EB533EDF77ACBBDE6B3F8B44A"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.LibAtrac9.dll",
+    "Size": 78848,
+    "Sha256": "F9F51D862A0CD07B463FA6E3A71910BE77C42E45D4D5EF40F89C62EC49262B67"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.Libs.dll",
+    "Size": 22082048,
+    "Sha256": "D8A70AC9C2B561D2FD6B671FF04459CD61EB5E87B1CD2EC4CA27116F761CBC09"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.Libs.Tests.dll",
+    "Size": 312320,
+    "Sha256": "5BD69C6D0429B97112895CE3B1E760AD070857188323E7DEE21162F9DA936484"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.Logging.dll",
+    "Size": 37888,
+    "Sha256": "061D23424853DEEC958E8282FF3293C67832515A6A589199DE492F111E2CBD68"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.RuntimeAudit.dll",
+    "Size": 145920,
+    "Sha256": "2625FD791DD97883C494072FB34CE0BDCCBCFE58445611AA6EC2A8A679D8486A"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.ShaderCompiler.dll",
+    "Size": 222720,
+    "Sha256": "824751DF2F7F94473ADB8868F4F1C5E70D9EE1AB6ED12F712E0507C85F7E0348"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.ShaderCompiler.Metal.dll",
+    "Size": 160256,
+    "Sha256": "1EF83833FD52E8EA830CEDE9BC8BF5BF8F311D03B2FF7FA956A20DB09859EBDA"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.ShaderCompiler.Metal.Tests.dll",
+    "Size": 32768,
+    "Sha256": "61D408474BF3F9A0FD4681184FD4071712F868847B33BEB38ED97E52CB3B7094"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.ShaderCompiler.Tests.dll",
+    "Size": 30720,
+    "Sha256": "8BF30CACC63A0F605DE738DAD8FDEBF075492069C8641082BF777B1C528884B9"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.ShaderCompiler.Vulkan.dll",
+    "Size": 207872,
+    "Sha256": "444CA2EF37D69C890DFA9DAB2531EEC46EF846F49337A516FC556D24D08E54F1"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.SourceGenerators.dll",
+    "Size": 32256,
+    "Sha256": "DE83625C93D2555D62068B1D71F57551EBD86858439C98DFB53C6956CC925C44"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\SharpEmu.SourceGenerators.Tests.dll",
+    "Size": 31232,
+    "Sha256": "CAE257A959CCA5115D7A743567B0C30C7EDA64FAE333B8A61CD94BD17634D9ED"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.Core.dll",
+    "Size": 601600,
+    "Sha256": "9248ACE55C51C0C10648FC7F8C6DB94C8E2495973D13A6FBB1EB13A57608A861"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.Debugger.dll",
+    "Size": 53760,
+    "Sha256": "1C4784940FC0B4E5E6AB2230726F6AD5FDDD70126565A355D53A08862AC0B1C6"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.dll",
+    "Size": 233984,
+    "Sha256": "F75661BAB11785DA3AC8CB2F3931C29D5758AE651BE29BDE4937804EFC30ACEF"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.GUI.dll",
+    "Size": 6713344,
+    "Sha256": "2011831932D3B358FF72A94ACD1EFE72FBBA9629E208CB632C30BBA13928205D"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.HLE.dll",
+    "Size": 12954624,
+    "Sha256": "A41096283EA0CEAE3E1F184C23D1795E4E9C760EB533EDF77ACBBDE6B3F8B44A"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.LibAtrac9.dll",
+    "Size": 78848,
+    "Sha256": "F9F51D862A0CD07B463FA6E3A71910BE77C42E45D4D5EF40F89C62EC49262B67"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.Libs.dll",
+    "Size": 22082048,
+    "Sha256": "D8A70AC9C2B561D2FD6B671FF04459CD61EB5E87B1CD2EC4CA27116F761CBC09"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.Logging.dll",
+    "Size": 37888,
+    "Sha256": "061D23424853DEEC958E8282FF3293C67832515A6A589199DE492F111E2CBD68"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.ShaderCompiler.dll",
+    "Size": 222720,
+    "Sha256": "824751DF2F7F94473ADB8868F4F1C5E70D9EE1AB6ED12F712E0507C85F7E0348"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.ShaderCompiler.Metal.dll",
+    "Size": 160256,
+    "Sha256": "1EF83833FD52E8EA830CEDE9BC8BF5BF8F311D03B2FF7FA956A20DB09859EBDA"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\SharpEmu.ShaderCompiler.Vulkan.dll",
+    "Size": 207872,
+    "Sha256": "444CA2EF37D69C890DFA9DAB2531EEC46EF846F49337A516FC556D24D08E54F1"
+  }
+]

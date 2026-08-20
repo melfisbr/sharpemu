@@ -1,0 +1,21 @@
+﻿[V74.0.82.1] NonBlocking Visibility + DCC Metadata Index diagnostic
+ExitCode=0
+nonblocking_ordered_visibility_test=1
+queue_burst_test=2
+runtime_log_present=True
+first_frame=1
+device_lost=0
+ordered_fence_wait_max_counter=0
+ordered_visibility_defer_max_counter=65536
+queue_timeline_block_max_counter=65536
+dcc_typed_reject_max_counter=4096
+dcc_index_hit_max_counter=2048
+dcc_index_rebuild_max_counter=25
+dcc_provenance_recovery_max_counter=2
+payload_batch_max_counter=65536
+large_snapshot_logged=13
+parser_escape_logged=22
+capacity_yield_max_counter=512
+slow_wait_ms: count=19 avg_ms=4065,397 max_ms=9129,651
+gate_wait_ms: count=4446 avg_ms=68,959 max_ms=8409,484
+target_frame_budget_60fps_ms=16.667

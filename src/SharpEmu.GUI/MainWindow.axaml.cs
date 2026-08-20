@@ -22,7 +22,6 @@ using SharpEmu.HLE.Host;
 using SharpEmu.Libs.Pad;
 using SharpEmu.Libs.VideoOut;
 using SharpEmu.Logging;
-using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Reflection;
@@ -35,6 +34,7 @@ public partial class MainWindow : Window
 {
     private const int MaxConsoleLines = 4000;
     private const int MaxConsoleLinesPerFlush = 500;
+    private const int MaxPendingConsoleLines = 20_000;
     private static readonly TimeSpan NavigationIndicatorAnimationDuration =
         TimeSpan.FromMilliseconds(180);
 
@@ -63,6 +63,20 @@ public partial class MainWindow : Window
         LocalizedChoice.Literal("0.75", "75%"),
         LocalizedChoice.Literal("0.5", "50%"),
         LocalizedChoice.Literal("0.25", "25%"),
+    ];
+    private readonly LocalizedChoice[] _upscalerBackendChoices =
+    [
+        LocalizedChoice.FromKey("Auto", "Options.Upscaler.Backend.Auto"),
+        LocalizedChoice.FromKey("DLSS", "Options.Upscaler.Backend.Dlss"),
+        LocalizedChoice.FromKey("FSR", "Options.Upscaler.Backend.Fsr"),
+    ];
+    private readonly LocalizedChoice[] _upscalerQualityChoices =
+    [
+        LocalizedChoice.FromKey("NativeAA", "Options.Upscaler.Quality.NativeAA"),
+        LocalizedChoice.FromKey("Quality", "Options.Upscaler.Quality.Quality"),
+        LocalizedChoice.FromKey("Balanced", "Options.Upscaler.Quality.Balanced"),
+        LocalizedChoice.FromKey("Performance", "Options.Upscaler.Quality.Performance"),
+        LocalizedChoice.FromKey("UltraPerformance", "Options.Upscaler.Quality.UltraPerformance"),
     ];
     private readonly LocalizedChoice[] _windowModeChoices =
     [
@@ -96,8 +110,11 @@ public partial class MainWindow : Window
     private readonly GameLibraryWatcher _libraryWatcher = new();
     private readonly AvaloniaList<LogLine> _consoleLines = new();
     private readonly List<LogLine> _allConsoleLines = new();
-    private readonly ConcurrentQueue<(string Line, bool IsError)> _pendingLines = new();
+    private readonly ConsoleLineBuffer _pendingLines =
+        new(MaxPendingConsoleLines);
     private readonly DispatcherTimer _consoleFlushTimer;
+    // V74.0.67: live upscaler runtime telemetry from the isolated emulator process.
+    private const string UpscalerRuntimeTelemetryPrefix = "[V74.0.67][UPSCALER][RUNTIME]";
 
     private GuiSettings _settings = new();
     private IReadOnlyList<HostDisplayOption> _hostDisplays = [];
@@ -178,7 +195,7 @@ public partial class MainWindow : Window
         _libraryWatcher.RefreshRequested += OnLibraryRefreshRequested;
         ConsoleList.ItemsSource = _consoleLines;
         _consoleMirror = GuiConsoleMirror.Install((line, isError) =>
-            _pendingLines.Enqueue((line, isError)));
+            _pendingLines.Enqueue(line, isError));
         _consoleFlushTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(80),
@@ -252,6 +269,15 @@ public partial class MainWindow : Window
                 _settings.RenderResolutionScale = scale;
             }
         };
+        UpscalerToggle.IsCheckedChanged += (_, _) =>
+        {
+            _settings.UpscalerEnabled = UpscalerToggle.IsChecked == true;
+            UpdateUpscalerControlsState();
+        };
+        UpscalerBackendBox.SelectionChanged += (_, _) =>
+            _settings.UpscalerBackend = SelectedComboText(UpscalerBackendBox, "Auto");
+        UpscalerQualityBox.SelectionChanged += (_, _) =>
+            _settings.UpscalerQuality = SelectedComboText(UpscalerQualityBox, "Quality");
         StrictToggle.IsCheckedChanged += (_, _) => _settings.StrictDynlibResolution = StrictToggle.IsChecked == true;
         LogToFileToggle.IsCheckedChanged += (_, _) => _settings.LogToFile = LogToFileToggle.IsChecked == true;
         OverrideLogFileToggle.IsCheckedChanged += (_, _) =>
@@ -1161,7 +1187,8 @@ public partial class MainWindow : Window
     {
         CpuEngineBox.ItemsSource = _cpuEngineChoices;
         LogLevelBox.ItemsSource = _logLevelChoices;
-        RenderResolutionBox.ItemsSource = _renderResolutionChoices;
+        RenderResolutionBox.ItemsSource = _renderResolutionChoices;        UpscalerBackendBox.ItemsSource = _upscalerBackendChoices;
+        UpscalerQualityBox.ItemsSource = _upscalerQualityChoices;
         WindowModeBox.ItemsSource = _windowModeChoices;
         ScalingModeBox.ItemsSource = _scalingModeChoices;
         HdrModeBox.ItemsSource = _hdrModeChoices;
@@ -1172,7 +1199,8 @@ public partial class MainWindow : Window
     {
         RefreshChoices(_cpuEngineChoices);
         RefreshChoices(_logLevelChoices);
-        RefreshChoices(_renderResolutionChoices);
+        RefreshChoices(_renderResolutionChoices);        RefreshChoices(_upscalerBackendChoices);
+        RefreshChoices(_upscalerQualityChoices);
         RefreshChoices(_windowModeChoices);
         RefreshChoices(_scalingModeChoices);
         RefreshChoices(_hdrModeChoices);
@@ -1208,6 +1236,20 @@ public partial class MainWindow : Window
             >= 0.375 => 2,
             _ => 3,
         };
+        UpscalerToggle.IsChecked = _settings.UpscalerEnabled;
+        UpscalerBackendBox.SelectedIndex = ChoiceIndex(
+            _settings.UpscalerBackend,
+            "Auto",
+            "DLSS",
+            "FSR");
+        UpscalerQualityBox.SelectedIndex = ChoiceIndex(
+            _settings.UpscalerQuality,
+            "NativeAA",
+            "Quality",
+            "Balanced",
+            "Performance",
+            "UltraPerformance");
+        UpdateUpscalerControlsState();
         StrictToggle.IsChecked = _settings.StrictDynlibResolution;
         LogToFileToggle.IsChecked = _settings.LogToFile;
         OverrideLogFileToggle.IsChecked = _settings.OverrideLogFile;
@@ -1235,6 +1277,12 @@ public partial class MainWindow : Window
         HdrModeBox.SelectedIndex = ChoiceIndex(_settings.HdrMode, "Auto", "On", "Off");
         InputModeBox.SelectedItem = FindChoice(_inputModeChoices, _settings.InputMode, "Auto");
         UpdateLogFilePathText();
+    }
+    private void UpdateUpscalerControlsState()
+    {
+        var enabled = UpscalerToggle.IsChecked == true;
+        UpscalerBackendBox.IsEnabled = enabled;
+        UpscalerQualityBox.IsEnabled = enabled;
     }
 
     private static string SelectedComboText(ComboBox comboBox, string fallback) =>
@@ -2437,6 +2485,34 @@ public partial class MainWindow : Window
             _settings.RenderResolutionScale.ToString(
                 "0.###",
                 System.Globalization.CultureInfo.InvariantCulture));
+        // V74.0.66.1.1: Rendering menu drives Vulkan upscaler selection.
+        // Explicit "off" prevents stale shell state from surviving a disabled toggle.
+        Environment.SetEnvironmentVariable(
+            "SHARPEMU_VK_UPSCALER",
+            _settings.UpscalerEnabled
+                ? _settings.UpscalerBackend.ToLowerInvariant()
+                : "off");
+        Environment.SetEnvironmentVariable(
+            "SHARPEMU_VK_UPSCALER_QUALITY",
+            _settings.UpscalerQuality.ToLowerInvariant());
+        // V74.0.67.2.15: Rendering DLSS one-click launch contract.
+        // The backend already defaults pre-composite to enabled, but set it
+        // explicitly here so normal GUI launches do not depend on shell state.
+        Environment.SetEnvironmentVariable(
+            "SHARPEMU_VK_UPSCALER_PRECOMPOSITE",
+            _settings.UpscalerEnabled ? "1" : "0");
+
+        // Normal frontend launches also receive the validated bounded RAM
+        // defaults. The V2.15 source-side TTL property accepts up to 120 s.
+        Environment.SetEnvironmentVariable(
+            "SHARPEMU_LARGE_ARRAY_SNAPSHOT_CACHE_ENTRIES",
+            "2");
+        Environment.SetEnvironmentVariable(
+            "SHARPEMU_LARGE_ARRAY_SNAPSHOT_REUSE_MS",
+            "120000");
+        Environment.SetEnvironmentVariable(
+            "SHARPEMU_VK_DETILE_POOL_MB",
+            "64");
 
         if (SharpEmuLog.TryParseLevel(effective.LogLevel, out var logLevel))
         {
@@ -2602,7 +2678,7 @@ public partial class MainWindow : Window
             var arguments = BuildEmulatorArguments(launch);
             _emulator = process;
             _pendingLaunch = null;
-            process.Start(
+            ResetUpscalerRuntimeTelemetry();            process.Start(
                 _emulatorExePath,
                 arguments,
                 Path.GetDirectoryName(_emulatorExePath));
@@ -2651,9 +2727,86 @@ public partial class MainWindow : Window
 
     private void OnEmulatorOutput(string line, bool isError)
     {
-        _pendingLines.Enqueue((line, isError));
+        if (line.Contains(UpscalerRuntimeTelemetryPrefix, StringComparison.Ordinal))
+        {
+            Dispatcher.UIThread.Post(() => ApplyUpscalerRuntimeTelemetry(line));
+        }
+
+        _pendingLines.Enqueue(line, isError);
     }
 
+    private void ResetUpscalerRuntimeTelemetry()
+    {
+        var requested = _settings.UpscalerEnabled
+            ? _settings.UpscalerBackend.ToUpperInvariant()
+            : "OFF";
+        UpscalerRuntimeStatusText.Text = _settings.UpscalerEnabled ? "STARTING" : "OFF";
+        UpscalerRuntimeStatusText.Foreground = _settings.UpscalerEnabled
+            ? InfoLineBrush
+            : DimLineBrush;
+        UpscalerRuntimeProviderText.Text =
+            $"Requested: {requested} | Active provider: â€” | Preset: {_settings.UpscalerQuality}";
+        UpscalerRuntimeInputsText.Text =
+            "Input: â€” â†’ â€” | Color â€” | Depth â€” | Motion â€” | Jitter â€”";
+        UpscalerRuntimeCountersText.Text =
+            "DLSS 0 | FSR 0 | Fallback 0 | Errors 0";
+    }
+
+    private void ApplyUpscalerRuntimeTelemetry(string line)
+    {
+        var marker = line.IndexOf(UpscalerRuntimeTelemetryPrefix, StringComparison.Ordinal);
+        if (marker < 0)
+        {
+            return;
+        }
+
+        var payload = line[(marker + UpscalerRuntimeTelemetryPrefix.Length)..].Trim();
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var token in payload.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = token.IndexOf('=');
+            if (separator <= 0 || separator >= token.Length - 1)
+            {
+                continue;
+            }
+
+            values[token[..separator]] = token[(separator + 1)..];
+        }
+
+        string Get(string key, string fallback = "â€”") =>
+            values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+                ? value
+                : fallback;
+
+        static string Ready(string value) => value == "1" ? "READY" : "NO";
+
+        var state = Get("state", "waiting").ToUpperInvariant();
+        var requested = Get("requested", "off").ToUpperInvariant();
+        var selected = Get("selected", "off").ToUpperInvariant();
+        var provider = Get("provider", "0") == "1" ? selected : "NONE";
+        var quality = Get("quality", "quality").ToUpperInvariant();
+        var reason = Get("reason", "unknown").Replace('_', ' ');
+
+        UpscalerRuntimeStatusText.Text = $"{state} â€” {provider}";
+        UpscalerRuntimeStatusText.Foreground = state switch
+        {
+            "ACTIVE" => SuccessLineBrush,
+            "FALLBACK" => WarningLineBrush,
+            "ERROR" => ErrorLineBrush,
+            "OFF" => DimLineBrush,
+            _ => InfoLineBrush,
+        };
+
+        UpscalerRuntimeProviderText.Text =
+            $"Requested: {requested} | Active provider: {provider} | Preset: {quality} | Reason: {reason}";
+        UpscalerRuntimeInputsText.Text =
+            $"Input: {Get("input")} â†’ {Get("output")} | " +
+            $"Color {Ready(Get("color", "0"))} | Depth {Ready(Get("depth", "0"))} | " +
+            $"Motion {Ready(Get("motion", "0"))} | Jitter {Ready(Get("jitter", "0"))}";
+        UpscalerRuntimeCountersText.Text =
+            $"DLSS {Get("dlss_dispatches", "0")} | FSR {Get("fsr_dispatches", "0")} | " +
+            $"Fallback {Get("fallback_frames", "0")} | Errors {Get("dispatch_failures", "0")}";
+    }
     private void OpenFileLog(string? titleId)
     {
         var filePath = ResolveLogFilePath(titleId);
@@ -2735,12 +2888,22 @@ public partial class MainWindow : Window
 
     private void FlushPendingConsoleLines()
     {
-        if (_pendingLines.IsEmpty)
+        var droppedPendingLines = _pendingLines.ExchangeDroppedCount();
+        if (_pendingLines.IsEmpty && droppedPendingLines == 0)
         {
             return;
         }
 
         var incoming = new List<LogLine>();
+        if (droppedPendingLines > 0)
+        {
+            var warning =
+                $"[GUI][WARN] Console output is arriving faster than it can be shown; " +
+                $"dropped {droppedPendingLines} line(s).";
+            WriteFileLog(warning);
+            incoming.Add(new LogLine(warning, WarningLineBrush));
+        }
+
         while (incoming.Count < MaxConsoleLinesPerFlush &&
                _pendingLines.TryDequeue(out var pending))
         {

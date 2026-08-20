@@ -1,0 +1,14 @@
+V74.0.67.2.10.2
+
+The source already had V74.0.67.1 provider load instrumentation. Therefore the
+V74.0.64 full TryLoad body used as the V2.10/V2.10.1 replacement anchor was no
+longer present.
+
+The fix avoids ownership conflict:
+- preserve V74.0.67.1 TryLoad;
+- resolve the optional new last-error export lazily from _library;
+- only patch stable delegate/field/capabilities/Initialize anchors and the
+  bounded TryInitializeUpscaler region.
+
+This keeps accumulated diagnostics intact and removes the stale full-loader
+replacement dependency.

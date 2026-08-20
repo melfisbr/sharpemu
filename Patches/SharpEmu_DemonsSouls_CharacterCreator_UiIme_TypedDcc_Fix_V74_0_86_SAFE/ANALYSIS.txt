@@ -1,0 +1,18 @@
+V74.0.86 - Character Creator UI + IME analysis
+
+Observed V74.0.85.1 runtime:
+- sceImeDialogInit reaches RUNNING with a valid guest UTF-16 buffer and max=16.
+- host_panel_open is logged, but no host_panel_complete/text_commit/get_result occurs.
+- V85.1 launches the PowerShell/WinForms child as NonInteractive + CreateNoWindow + Hidden while redirecting stdout/stderr. V86 changes this transport to an explicitly visible child and temp-file IPC while preserving guest-thread memory commit.
+- V85.1 RUN_5 also assigns to $error, which aliases PowerShell's read-only automatic $Error variable. V86 uses $imeErrors and fixes all runtime regexes to the actual V74.0.86 tag.
+
+Observed character/menu rendering:
+- DCC provenance recovery repeatedly selects images whose typed Vulkan format differs from the sampled view. Examples observed include R8G8B8A8Unorm -> R16G16Sfloat and R32G32Uint -> R16G16B16A16Sfloat.
+- V77.1 only guarded one 2560x1440 DCC identity inside the normal Consider() path. V80 provenance recovery can directly select a recovered producer later, so the final selected alias must be validated after provenance recovery.
+- V86 scopes exact-format enforcement to PPSA01341 DCC metadata aliases. It does not globally narrow Vulkan format compatibility. If a mismatched best candidate is selected, it is rejected and an exact-format rescan is attempted; if none exists, the existing DCC miss/fallback path is used.
+
+Preserved:
+- Bink/RAD/NIHAV routing and V84.x UI Bink composition.
+- V74.0.85.1 IME ABI offsets and asynchronous RUNNING/FINISHED contract.
+- V80 provenance, V82 metadata index, V56.32 DCC infrastructure.
+- DLSS/FSR implementation/settings (only recorded in runtime report; not changed).

@@ -1,0 +1,6 @@
+V74.0.86.1.5
+- Fixes false post-apply IME marker failure introduced by Base64 OSK representation.
+- Decodes the embedded PowerShell payload for assertions/diagnostics.
+- Does not alter the working V86.1.4 structural Presenter strategy.
+- Keeps embedded OSK PowerShell parser validation.
+- Keeps SAFE rollback.

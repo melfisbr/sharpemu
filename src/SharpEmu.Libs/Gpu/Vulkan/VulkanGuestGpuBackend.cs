@@ -4,6 +4,7 @@
 using SharpEmu.Libs.VideoOut;
 using SharpEmu.ShaderCompiler;
 using SharpEmu.ShaderCompiler.Vulkan;
+using System.Threading;
 
 namespace SharpEmu.Libs.Gpu.Vulkan;
 
@@ -20,6 +21,39 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
     private static readonly IGuestCompiledShader DepthOnlyFragmentShader =
         new VulkanCompiledGuestShader(SpirvFixedShaders.CreateDepthOnlyFragment());
 
+    // V74.0.30: timing-only shader queue audit. Translation remains synchronous
+    // so no register/resource snapshot is reordered; only slow misses are logged.
+    private static readonly bool TraceShaderPipelineTimingV74030 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_SHADER_PIPELINE_TIMING"),
+        "1",
+        StringComparison.Ordinal);
+    private static long _shaderTranslateSlowTraceCountV74030;
+
+    private static void TraceShaderTranslateV74030(
+        string stage,
+        Gen5ShaderState state,
+        long startedTicks,
+        bool success)
+    {
+        if (!TraceShaderPipelineTimingV74030 || startedTicks == 0)
+        {
+            return;
+        }
+
+        var elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startedTicks) *
+            1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        if (elapsedMs < 25.0)
+        {
+            return;
+        }
+
+        var count = Interlocked.Increment(ref _shaderTranslateSlowTraceCountV74030);
+        Console.Error.WriteLine(
+            $"[V74.0.30][SHADER_TRANSLATE_SLOW] count={count} stage={stage} " +
+            $"ms={elapsedMs:F3} shader=0x{state.Program.Address:X16} " +
+            $"instructions={state.Program.Instructions.Count} success={(success ? 1 : 0)}");
+    }
+
     public bool TryCompileVertexShader(
         Gen5ShaderState state,
         Gen5ShaderEvaluation evaluation,
@@ -33,7 +67,10 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         ulong storageBufferOffsetAlignment = 1)
     {
         shader = null;
-        if (!Gen5SpirvTranslator.TryCompileVertexShader(
+        var translateStartV74030 = TraceShaderPipelineTimingV74030
+            ? System.Diagnostics.Stopwatch.GetTimestamp()
+            : 0L;
+        var translatedV74030 = Gen5SpirvTranslator.TryCompileVertexShader(
                 state,
                 evaluation,
                 out var compiled,
@@ -43,7 +80,9 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
                 imageBindingBase,
                 scalarRegisterBufferIndex,
                 requiredVertexOutputCount,
-                storageBufferOffsetAlignment))
+                storageBufferOffsetAlignment);
+        TraceShaderTranslateV74030("vertex", state, translateStartV74030, translatedV74030);
+        if (!translatedV74030)
         {
             return false;
         }
@@ -68,7 +107,10 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         ulong storageBufferOffsetAlignment = 1)
     {
         shader = null;
-        if (!Gen5SpirvTranslator.TryCompilePixelShader(
+        var translateStartV74030 = TraceShaderPipelineTimingV74030
+            ? System.Diagnostics.Stopwatch.GetTimestamp()
+            : 0L;
+        var translatedV74030 = Gen5SpirvTranslator.TryCompilePixelShader(
                 state,
                 evaluation,
                 outputs,
@@ -81,7 +123,9 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
                 pixelInputEnable,
                 pixelInputAddress,
                 pixelInputCntl,
-                storageBufferOffsetAlignment))
+                storageBufferOffsetAlignment);
+        TraceShaderTranslateV74030("pixel", state, translateStartV74030, translatedV74030);
+        if (!translatedV74030)
         {
             return false;
         }
@@ -104,7 +148,10 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         ulong storageBufferOffsetAlignment = 1)
     {
         shader = null;
-        if (!Gen5SpirvTranslator.TryCompileComputeShader(
+        var translateStartV74030 = TraceShaderPipelineTimingV74030
+            ? System.Diagnostics.Stopwatch.GetTimestamp()
+            : 0L;
+        var translatedV74030 = Gen5SpirvTranslator.TryCompileComputeShader(
                 state,
                 evaluation,
                 localSizeX,
@@ -115,7 +162,9 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
                 totalGlobalBufferCount,
                 initialScalarBufferIndex,
                 waveLaneCount,
-                storageBufferOffsetAlignment))
+                storageBufferOffsetAlignment);
+        TraceShaderTranslateV74030("compute", state, translateStartV74030, translatedV74030);
+        if (!translatedV74030)
         {
             return false;
         }
@@ -380,12 +429,42 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
 
             requiresGpuToCpuVisibility);
 
+    // SHARPEMU_V74_0_28_1_WATCHED_WRITE_API_VULKAN
+    public long SubmitOrderedGuestActionWithVisibility(
+        Action action,
+        string debugName,
+        bool requiresGpuToCpuVisibility,
+        object? waitProducerMemory,
+        ulong waitProducerAddress,
+        ulong waitProducerLength) =>
+        VulkanVideoPresenter.SubmitOrderedGuestActionWithVisibility(
+            action,
+            debugName,
+            requiresGpuToCpuVisibility,
+            waitProducerMemory,
+            waitProducerAddress,
+            waitProducerLength);
+
     public long SubmitOrderedGuestActionAfterQueueCompletion(
         Action action,
         string debugName) =>
         VulkanVideoPresenter.SubmitOrderedGuestActionAfterQueueCompletion(
             action,
             debugName);
+
+    // SHARPEMU_V74_0_56_12_QUEUE_COMPLETION_PRODUCER_METADATA
+    public long SubmitOrderedGuestActionAfterQueueCompletion(
+        Action action,
+        string debugName,
+        object? waitProducerMemory,
+        ulong waitProducerAddress,
+        ulong waitProducerLength) =>
+        VulkanVideoPresenter.SubmitOrderedGuestActionAfterQueueCompletion(
+            action,
+            debugName,
+            waitProducerMemory,
+            waitProducerAddress,
+            waitProducerLength);
 
     public long SubmitOrderedGuestFlipWait(int videoOutHandle, int displayBufferIndex) =>
         VulkanVideoPresenter.SubmitOrderedGuestFlipWait(videoOutHandle, displayBufferIndex);
@@ -413,6 +492,9 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
 
     public void SubmitGuestImageWrite(ulong address, byte[] pixels, uint rowOffset = 0) =>
         VulkanVideoPresenter.SubmitGuestImageWrite(address, pixels, rowOffset);
+
+    public bool TrySubmitGuestImageCopy(ulong sourceAddress, ulong destinationAddress) =>
+        VulkanVideoPresenter.SubmitGuestImageCopy(sourceAddress, destinationAddress);
 
     public bool SupportsPartialImageWrite => true;
 

@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "sampleIntervalMs": 500,
+  "gpuSampleIntervalMs": 2000,
+  "maxRuntimeSeconds": 0,
+  "maxEvidencePerCategory": 5000,
+  "enableGameInventory": true,
+  "enableSourceScan": true,
+  "enableEbootStringScan": true,
+  "enableSourceSnapshot": true,
+  "sourceSnapshotMaxFiles": 40,
+  "childEnvironment": {
+    "SHARPEMU_TRACE_PRESENT_CADENCE": "1",
+    "SHARPEMU_TRACE_SLOW_RENDER_WORK": "1",
+    "SHARPEMU_TRACE_COMPUTE_PHASES": "1",
+    "SHARPEMU_TRACE_VULKAN_TOPOLOGY": "1",
+    "SHARPEMU_TRACE_SCANOUT_LINEAGE": "1",
+    "SHARPEMU_TRACE_DCC_ALIAS": "1",
+    "SHARPEMU_LOG_VIDEOOUT": "1",
+    "SHARPEMU_LOG_AMPR": "1",
+    "SHARPEMU_TRACE_GUEST_IMAGES": "0",
+    "SHARPEMU_TRACE_PRESENT_SOURCE_READBACK": "0"
+  },
+  "unsetChildEnvironment": [
+    "SHARPEMU_TRACE_GUEST_WRITES",
+    "SHARPEMU_TRACE_DRAWS",
+    "SHARPEMU_LOG_AGC_SHADER",
+    "SHARPEMU_TRACE_PIXEL_SHADER_ADDRESS",
+    "SHARPEMU_TRACE_RENDER_TARGET_ADDRESS"
+  ],
+  "interestingMediaExtensions": [
+    ".bk2",
+    ".bik",
+    ".mp4",
+    ".webm",
+    ".at9",
+    ".wav",
+    ".wem",
+    ".ogg",
+    ".opus",
+    ".mp3"
+  ],
+  "snapshotFileNames": [
+    "SelfLoader.cs",
+    "Ps5SceDynamicImportMetadata.cs",
+    "DirectExecutionBackend.Imports.cs",
+    "AmprFileRegistry.cs",
+    "AmprExports.cs",
+    "AgcExports.cs",
+    "GpuWaitRegistry.cs",
+    "VulkanGuestGpuBackend.cs",
+    "VulkanVideoPresenter.cs",
+    "VideoOutExports.cs",
+    "NihavBink2Decoder.cs",
+    "BinkHostPlaybackAssist.cs",
+    "AudioOutExports.cs",
+    "AudioOut2Exports.cs",
+    "AjmExports.cs",
+    "Atrac9Exports.cs",
+    "KernelMemoryCompatExports.cs",
+    "KernelPthreadCompatExports.cs"
+  ]
+}

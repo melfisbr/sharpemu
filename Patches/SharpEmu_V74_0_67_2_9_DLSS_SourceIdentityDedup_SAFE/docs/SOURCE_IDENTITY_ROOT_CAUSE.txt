@@ -1,0 +1,15 @@
+V74.0.67.2.9 source identity root cause
+
+Observed runtime invariant violation at the algorithmic level:
+
+winner.Source.Address == runnerUp.Source.Address
+
+The V2.7 confidence algorithm is source-address based, but the candidate array
+was binding-entry based. Thus duplicate bindings of the same source inherited
+the same confidence and guaranteed a zero advantage.
+
+V2.9 makes the candidate identity domain match the confidence identity domain:
+Source.Address.
+
+Representative binding selection is deterministic and title-independent:
+newest source ContentGeneration, then newest Binding.Serial.

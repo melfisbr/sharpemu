@@ -1,5 +1,0 @@
-[V73.0.19.1][TEXTURE_CACHE_STALE] count=1 reason=guest-bytes-changed addr=0x000000044EE00000 size=1024x1024 fmt=10/0 tile=9 array=0 old=0x500E239952DCB19F new=0x8E569E10033E1A03
-[V73.0.19.1][TEXTURE_CACHE_STALE] count=2 reason=guest-bytes-changed addr=0x000000108AA00000 size=2048x2048 fmt=181/0 tile=9 array=0 old=0x39533EA35A47141A new=0x25F3FAD651F5574D
-[V73.0.19.1][TEXTURE_CACHE_STALE] count=3 reason=guest-bytes-changed addr=0x000000108B700000 size=2048x2048 fmt=181/0 tile=9 array=0 old=0xB6372C426479DE7A new=0xAD67EF20D8379EBD
-[V73.0.19.1][TEXTURE_CACHE_STALE] count=4 reason=guest-bytes-changed addr=0x000000108C600000 size=2048x2048 fmt=181/0 tile=9 array=0 old=0xF093E70D58355752 new=0xE766AB34D513508D
-[V73.0.19.1][TEXTURE_CACHE_STALE] count=5 reason=guest-bytes-changed addr=0x000000044EE00000 size=1024x1024 fmt=10/0 tile=9 array=0 old=0x500E239952DCB19F new=0x8E569E10033E1A03

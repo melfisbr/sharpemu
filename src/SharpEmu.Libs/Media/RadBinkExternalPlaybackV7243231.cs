@@ -124,8 +124,55 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
             return false;
         }
 
+        var fileName = Path.GetFileName(moviePath);
+
+        // V31.7.18_BINK_EMBEDDED_ATTRACT_AUDIO
+        // When possible, play a cache-only BK2 produced by RAD binkmix with the
+        // audited sample-exact attract WAV.  Keep moviePath as the logical game
+        // path so lifecycle/queue ownership remains unchanged.
+        var playbackMoviePath = moviePath;
+        var usesBinkEmbeddedAttractAudio = false;
+
+        if (string.Equals(
+                fileName,
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase) &&
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_ATTRACT_EMBED_AUDIO") != "0")
+        {
+            if (BinkDemonSoulsIntroAudioV7243227
+                    .TryGetPreparedAttractWaveForBinkMix(
+                        moviePath,
+                        timeoutMilliseconds: 180_000,
+                        out var exactWave) &&
+                exactWave is not null &&
+                DemonSoulsAttractBinkMuxV31718.TryGetOrCreate(
+                    toolPath,
+                    moviePath,
+                    exactWave,
+                    out var cachedMovie,
+                    out var muxInfo))
+            {
+                playbackMoviePath = cachedMovie;
+                usesBinkEmbeddedAttractAudio = true;
+
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.ds_attract_embedded_audio_ready " +
+                    "file='attract_movie.bk2' " +
+                    $"cached='{cachedMovie}' tracks={muxInfo.AudioTrackIds.Length} " +
+                    $"ids='{string.Join(";", muxInfo.AudioTrackIds)}' " +
+                    "sidecar=False clock=bink-frame-audio-stream");
+            }
+            else
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][WARN] bink2.ds_attract_embedded_audio_fallback " +
+                    "file='attract_movie.bk2' fallback=external-sidecar");
+            }
+        }
+
         var headerKnown = TryReadBinkHeaderMetadata(
-            moviePath,
+            playbackMoviePath,
             out var metadata);
         var audioTrackIds = headerKnown
             ? metadata.AudioTrackIds
@@ -134,7 +181,6 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
         var nominalDurationMilliseconds = headerKnown
             ? metadata.DurationMilliseconds
             : 0.0;
-        var fileName = Path.GetFileName(moviePath);
 
         Console.Error.WriteLine(
             "[LOADER][INFO] bink2.rad_audio_header " +
@@ -182,19 +228,37 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
                     Path.GetDirectoryName(toolPath) ??
                     AppContext.BaseDirectory,
                 UseShellExecute = false,
-                CreateNoWindow = false,
+                // V31.7.20_STARTUP_HIDDEN_PLAYER
+                // STARTF_USESHOWWINDOW/SW_HIDE is applied before the first HWND
+                // becomes visible. The host API has a hidden-HWND discovery path
+                // so embedding no longer depends on desktop visibility.
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
             };
 
             start.ArgumentList.Add("binkplay");
-            start.ArgumentList.Add(moviePath);
+            start.ArgumentList.Add(playbackMoviePath);
             // /I2 = no player caption/non-client chrome.  /Z0 forces Windows
             // Audio.  When Bink audio tracks exist, select them explicitly in
             // track-index order so embedding cannot inherit a silent default.
             start.ArgumentList.Add("/I2");
-            start.ArgumentList.Add("/Z0");
+            // V31.7.18: Win Audio/WASAPI is RAD's default output. Do not force
+            // /Z0; this also restores the single embedded audio track path used
+            // by ps_studios_logo.
 
             string? trackSwitch = null;
-            if (headerKnown && audioTrackIds.Length > 0)
+
+            if (headerKnown && audioTrackIds.Length == 1)
+            {
+                // One embedded track needs no selection override. Let the RAD
+                // player use its default Windows Audio path.
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.rad_audio_policy " +
+                    $"file='{fileName}' tracks=1 " +
+                    $"id={audioTrackIds[0]} policy=rad-default-single-track " +
+                    "explicit_switch=False output=rad-default-windows-audio");
+            }
+            else if (headerKnown && audioTrackIds.Length > 1)
             {
                 var builder = new StringBuilder("/T");
                 for (var index = 0; index < audioTrackIds.Length; index++)
@@ -203,18 +267,30 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
                     {
                         builder.Append(';');
                     }
-                    builder.Append(index);
+
+                    // /T takes Bink track IDs.  The old bridge used array
+                    // indices, which is wrong whenever ids are non-contiguous.
+                    builder.Append(audioTrackIds[index]);
                 }
+
                 trackSwitch = builder.ToString();
                 start.ArgumentList.Add(trackSwitch);
+
                 Console.Error.WriteLine(
                     "[LOADER][INFO] bink2.rad_audio_track_select " +
-                    $"file='{fileName}' switch='{trackSwitch}' output=windows-audio");
+                    $"file='{fileName}' switch='{trackSwitch}' " +
+                    "policy=explicit-actual-track-ids output=rad-default-windows-audio");
             }
-
+            else
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.rad_audio_policy " +
+                    $"file='{fileName}' tracks={audioTrackCount} " +
+                    "policy=no-embedded-audio explicit_switch=False");
+            }
             Console.Error.WriteLine(
                 "[LOADER][INFO] bink2.rad_command " +
-                "syntax='radvideo64.exe binkplay <movie> /I2 /Z0 [/T...]' " +
+                "syntax='radvideo64.exe binkplay <movie> /I2 [/T<actual-id>...]' " +
                 $"file='{fileName}'");
 
             process = new Process
@@ -223,6 +299,22 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
                 EnableRaisingEvents = true,
             };
 
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.rad_startup_hidden " +
+                $"file='{fileName}' window_style=Hidden " +
+                "create_no_window=True preparent_visibility=forbidden");
+
+            if (string.Equals(
+                    fileName,
+                    "attract_movie.bk2",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine(
+                    "[V31.7.20][ATTRACT_RAD_LAUNCH] " +
+                    $"utc='{DateTime.UtcNow:O}' " +
+                    $"mono_ticks={System.Diagnostics.Stopwatch.GetTimestamp()} " +
+                    "startup_hidden=True");
+            }
             if (!process.Start())
             {
                 process.Dispose();
@@ -233,6 +325,16 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
                 "[LOADER][INFO] bink2.rad_required_started " +
                 $"pid={process.Id} file='{fileName}' " +
                 $"tool='{toolPath}'");
+            if (usesBinkEmbeddedAttractAudio)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.rad_attract_embedded_audio_playback " +
+                    "file='attract_movie.bk2' sidecar=False " +
+                    $"playback_source='{playbackMoviePath}' " +
+                    $"tracks={audioTrackIds.Length} " +
+                    $"ids='{string.Join(";", audioTrackIds)}' " +
+                    "audio_clock=bink-internal");
+            }
 
             // V31.7.7: attract_movie has no embedded Bink audio track.  Prepare
             // the audited external AT9 mix now, but do not start it yet.  The
@@ -261,21 +363,15 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
                 {
                     beforeReveal = anchorMs =>
                     {
-                        _ = BinkDemonSoulsIntroAudioV7243227
-                            .NotifyPresentationStarted(moviePath);
+                        var armed = BinkDemonSoulsIntroAudioV7243227
+                            .NotifyPresentationArmed(moviePath);
 
                         Console.Error.WriteLine(
-                            "[LOADER][INFO] bink2.rad_attract_audio_anchor_pre_reveal " +
+                            "[LOADER][INFO] bink2.rad_attract_audio_visible_frame_arm " +
                             "file='attract_movie.bk2' tracks=0 " +
                             "source=external-at9-stems offset_s=12.000 tempo=1.0000 " +
-                            $"anchor_ms={anchorMs:F1} delay_ms=0 " +
-                            "sync_source=rad-playback-anchor-before-reveal");
-                        Console.Error.WriteLine(
-                            "[LOADER][INFO] bink2.rad_attract_audio_sidecar " +
-                            "file='attract_movie.bk2' tracks=0 " +
-                            "source=external-at9-stems offset_s=12.000 tempo=1.0000 " +
-                            $"anchor_ms={anchorMs:F1} " +
-                            "anchor=rad-playback-anchor-before-reveal");
+                            $"anchor_ms={anchorMs:F1} armed={armed} " +
+                            "sync_source=visible-frame-audio-latch");
                     };
                 }
                 else

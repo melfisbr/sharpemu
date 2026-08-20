@@ -39,8 +39,6 @@ public static class KernelRuntimeCompatExports
     private const ulong ModuleInfoExSegmentCountOffset = 0x1A0;
     private const int ModuleInfoSegmentSize = 16;
     private const ulong DefaultKernelTscFrequency = 10_000_000UL;
-    private const ulong PrtAreaStartAddress = 0x0000001000000000UL;
-    private const ulong PrtAreaSize = 0x000000EC00000000UL;
     private const int MapFlagFixed = 0x10;
     private const ulong DefaultVirtualRangeAlignment = 0x4000UL;
     private const int AioInitParamSize = 0x3C;
@@ -73,6 +71,35 @@ public static class KernelRuntimeCompatExports
 
     [ThreadStatic]
     private static int _shortUsleepCount;
+
+    // SHARPEMU_DBFZ_COOPERATIVE_SLEEP_V1_8_37
+    private static long _cooperativeSleepCountV1837;
+    private static long _hostSleepFallbackCountV1837;
+    private static readonly bool _traceDeepWaiterV1837 =
+        string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_DBFZ_WAITER_TRACE"), "1", StringComparison.Ordinal);
+
+    private sealed class SchedulerSleepWaiterV1837 : IGuestThreadBlockWaiter
+    {
+        public static readonly SchedulerSleepWaiterV1837 Instance = new SchedulerSleepWaiterV1837();
+        private SchedulerSleepWaiterV1837() { }
+        public int Resume() => 0;
+        public bool TryWake() => false;
+    }
+
+    private static bool ShouldTraceSleepV1837(long count) =>
+        _traceDeepWaiterV1837 && (count <= 32 || (count & (count - 1)) == 0);
+
+    private static void TraceSleepV1837(string kind, ulong micros, bool cooperative)
+    {
+        var count = cooperative
+            ? Interlocked.Increment(ref _cooperativeSleepCountV1837)
+            : Interlocked.Increment(ref _hostSleepFallbackCountV1837);
+        if (ShouldTraceSleepV1837(count))
+        {
+            Console.Error.WriteLine(
+                $"[DBFZ-WAIT-1837] sleep_{(cooperative ? "coop" : "host")} n={count} kind={kind} us={micros} guest=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16}");
+        }
+    }
 
     private static readonly bool _stopwatchTicksAreNanoseconds =
         Stopwatch.Frequency == 1_000_000_000L;
@@ -118,7 +145,24 @@ public static class KernelRuntimeCompatExports
             // Precise sleep: rounding microseconds up to Thread.Sleep
             // milliseconds (which itself overshoots by a scheduler quantum)
             // hard-caps games that pace their frame loop with usleep.
-            HostTiming.SleepMicroseconds((long)Math.Min(micros, long.MaxValue));
+            var maxMicrosV1837 = (ulong)(long.MaxValue / 10L);
+            var sleepTicksV1837 = micros > maxMicrosV1837 ? long.MaxValue : ((long)micros * 10L);
+            var sleepDurationV1837 = TimeSpan.FromTicks(Math.Max(1L, sleepTicksV1837));
+            var sleepDeadlineV1837 = GuestThreadExecution.ComputeDeadlineTimestamp(sleepDurationV1837);
+            if (GuestThreadExecution.RequestCurrentThreadBlock(
+                    ctx,
+                    "sceKernelUsleep",
+                    "guest_sleep",
+                    SchedulerSleepWaiterV1837.Instance,
+                    sleepDeadlineV1837))
+            {
+                TraceSleepV1837("usleep", micros, cooperative: true);
+                ctx[CpuRegister.Rax] = 0;
+                return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+            }
+
+            TraceSleepV1837("usleep", micros, cooperative: false);
+            HostTiming.SleepMicroseconds((long)Math.Min(micros, (ulong)long.MaxValue));
         }
 
         ctx[CpuRegister.Rax] = 0;
@@ -891,22 +935,18 @@ public static class KernelRuntimeCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
-        if ((apertureBase & 0xFFFUL) != 0)
+        // PRT apertures are established from ranges returned by the emulator's
+        // virtual-range allocator. Those ranges are legitimate wherever the
+        // shared native guest VA allocator placed them; constraining them to a
+        // separate fixed window rejects addresses the emulator itself returned.
+        if (apertureBase == 0 || (apertureBase & 0xFFFUL) != 0)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
-        if (apertureBase < PrtAreaStartAddress)
-        {
-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-        }
-
-        if (apertureSize > PrtAreaSize)
-        {
-            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-        }
-
-        if (apertureBase - PrtAreaStartAddress > PrtAreaSize - apertureSize)
+        // The removed fixed-window checks used to provide an incidental
+        // overflow guard. Keep that safety property explicitly.
+        if (apertureBase > ulong.MaxValue - apertureSize)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
@@ -2113,7 +2153,31 @@ public static class KernelRuntimeCompatExports
         }
 
         GuestThreadExecution.Scheduler?.Pump(ctx, posix ? "nanosleep" : "sceKernelNanosleep");
-        var totalTicks = tvSec * TimeSpan.TicksPerSecond + Math.Max(tvNsec / 100L, 1L);
+        var nanosleepFractionTicksV1837 = Math.Max(tvNsec / 100L, 1L);
+        var totalTicks = tvSec > (long.MaxValue - nanosleepFractionTicksV1837) / TimeSpan.TicksPerSecond
+            ? long.MaxValue
+            : (tvSec * TimeSpan.TicksPerSecond) + nanosleepFractionTicksV1837;
+        if (totalTicks >= TimeSpan.TicksPerMillisecond)
+        {
+            var nanosleepDurationV1837 = TimeSpan.FromTicks(totalTicks);
+            var nanosleepDeadlineV1837 = GuestThreadExecution.ComputeDeadlineTimestamp(nanosleepDurationV1837);
+            if (GuestThreadExecution.RequestCurrentThreadBlock(
+                    ctx,
+                    posix ? "nanosleep" : "sceKernelNanosleep",
+                    "guest_sleep",
+                    SchedulerSleepWaiterV1837.Instance,
+                    nanosleepDeadlineV1837))
+            {
+                var sleepMicrosV1837 = totalTicks >= long.MaxValue / 10L ? ulong.MaxValue : (ulong)(totalTicks / 10L);
+                TraceSleepV1837(posix ? "nanosleep" : "sceKernelNanosleep", sleepMicrosV1837, cooperative: true);
+                WriteRemainingTime(ctx, remainAddress, 0, 0);
+                ctx[CpuRegister.Rax] = 0;
+                return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+            }
+        }
+
+        var hostSleepMicrosV1837 = totalTicks >= long.MaxValue / 10L ? ulong.MaxValue : (ulong)(totalTicks / 10L);
+        TraceSleepV1837(posix ? "nanosleep" : "sceKernelNanosleep", hostSleepMicrosV1837, cooperative: false);
         try
         {
             Thread.Sleep(TimeSpan.FromTicks(totalTicks));

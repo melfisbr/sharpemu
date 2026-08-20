@@ -1,0 +1,13 @@
+. "$PSScriptRoot\common.ps1"
+$pkg=PackageRoot;$manifest=Join-Path $pkg 'PACKAGE_SHA256.txt';$issues=0
+if(-not(Test-Path -LiteralPath $manifest)){Write-Host "$script:Tag [ERROR] PACKAGE_SHA256.txt missing" -ForegroundColor Red;exit 1}
+$hashLines=Get-Content -LiteralPath $manifest
+foreach($line in $hashLines){if([string]::IsNullOrWhiteSpace($line)){continue};$parts=$line -split '\s+',2;if($parts.Count -ne 2){$issues++;Write-Host "$script:Tag [ERROR] malformed hash line: $line" -ForegroundColor Red;continue};$expected=$parts[0].Trim().ToUpperInvariant();$rel=$parts[1].Trim().Replace('/','\');$path=Join-Path $pkg $rel;if(-not(Test-Path -LiteralPath $path -PathType Leaf)){$issues++;Write-Host "$script:Tag [ERROR] missing: $rel" -ForegroundColor Red;continue};if((Sha $path) -ne $expected){$issues++;Write-Host "$script:Tag [ERROR] hash mismatch: $rel" -ForegroundColor Red}}
+foreach($ps in Get-ChildItem -LiteralPath (Join-Path $pkg 'scripts') -Filter '*.ps1' -File){$tokens=$null;$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile($ps.FullName,[ref]$tokens,[ref]$parseErrors);if($parseErrors.Count -gt 0){$issues++;Write-Host "$script:Tag [ERROR] PowerShell parse failed $($ps.Name): $($parseErrors[0].Message)" -ForegroundColor Red}}
+$ime=[IO.File]::ReadAllText((ImePayload));$f=[IO.File]::ReadAllText((Join-Path $pkg 'patch\Presenter.final_typed_guard.insert.txt'));$test=[IO.File]::ReadAllText((Join-Path $pkg 'scripts\run_test.ps1'))
+foreach($m in @('SHARPEMU_V74_0_86_IME_VISIBLE_HOST_TEXT_INPUT','host_panel_spawn','CreateNoWindow = false','WindowStyle = ProcessWindowStyle.Normal','SHARPEMU_IME_RESULT_PATH')){if(-not$ime.Contains($m)){$issues++;Write-Host "$script:Tag [ERROR] IME payload marker missing: $m" -ForegroundColor Red}}
+foreach($m in @('SHARPEMU_V74_0_86_DS_CHARACTER_CREATOR_TYPED_DCC','[V74.0.86][DS_DCC_TYPED_REJECT]','DS_DCC_EXACT_REPLACEMENT')){if(-not$f.Contains($m)){$issues++;Write-Host "$script:Tag [ERROR] DCC patch marker missing: $m" -ForegroundColor Red}}
+if($test.Contains('$error=@(')){$issues++;Write-Host "$script:Tag [ERROR] reserved PowerShell automatic variable `$Error is assigned in run_test.ps1" -ForegroundColor Red}
+if(-not$test.Contains('$imeErrors=@(')){$issues++;Write-Host "$script:Tag [ERROR] safe imeErrors variable missing" -ForegroundColor Red}
+if($issues -gt 0){Write-Host "$script:Tag PACKAGE VALIDATION FAILED issues=$issues" -ForegroundColor Red;exit 1}
+Write-Host "$script:Tag PACKAGE VALIDATION PASSED ($($hashLines.Count) hashed files; PowerShell parsed; IME/DCC/test regressions checked)." -ForegroundColor Green

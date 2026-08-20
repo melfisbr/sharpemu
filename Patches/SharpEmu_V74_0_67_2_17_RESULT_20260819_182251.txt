@@ -1,0 +1,26 @@
+[V74.0.67.2.17] cache_marker=true
+[V74.0.67.2.17] cache_same_resource=true
+[V74.0.67.2.17] cache_bypass_trace=true
+[V74.0.67.2.17] cache_bypass_guard=true
+[V74.0.67.2.17] cache_entry_bound_preserved=true
+[V74.0.67.2.17] cache_v215_ttl_preserved=true
+[V74.0.67.2.17] cache_v213_key_preserved=true
+[V74.0.67.2.17] small_write_marker=true
+[V74.0.67.2.17] small_write_max16=true
+[V74.0.67.2.17] small_write_no_readback=true
+[V74.0.67.2.17] small_write_no_defer=true
+[V74.0.67.2.17] small_write_packet_path=true
+[V74.0.67.2.17] small_write_trace=true
+[V74.0.67.2.17] wait_latency_marker=true
+[V74.0.67.2.17] wait_complete_metric=true
+[V74.0.67.2.17] wait_post_complete_metric=true
+[V74.0.67.2.17] gate_owner_preserved=true
+[V74.0.67.2.17] dlss_v214_preserved=true
+[V74.0.67.2.17] frontend_v215_preserved=true
+[V74.0.67.2.17] release_host_exists=true
+[V74.0.67.2.17] EXPECTED_RAM=ARRAY_CACHE_ADMISSION bypass-smaller/replace-smaller; fewer 256/320MiB owner rematerializations
+[V74.0.67.2.17] EXPECTED_WAIT=SMALL_WRITE_PACKET_POSITION followed by reduced SLOW_WAIT_PRODUCER incidence
+[V74.0.67.2.17] WAIT_DIAG=producer_complete_ms vs post_complete_wait_ms
+[V74.0.67.2.17] SUBMISSION_HARD_CAP=unchanged
+[V74.0.67.2.17] DLSS_TRUTH=selected=dlss AND state=active AND dlss_dispatches>0
+[V74.0.67.2.17] DIAGNOSTIC PASSED.

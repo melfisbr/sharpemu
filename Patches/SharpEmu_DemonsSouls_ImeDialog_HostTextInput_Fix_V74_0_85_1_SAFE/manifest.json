@@ -1,0 +1,14 @@
+{
+  "version": "V74.0.85.1",
+  "name": "SharpEmu_DemonsSouls_ImeDialog_HostTextInput_Fix_V74_0_85_1_SAFE",
+  "targets": [
+    "src/SharpEmu.Libs/Ime/ImeDialogExports.cs"
+  ],
+  "preserves": [
+    "Bink/RAD/NIHAV",
+    "Vulkan/AGC",
+    "SaveData",
+    "Pad mapping"
+  ],
+  "test": "Demon's Souls PPSA01341 character-creation Player Name dialog"
+}

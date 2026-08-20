@@ -1,0 +1,16 @@
+V74.0.67.2.20
+
+Evidence:
+- frontend: DLSS + UltraPerformance requested correctly
+- depth/motion/color ready
+- provider=0, caps=0x0
+- reason=precomposite_provider_init_failed
+- previous_reason=provider_dll_not_loaded
+- Debug provider candidate exists=0 loaded=0
+
+Fix ownership:
+- canonical repo-local DLSS runtime
+- csproj CopyToOutputDirectory and CopyToPublishDirectory
+- Debug and Release built/verified
+- no shell forcing
+- no native provider behavior change

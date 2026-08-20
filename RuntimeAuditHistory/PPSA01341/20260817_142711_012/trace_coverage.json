@@ -1,0 +1,44 @@
+[
+  {
+    "Category": "loader_eboot_imports",
+    "MatchedLines": 60381,
+    "EvidenceFiles": 1,
+    "Status": "OBSERVED"
+  },
+  {
+    "Category": "shader_gpu",
+    "MatchedLines": 1,
+    "EvidenceFiles": 1,
+    "Status": "OBSERVED"
+  },
+  {
+    "Category": "audio_media",
+    "MatchedLines": 1890,
+    "EvidenceFiles": 1,
+    "Status": "OBSERVED"
+  },
+  {
+    "Category": "ui_resources",
+    "MatchedLines": 994,
+    "EvidenceFiles": 1,
+    "Status": "OBSERVED"
+  },
+  {
+    "Category": "file_io",
+    "MatchedLines": 47,
+    "EvidenceFiles": 1,
+    "Status": "OBSERVED"
+  },
+  {
+    "Category": "thread_sync",
+    "MatchedLines": 23022,
+    "EvidenceFiles": 1,
+    "Status": "OBSERVED"
+  },
+  {
+    "Category": "errors_stalls",
+    "MatchedLines": 626,
+    "EvidenceFiles": 2,
+    "Status": "OBSERVED"
+  }
+]

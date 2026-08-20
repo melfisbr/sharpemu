@@ -1,0 +1,8 @@
+﻿NGX_ROOT=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\_vendor\NVIDIA_DLSS_v310_7_0
+NGX_LIBRARY=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\_vendor\NVIDIA_DLSS_v310_7_0\lib\Windows_x86_64\khr\x64\nvsdk_ngx_khr_s.lib
+NGX_DLL=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\_vendor\NVIDIA_DLSS_v310_7_0\lib\Windows_x86_64\rel\nvngx_dlss.dll
+VULKAN_HEADERS=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\_vendor\Vulkan-Headers
+PROVIDER=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\_native_build\V74_0_67_2_13_1_dlss\upscalers\Release\SharpEmu.VulkanUpscaler.Native.dll
+MSVC_RUNTIME=MultiThreaded
+MSVC_FLAG=/MT
+PROVIDER_BUILD_LOG=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V74_0_67_2_13_1_DLSS_PROVIDER_BUILD_20260819_140049.log

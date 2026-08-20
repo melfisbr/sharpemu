@@ -1,0 +1,11 @@
+
+        // SHARPEMU_V74_0_84_2_1_UI_BINK_FRAME_OWNERSHIP
+        // The decoded UI frame crosses an asynchronous decoder -> guest GPU
+        // composition boundary. Own a presenter-local snapshot so a bounded
+        // decoder buffer can never be reused while Y/UV conversion is pending.
+        private byte[]? _v740842OwnedUiBinkFramePixels;
+        private readonly HashSet<ulong> _v740842LearnedUiBinkLumaAddresses = new();
+        private readonly HashSet<ulong> _v740842LearnedUiBinkChromaAddresses = new();
+        private long _v740842UiBinkFrameSnapshotCount;
+        private long _v740842UiBinkStickyPlaneCount;
+        private long _v740842UiBinkPlaneLearnCount;

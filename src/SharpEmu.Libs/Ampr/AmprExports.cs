@@ -46,6 +46,179 @@ public static class AmprExports
     private static long _v73016CompletedReadTraceCount;
     private static long _v73016FailedReadTraceCount;
 
+    // SHARPEMU_V74_0_56_27_1_APR_ASSET_AUDIT
+    // Demon's Souls streams many title resources through APR, so open/stat
+    // routing alone cannot prove whether CTXR/CMSH/CMAT/CSDR bytes are read.
+    private static readonly bool _traceAprAssetReadsV74056271 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_APR_ASSET_READS"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static readonly ConcurrentDictionary<string, long>
+        _aprAssetReadCountsV74056271 =
+            new(StringComparer.OrdinalIgnoreCase);
+
+    // SHARPEMU_APR_ASYNC_SNAPSHOT_PIPELINE_V1_8_25
+    private static long _v1825IoBytes;
+    private static long _v1825HostReadTicks;
+    private static long _v1825GuestWriteTicks;
+
+    internal sealed class AprCommandBufferSubmissionSnapshot
+    {
+        public AprCommandBufferSubmissionSnapshot(
+            ulong commandBuffer,
+            ulong buffer,
+            ulong writeOffset,
+            byte[] records)
+        {
+            CommandBuffer = commandBuffer;
+            Buffer = buffer;
+            WriteOffset = writeOffset;
+            Records = records;
+        }
+
+        public ulong CommandBuffer { get; }
+        public ulong Buffer { get; }
+        public ulong WriteOffset { get; }
+        public byte[] Records { get; }
+    }
+
+    internal readonly record struct AprIoPerfSnapshot(
+        long CompletedReadCount,
+        long Bytes,
+        long HostReadTicks,
+        long GuestWriteTicks);
+
+    private sealed class AprSubmissionSnapshotMemory : ICpuMemory, ICpuMemoryWrapper
+    {
+        private readonly ICpuMemory _inner;
+        private readonly ulong _buffer;
+        private readonly byte[] _records;
+
+        public AprSubmissionSnapshotMemory(
+            ICpuMemory inner,
+            ulong buffer,
+            byte[] records)
+        {
+            _inner = inner;
+            _buffer = buffer;
+            _records = records;
+        }
+
+        public ICpuMemory Inner => _inner;
+
+        public bool TryRead(ulong virtualAddress, Span<byte> destination)
+        {
+            if (virtualAddress >= _buffer)
+            {
+                var relative = virtualAddress - _buffer;
+                if (relative <= (ulong)_records.Length &&
+                    (ulong)destination.Length <= (ulong)_records.Length - relative)
+                {
+                    _records.AsSpan(checked((int)relative), destination.Length)
+                        .CopyTo(destination);
+                    return true;
+                }
+            }
+
+            return _inner.TryRead(virtualAddress, destination);
+        }
+
+        public bool TryWrite(ulong virtualAddress, ReadOnlySpan<byte> source) =>
+            _inner.TryWrite(virtualAddress, source);
+
+        public bool TryCompare(ulong virtualAddress, ReadOnlySpan<byte> expected) =>
+            _inner.TryCompare(virtualAddress, expected);
+
+        public bool TryCopy(ulong destinationAddress, ulong sourceAddress, ulong length) =>
+            _inner.TryCopy(destinationAddress, sourceAddress, length);
+
+        public bool TryWriteCapturedRecord(
+            ulong virtualAddress,
+            ReadOnlySpan<byte> source)
+        {
+            if (virtualAddress < _buffer)
+            {
+                return false;
+            }
+
+            var relative = virtualAddress - _buffer;
+            if (relative > (ulong)_records.Length ||
+                (ulong)source.Length > (ulong)_records.Length - relative)
+            {
+                return false;
+            }
+
+            source.CopyTo(_records.AsSpan(checked((int)relative), source.Length));
+            return true;
+        }
+    }
+
+    internal static AprIoPerfSnapshot GetAprIoPerfSnapshotV1825() =>
+        new(
+            Interlocked.Read(ref _v73016CompletedReadTraceCount),
+            Interlocked.Read(ref _v1825IoBytes),
+            Interlocked.Read(ref _v1825HostReadTicks),
+            Interlocked.Read(ref _v1825GuestWriteTicks));
+
+    internal static int TryCaptureCommandBufferSubmission(
+        CpuContext ctx,
+        ulong commandBuffer,
+        out AprCommandBufferSubmissionSnapshot? snapshot)
+    {
+        snapshot = null;
+        if (commandBuffer == 0)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        if (!TryGetCommandBufferState(
+                ctx,
+                commandBuffer,
+                out _,
+                out _,
+                out var state) ||
+            state is null)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        ulong buffer;
+        ulong size;
+        ulong writeOffset;
+        lock (state)
+        {
+            buffer = state.Buffer;
+            size = state.Size;
+            writeOffset = state.WriteOffset;
+        }
+
+        if (buffer == 0 ||
+            writeOffset > size ||
+            writeOffset > int.MaxValue)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        var records = writeOffset == 0
+            ? Array.Empty<byte>()
+            : GC.AllocateUninitializedArray<byte>(checked((int)writeOffset));
+        if (records.Length != 0 &&
+            !ctx.Memory.TryRead(buffer, records))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        snapshot = new AprCommandBufferSubmissionSnapshot(
+            commandBuffer,
+            buffer,
+            writeOffset,
+            records);
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
     private sealed class CommandBufferState
     {
         public ulong Buffer;
@@ -873,7 +1046,13 @@ public static class AmprExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
-        if (!TryGetCommandBufferState(ctx, commandBuffer, out var buffer, out _, out var state) || state is null)
+        if (!TryGetCommandBufferState(
+                ctx,
+                commandBuffer,
+                out var buffer,
+                out _,
+                out var state) ||
+            state is null)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
@@ -884,6 +1063,41 @@ public static class AmprExports
             writeOffset = state.WriteOffset;
         }
 
+        return CompleteCommandBufferRange(
+            ctx,
+            commandBuffer,
+            buffer,
+            writeOffset);
+    }
+
+    // V1.8.25 snapshots the command records synchronously at submit time, then
+    // performs host file I/O on the APR worker. The guest may reuse/reset its
+    // command buffer after submission without changing the worker's record walk.
+    internal static int CompleteCommandBuffer(
+        CpuContext ctx,
+        AprCommandBufferSubmissionSnapshot snapshot)
+    {
+        var snapshotMemory = new AprSubmissionSnapshotMemory(
+            ctx.Memory,
+            snapshot.Buffer,
+            snapshot.Records);
+        var snapshotContext = new CpuContext(
+            snapshotMemory,
+            ctx.TargetGeneration);
+
+        return CompleteCommandBufferRange(
+            snapshotContext,
+            snapshot.CommandBuffer,
+            snapshot.Buffer,
+            snapshot.WriteOffset);
+    }
+
+    private static int CompleteCommandBufferRange(
+        CpuContext ctx,
+        ulong commandBuffer,
+        ulong buffer,
+        ulong writeOffset)
+    {
         var offset = 0UL;
         while (offset < writeOffset)
         {
@@ -896,7 +1110,10 @@ public static class AmprExports
             {
                 case ReadFileRecordType:
                 {
-                    var readResult = CompleteReadFileRecord(ctx, commandBuffer, buffer + offset);
+                    var readResult = CompleteReadFileRecord(
+                        ctx,
+                        commandBuffer,
+                        buffer + offset);
                     if (readResult != (int)OrbisGen2Result.ORBIS_GEN2_OK)
                     {
                         return readResult;
@@ -934,7 +1151,12 @@ public static class AmprExports
                     break;
 
                 default:
-                    TraceAmpr(ctx, "complete_unknown", commandBuffer, recordType, offset);
+                    TraceAmpr(
+                        ctx,
+                        "complete_unknown",
+                        commandBuffer,
+                        recordType,
+                        offset);
                     return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
             }
         }
@@ -1152,6 +1374,293 @@ public static class AmprExports
         return true;
     }
 
+    // SHARPEMU_APR_PAK_SMALL_READ_READAHEAD_V1_8_32
+    // DBFZ performs thousands of tiny random reads from pakchunk*.pak. The
+    // underlying host reads are already fast; the remaining avoidable work is
+    // one host syscall + ArrayPool round-trip + path/handle lookup per tiny
+    // request. Keep an 8-page, 64 KiB ThreadStatic read-ahead cache for .pak
+    // files only. Large reads remain on the V1.8.25 4 MiB direct path.
+    private const int PakReadPageSizeV1832 = 64 * 1024;
+    private const int PakReadPageSlotsV1832 = 8;
+    private const ulong PakSmallReadThresholdV1832 = 64 * 1024;
+
+    private sealed class PakReadPageV1832
+    {
+        public string? HostPath;
+        public long PageOffset = -1;
+        public int ValidLength;
+        public byte[]? Data;
+    }
+
+    [ThreadStatic]
+    private static PakReadPageV1832[]? _pakReadPagesV1832;
+    [ThreadStatic]
+    private static int _pakReadReplacementV1832;
+    [ThreadStatic]
+    private static uint _lastAprFileIdV1832;
+    [ThreadStatic]
+    private static string? _lastAprHostPathV1832;
+    [ThreadStatic]
+    private static bool _lastAprFileValidV1832;
+
+    private static long _pakSmallReadRequestsV1832;
+    private static long _pakPageHitsV1832;
+    private static long _pakPageMissesV1832;
+    private static long _pakPageHostReadBytesV1832;
+    private static long _pakPageHostReadSyscallsV1832;
+    private static long _directHostReadSyscallsV1832;
+
+    private static bool IsPakReadAheadEnabledV1832() =>
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_APR_PAK_READAHEAD"),
+            "0",
+            StringComparison.OrdinalIgnoreCase);
+
+    // SHARPEMU_V74_0_56_30_APR_ASSET_READAHEAD
+    // V56.27.1 proved that Demon's Souls streams thousands of individual
+    // CTXR/CTXC/CSDR/CGPR/CFON/CTXT/AT9 assets through APR. The existing 64 KiB
+    // page cache was restricted to .pak, so every one of those requests went
+    // through RandomAccess.Read even when the same small asset/stream page was
+    // requested repeatedly.
+    private static bool IsAssetReadAheadEnabledV7405630() =>
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_APR_ASSET_READAHEAD"),
+            "1",
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsReadAheadAssetV7405630(string hostPath)
+    {
+        var extension = Path.GetExtension(hostPath);
+
+        return extension.Equals(".ctxr", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".ctxc", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cmat", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cmsh", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cmdl", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".csdr", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cslt", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cgpr", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cfon", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".ctxt", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cxml", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".drb", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".at9", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryResolveAprHostPathV1832(
+        uint fileId,
+        out string hostPath)
+    {
+        if (_lastAprFileValidV1832 &&
+            _lastAprFileIdV1832 == fileId &&
+            _lastAprHostPathV1832 is { } cached)
+        {
+            hostPath = cached;
+            return true;
+        }
+
+        if (!AmprFileRegistry.TryGetHostPath(fileId, out hostPath!))
+        {
+            return false;
+        }
+
+        _lastAprFileIdV1832 = fileId;
+        _lastAprHostPathV1832 = hostPath;
+        _lastAprFileValidV1832 = true;
+        return true;
+    }
+
+    private static PakReadPageV1832[] GetPakReadPagesV1832()
+    {
+        var pages = _pakReadPagesV1832;
+        if (pages is not null)
+        {
+            return pages;
+        }
+
+        pages = new PakReadPageV1832[PakReadPageSlotsV1832];
+        _pakReadPagesV1832 = pages;
+        return pages;
+    }
+
+    private static bool TryGetPakReadPageV1832(
+        string hostPath,
+        long pageOffset,
+        out PakReadPageV1832? page,
+        out int result)
+    {
+        result = (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var pages = GetPakReadPagesV1832();
+
+        for (var index = 0; index < pages.Length; index++)
+        {
+            var candidate = pages[index];
+            if (candidate is null ||
+                candidate.PageOffset != pageOffset ||
+                candidate.HostPath is null ||
+                !HostFsPath.Comparer.Equals(candidate.HostPath, hostPath))
+            {
+                continue;
+            }
+
+            Interlocked.Increment(ref _pakPageHitsV1832);
+            page = candidate;
+            return true;
+        }
+
+        Interlocked.Increment(ref _pakPageMissesV1832);
+
+        if (!TryGetCachedHostFile(
+                hostPath,
+                out var cachedFile,
+                out result))
+        {
+            page = null;
+            return false;
+        }
+
+        var slotIndex =
+            unchecked(_pakReadReplacementV1832++) &
+            (PakReadPageSlotsV1832 - 1);
+        var slot = pages[slotIndex];
+        if (slot is null)
+        {
+            slot = new PakReadPageV1832();
+            pages[slotIndex] = slot;
+        }
+
+        slot.Data ??= new byte[PakReadPageSizeV1832];
+
+        var readStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var read = RandomAccess.Read(
+            cachedFile.Handle,
+            slot.Data.AsSpan(0, PakReadPageSizeV1832),
+            pageOffset);
+        Interlocked.Add(
+            ref _v1825HostReadTicks,
+            System.Diagnostics.Stopwatch.GetTimestamp() - readStarted);
+        Interlocked.Increment(ref _pakPageHostReadSyscallsV1832);
+
+        if (read < 0)
+        {
+            page = null;
+            result = (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
+            return false;
+        }
+
+        slot.HostPath = hostPath;
+        slot.PageOffset = pageOffset;
+        slot.ValidLength = read;
+
+        if (read > 0)
+        {
+            Interlocked.Add(ref _pakPageHostReadBytesV1832, read);
+        }
+
+        page = slot;
+        return true;
+    }
+
+    private static int TryReadSmallPakCachedV1832(
+        CpuContext ctx,
+        string hostPath,
+        ulong fileOffset,
+        ulong destination,
+        ulong size,
+        out ulong bytesRead)
+    {
+        bytesRead = 0;
+        Interlocked.Increment(ref _pakSmallReadRequestsV1832);
+
+        while (bytesRead < size)
+        {
+            var absoluteOffset = fileOffset + bytesRead;
+            if (absoluteOffset > long.MaxValue)
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+            }
+
+            var pageOffset =
+                unchecked((long)absoluteOffset) &
+                ~((long)PakReadPageSizeV1832 - 1L);
+            var inPage =
+                checked((int)(absoluteOffset - unchecked((ulong)pageOffset)));
+
+            if (!TryGetPakReadPageV1832(
+                    hostPath,
+                    pageOffset,
+                    out var page,
+                    out var pageResult) ||
+                page is null)
+            {
+                return pageResult;
+            }
+
+            if (inPage >= page.ValidLength)
+            {
+                break;
+            }
+
+            var available = page.ValidLength - inPage;
+            var requested = checked((int)Math.Min(
+                (ulong)available,
+                size - bytesRead));
+            if (requested <= 0)
+            {
+                break;
+            }
+
+            var writeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            var wrote = ctx.Memory.TryWrite(
+                destination + bytesRead,
+                page.Data!.AsSpan(inPage, requested));
+            Interlocked.Add(
+                ref _v1825GuestWriteTicks,
+                System.Diagnostics.Stopwatch.GetTimestamp() - writeStarted);
+
+            if (!wrote)
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+            }
+
+            Interlocked.Add(ref _v1825IoBytes, requested);
+            bytesRead += unchecked((ulong)requested);
+
+            if (requested < available &&
+                bytesRead >= size)
+            {
+                break;
+            }
+        }
+
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    private static void TracePakReadCacheV1832()
+    {
+        var completed = Interlocked.Read(ref _v73016CompletedReadTraceCount);
+        if (completed <= 0 ||
+            (completed > 32 && (completed & (completed - 1)) != 0))
+        {
+            return;
+        }
+
+        var hits = Interlocked.Read(ref _pakPageHitsV1832);
+        var misses = Interlocked.Read(ref _pakPageMissesV1832);
+        var probes = hits + misses;
+        var hitRate = probes == 0
+            ? 0.0
+            : hits * 100.0 / probes;
+
+        Console.Error.WriteLine(
+            $"[APR-CACHE-1832] completed={completed} " +
+            $"small_requests={Interlocked.Read(ref _pakSmallReadRequestsV1832)} " +
+            $"page_hits={hits} page_misses={misses} hit_rate={hitRate:F1} " +
+            $"page_syscalls={Interlocked.Read(ref _pakPageHostReadSyscallsV1832)} " +
+            $"direct_syscalls={Interlocked.Read(ref _directHostReadSyscallsV1832)} " +
+            $"readahead_bytes={Interlocked.Read(ref _pakPageHostReadBytesV1832)}");
+    }
     private static int TryReadFileToGuestMemory(
         CpuContext ctx,
         string hostPath,
@@ -1171,14 +1680,36 @@ public static class AmprExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
-        // 4 MiB chunks cut syscall/Rosetta round-trips on DeS' large sequential
-        // APR reads without blowing the ArrayPool for small probes.
-        const int ChunkSize = 4 * 1024 * 1024;
-        var buffer = ArrayPool<byte>.Shared.Rent((int)Math.Min((ulong)ChunkSize, size));
+        var pakSmallRead =
+            IsPakReadAheadEnabledV1832() &&
+            size <= PakSmallReadThresholdV1832 &&
+            hostPath.EndsWith(".pak", StringComparison.OrdinalIgnoreCase);
+
+        var assetSmallReadV7405630 =
+            IsAssetReadAheadEnabledV7405630() &&
+            size <= PakSmallReadThresholdV1832 &&
+            IsReadAheadAssetV7405630(hostPath);
 
         try
         {
-            if (!TryGetCachedHostFile(hostPath, out var cachedFile, out var openResult))
+            if (pakSmallRead || assetSmallReadV7405630)
+            {
+                return TryReadSmallPakCachedV1832(
+                    ctx,
+                    hostPath,
+                    fileOffset,
+                    destination,
+                    size,
+                    out bytesRead);
+            }
+
+            // Keep the proven V1.8.25 large-transfer path intact. Resolve/open
+            // the host file before renting a multi-megabyte buffer so misses do
+            // not touch ArrayPool unnecessarily.
+            if (!TryGetCachedHostFile(
+                    hostPath,
+                    out var cachedFile,
+                    out var openResult))
             {
                 return openResult;
             }
@@ -1188,36 +1719,66 @@ public static class AmprExports
                 return (int)OrbisGen2Result.ORBIS_GEN2_OK;
             }
 
-            while (bytesRead < size)
+            const int ChunkSize = 4 * 1024 * 1024;
+            var buffer = ArrayPool<byte>.Shared.Rent(
+                (int)Math.Min((ulong)ChunkSize, size));
+
+            try
             {
-                if (bytesRead > ulong.MaxValue - fileOffset)
+                while (bytesRead < size)
                 {
-                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+                    if (bytesRead > ulong.MaxValue - fileOffset)
+                    {
+                        return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+                    }
+
+                    var absoluteOffset = fileOffset + bytesRead;
+                    if (absoluteOffset > long.MaxValue)
+                    {
+                        return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+                    }
+
+                    var request = (int)Math.Min(
+                        (ulong)buffer.Length,
+                        size - bytesRead);
+
+                    var readStarted =
+                        System.Diagnostics.Stopwatch.GetTimestamp();
+                    var read = RandomAccess.Read(
+                        cachedFile.Handle,
+                        buffer.AsSpan(0, request),
+                        unchecked((long)absoluteOffset));
+                    Interlocked.Add(
+                        ref _v1825HostReadTicks,
+                        System.Diagnostics.Stopwatch.GetTimestamp() - readStarted);
+                    Interlocked.Increment(ref _directHostReadSyscallsV1832);
+
+                    if (read <= 0)
+                    {
+                        break;
+                    }
+
+                    var writeStarted =
+                        System.Diagnostics.Stopwatch.GetTimestamp();
+                    var wrote = ctx.Memory.TryWrite(
+                        destination + bytesRead,
+                        buffer.AsSpan(0, read));
+                    Interlocked.Add(
+                        ref _v1825GuestWriteTicks,
+                        System.Diagnostics.Stopwatch.GetTimestamp() - writeStarted);
+
+                    if (!wrote)
+                    {
+                        return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+                    }
+
+                    Interlocked.Add(ref _v1825IoBytes, read);
+                    bytesRead += unchecked((ulong)read);
                 }
-
-                var absoluteOffset = fileOffset + bytesRead;
-                if (absoluteOffset > long.MaxValue)
-                {
-                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
-                }
-
-                var request = (int)Math.Min((ulong)buffer.Length, size - bytesRead);
-                var read = RandomAccess.Read(
-                    cachedFile.Handle,
-                    buffer.AsSpan(0, request),
-                    unchecked((long)absoluteOffset));
-
-                if (read <= 0)
-                {
-                    break;
-                }
-
-                if (!ctx.Memory.TryWrite(destination + bytesRead, buffer.AsSpan(0, read)))
-                {
-                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
-                }
-
-                bytesRead += (ulong)read;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
             }
         }
         catch (UnauthorizedAccessException)
@@ -1228,14 +1789,9 @@ public static class AmprExports
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
 
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
-
     private static bool TryGetCachedHostFile(string hostPath, out CachedHostFile file, out int result)
     {
         file = null!;
@@ -1522,7 +2078,7 @@ public static class AmprExports
         var size = BinaryPrimitives.ReadUInt64LittleEndian(record[0x10..]);
         var fileOffset = BinaryPrimitives.ReadUInt64LittleEndian(record[0x18..]);
 
-        if (!AmprFileRegistry.TryGetHostPath(fileId, out var hostPath))
+        if (!TryResolveAprHostPathV1832(fileId, out var hostPath))
         {
             // Precomputed APR ids can bypass sceKernelAprResolveFilepaths*. The
             // app0 index is therefore part of submit-time resolution, not
@@ -1534,7 +2090,7 @@ public static class AmprExports
                 AmprFileRegistry.EnsureApp0Indexed(app0Root);
             }
 
-            if (!AmprFileRegistry.TryGetHostPath(fileId, out hostPath))
+            if (!TryResolveAprHostPathV1832(fileId, out hostPath))
             {
                 TraceV73016Read(
                     ref _v73016FailedReadTraceCount,
@@ -1608,7 +2164,14 @@ public static class AmprExports
 
         BinaryPrimitives.WriteUInt64LittleEndian(record[0x18..], fileOffset);
         BinaryPrimitives.WriteUInt64LittleEndian(record[0x20..], bytesRead);
-        if (!ctx.Memory.TryWrite(recordAddress, record))
+        if (ctx.Memory is AprSubmissionSnapshotMemory snapshotMemory)
+        {
+            if (!snapshotMemory.TryWriteCapturedRecord(recordAddress, record))
+            {
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+            }
+        }
+        else if (!ctx.Memory.TryWrite(recordAddress, record))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
@@ -1624,6 +2187,11 @@ public static class AmprExports
             bytesRead,
             (int)OrbisGen2Result.ORBIS_GEN2_OK,
             hostPath);
+
+        TraceAprAssetReadV74056271(
+            hostPath,
+            bytesRead);
+
         TraceAmprRead(
             ctx,
             commandBuffer,
@@ -1634,6 +2202,7 @@ public static class AmprExports
             bytesRead,
             hostPath,
             (int)OrbisGen2Result.ORBIS_GEN2_OK);
+        TracePakReadCacheV1832();
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
@@ -1732,6 +2301,56 @@ public static class AmprExports
             $"[LOADER][TRACE] ampr.{operation}: cmd=0x{commandBuffer:X16} arg0=0x{arg0:X16} arg1=0x{arg1:X16} ret=0x{returnRip:X16}");
     }
 
+    private static void TraceAprAssetReadV74056271(
+        string? hostPath,
+        ulong bytesRead)
+    {
+        if (!_traceAprAssetReadsV74056271 ||
+            string.IsNullOrWhiteSpace(hostPath) ||
+            bytesRead == 0)
+        {
+            return;
+        }
+
+        var extension = Path.GetExtension(hostPath);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = "<none>";
+        }
+
+        extension = extension.ToLowerInvariant();
+
+        var count = _aprAssetReadCountsV74056271.AddOrUpdate(
+            extension,
+            1,
+            static (_, current) => current + 1);
+
+        if (count > 16 &&
+            (count & (count - 1)) != 0)
+        {
+            return;
+        }
+
+        var category = extension switch
+        {
+            ".ctxr" or ".ctxc" => "texture",
+            ".cmsh" or ".cmdl" or ".flver" => "geometry",
+            ".cmat" => "material",
+            ".csdr" or ".cslt" => "shader",
+            ".cgpr" or ".cfon" or ".ctxt" or ".drb" => "ui",
+            ".bnk" or ".at9" => "audio",
+            ".cani" or ".anibnd" => "animation",
+            ".objbnd" => "object-bundle",
+            _ => "other",
+        };
+
+        Console.Error.WriteLine(
+            $"[V74.0.56.27.1][APR_ASSET_READ] " +
+            $"ext={extension} category={category} " +
+            $"count={count} bytes=0x{bytesRead:X} " +
+            $"path='{hostPath}'");
+    }
+
     private static void TraceV73016Read(
         ref long counter,
         string operation,
@@ -1757,7 +2376,73 @@ public static class AmprExports
             $"path='{hostPath ?? string.Empty}'");
     }
 
-    private static void TraceAmprRead(
+        // V31.7.20_DS_INTRO_APR_SCHEDULE
+    // Targeted, unsampled schedule evidence for the three audited streams.
+    private static void TraceV31720DemonSoulsIntroRead(
+        uint fileId,
+        string? hostPath,
+        ulong fileOffset,
+        ulong requested,
+        ulong bytesRead,
+        int result)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_INTRO_AUDIO_SCHEDULE_PROBE"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string? stem = fileId switch
+        {
+            0xDC163C34u => "music",
+            0xA61F4C26u => "sfx",
+            0xD976DFB1u => "vo-en",
+            _ => null,
+        };
+
+        if (stem is null && hostPath is not null)
+        {
+            if (hostPath.EndsWith(
+                    "pr_demons_souls_intro_music.at9",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                stem = "music";
+            }
+            else if (hostPath.EndsWith(
+                         "pr_demons_souls_intro_sfx.at9",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                stem = "sfx";
+            }
+            else if (hostPath.EndsWith(
+                         @"\en\pr_demons_souls_intro_vo.at9",
+                         StringComparison.OrdinalIgnoreCase) ||
+                     hostPath.EndsWith(
+                         "/en/pr_demons_souls_intro_vo.at9",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                stem = "vo-en";
+            }
+        }
+
+        if (stem is null)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            "[V31.7.20][DS_INTRO_APR_READ] " +
+            $"utc='{DateTime.UtcNow:O}' " +
+            $"mono_ticks={System.Diagnostics.Stopwatch.GetTimestamp()} " +
+            $"stem={stem} id=0x{fileId:X8} " +
+            $"offset=0x{fileOffset:X} requested=0x{requested:X} " +
+            $"read=0x{bytesRead:X} result=0x{unchecked((uint)result):X8} " +
+            $"path='{hostPath ?? string.Empty}'");
+    }
+private static void TraceAmprRead(
         CpuContext ctx,
         ulong commandBuffer,
         uint fileId,
@@ -1768,7 +2453,15 @@ public static class AmprExports
         string? hostPath,
         int result)
     {
-        if (!_traceAmprReads)
+        // V31.7.20.1_APR_TRACE_STRUCTURAL_HOOK
+        // Must execute before the generic read trace's sampling/enable gate.
+        TraceV31720DemonSoulsIntroRead(
+            fileId,
+            hostPath,
+            fileOffset,
+            size,
+            bytesRead,
+            result);        if (!_traceAmprReads)
         {
             return;
         }

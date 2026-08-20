@@ -1,0 +1,6 @@
+            }
+
+            _arrayUploadUnsupported.TryAdd(descriptor.Address, 0);
+        }
+
+        var physicalReadAddress = descriptor.Address + baseMipByteOffset;

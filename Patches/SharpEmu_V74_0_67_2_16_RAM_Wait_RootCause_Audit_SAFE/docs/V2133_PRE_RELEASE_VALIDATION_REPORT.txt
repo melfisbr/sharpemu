@@ -1,0 +1,22 @@
+V74.0.67.2.13.3 validation report
+
+Fixed:
+  undefined $b expansion in V2.13.2 validate_package.ps1.
+
+Pre-release checks executed before ZIP creation:
+  required package files present;
+  no reserved $host assignment;
+  no GetRelativePath usage;
+  no unsafe exact double-quoted "$b.Contains(" token;
+  PowerShell here-string balance checked;
+  RUN_1..RUN_5 target contracts checked;
+  correct provider-init telemetry owner V2.13 checked;
+  V2.13 DLSS markers checked;
+  V2.13 RAM markers checked;
+  V2.12 BPE marker checked;
+  NVIDIA NGX FeatureCommonInfo/create/evaluate/last-error markers checked;
+  known observed guest resource addresses absent;
+  SHA256 manifest regenerated and revalidated;
+  ZIP CRC test passed.
+
+Runtime source changes in V2.13.3: none.

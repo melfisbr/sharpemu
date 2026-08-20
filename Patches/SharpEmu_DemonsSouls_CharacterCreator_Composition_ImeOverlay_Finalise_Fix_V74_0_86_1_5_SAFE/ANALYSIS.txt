@@ -1,0 +1,23 @@
+V74.0.86.1.5 SAFE
+
+V74.0.86.1.4 passed package validation and precheck, but APPLY stopped before build with:
+post-apply markers missing: IME:SharpEmu - Text Input; IME:Done
+
+This was not a source or renderer failure.
+
+Cause:
+V74.0.86.1.4 intentionally moved the OSK PowerShell script out of a C# verbatim string into a UTF-16LE Base64 constant. After that change, plaintext strings such as:
+- SharpEmu - Text Input
+- Done
+no longer exist directly in ImeDialogExports.cs.
+
+However Assert-V7408614 still searched the C# source text for those decoded PowerShell strings. Therefore the new representation was correct but the post-apply diagnostic incorrectly rejected it and triggered SAFE rollback.
+
+V74.0.86.1.5:
+- Adds Get-ImeEmbeddedScript() to extract/decode the C# Base64 constant.
+- Checks C# source markers in the C# text.
+- Checks 'SharpEmu - Text Input', 'Done', player-name title, and WinForms Form inside the decoded PowerShell script.
+- RUN_1 rejects a regression to the old plaintext-only assertion.
+- Preserves the V86.1.4 structural final-return Y/UV learning strategy.
+- Preserves V84.2.1 frame ownership/sticky planes and V86 typed DCC.
+- SAFE rollback remains enabled.

@@ -1,0 +1,77 @@
+            }
+
+            _arrayUploadUnsupported.TryAdd(descriptor.Address, 0);
+        }
+
+        // SHARPEMU_V74_0_88_DEFERRED_TILED_SINGLE
+        // The array branch above handles all supported array slices. For a large
+        // single-layer tiled texture, preserve the same execution-time guest-memory
+        // semantics instead of creating the managed source snapshot under the Gate.
+        if (_deferLargeTiledGuestReadV74088 &&
+            !isStorage &&
+            !isArrayed &&
+            descriptor.Address != 0 &&
+            descriptor.MetadataAddress == 0 &&
+            physicalSourceByteCount >= _deferLargeTiledGuestReadThresholdV74088 &&
+            physicalSourceByteCount <= int.MaxValue &&
+            _gpuDetileEnabled &&
+            hasElementLayout &&
+            !baseMipInTail &&
+            IsGpuDetileBytesPerElement(bytesPerElement) &&
+            IsGpuDetileTextureType(descriptor.Type) &&
+            string.Equals(GuestGpu.Current.BackendName, "Vulkan", StringComparison.OrdinalIgnoreCase))
+        {
+            var deferredParamsV74088 = GnmTiling.GetDetileParams(
+                descriptor.TileMode, bytesPerElement, elementsWide, elementsHigh);
+            if (IsGpuDetileEquation(deferredParamsV74088.Equation) &&
+                (long)elementsWide * elementsHigh * bytesPerElement <= (long)physicalSourceByteCount)
+            {
+                var deferredCountV74088 = Interlocked.Increment(
+                    ref _deferredTiledGuestReadTraceCountV74088);
+                if (deferredCountV74088 <= 64 || (deferredCountV74088 & (deferredCountV74088 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.88][DEFERRED_TILED_SINGLE] count={deferredCountV74088} " +
+                        $"addr=0x{descriptor.Address:X16} size={descriptor.Width}x{descriptor.Height} " +
+                        $"bytes={physicalSourceByteCount} parser_copy_mb=0 base_off={baseMipByteOffset}");
+                }
+
+                NoteSampledAddress(descriptor.Address, descriptor.Format, descriptor.NumberType);
+                texture = new GuestDrawTexture(
+                    descriptor.Address,
+                    descriptor.Width,
+                    descriptor.Height,
+                    descriptor.Format,
+                    descriptor.NumberType,
+                    [],
+                    IsFallback: false,
+                    IsStorage: false,
+                    MipLevels: descriptor.MipLevels,
+                    MipLevel: mipLevel,
+                    BaseMipLevel: descriptor.ViewBaseLevel,
+                    ResourceMipLevels: descriptor.ResourceMipLevels,
+                    Pitch: sourceWidth,
+                    TileMode: descriptor.TileMode,
+                    DstSelect: descriptor.DstSelect,
+                    Sampler: sampler,
+                    WriteGeneration: hasWriteGeneration ? writeGeneration : -1,
+                    ArrayedView: false,
+                    ArrayLayers: 1,
+                    Type: descriptor.Type,
+                    Depth: textureDepth,
+                    TiledSource: null,
+                    Detile: deferredParamsV74088,
+                    MetadataAddress: descriptor.MetadataAddress,
+                    DescriptorFlags: descriptor.DescriptorFlags,
+                    BcSwizzle: descriptor.BcSwizzle,
+                    HasExtendedDescriptor: descriptor.HasExtendedDescriptor,
+                    DeferredTiledGuestRead: true,
+                    DeferredTiledGuestBaseAddress: descriptor.Address,
+                    DeferredTiledGuestSliceStride: physicalSourceByteCount,
+                    DeferredTiledGuestBaseOffset: baseMipByteOffset,
+                    DeferredTiledGuestSliceBytes: checked((int)physicalSourceByteCount));
+                return true;
+            }
+        }
+
+        var physicalReadAddress = descriptor.Address + baseMipByteOffset;

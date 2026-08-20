@@ -190,6 +190,15 @@ public static partial class Gen5SpirvTranslator
         private readonly IReadOnlyList<Gen5PixelOutputBinding> _pixelOutputBindings;
         private readonly uint _waveLaneCount;
         private readonly bool _emulateWave64;
+        // KytyPS5 a38c8fe analogue: these are immutable properties of the
+        // decoded program. Scan the instruction stream once at context creation
+        // instead of repeatedly walking it while declaring capabilities,
+        // wave64 scratch and subgroup helpers.
+        private readonly bool _usesLds;
+        private readonly bool _usesSubgroupShuffle;
+        private readonly bool _usesSubgroupBroadcast;
+        private readonly bool _usesWaveControl;
+        private readonly bool _usesSubgroupOperations;
 
         // Safety valve for the PC-dispatcher loop. Each iteration executes one
         // GCN basic block; a correctly-translated shader always reaches its
@@ -206,6 +215,17 @@ public static partial class Gen5SpirvTranslator
                 out var maxSteps) && maxSteps >= 0
                 ? maxSteps
                 : 100_000;
+
+        // SHARPEMU_V74_0_56_27_IMAGE_DIMENSION_TRACE
+        private static readonly bool _traceImageDimensionsV7405627 =
+            string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_TRACE_IMAGE_DIMENSIONS"),
+                "1",
+                StringComparison.Ordinal);
+
+        private static readonly long[] _imageDimensionCountsV7405627 =
+            new long[8];
 
         // Diagnostic coverage probe. When enabled, every selected MRT export
         // writes opaque magenta while preserving the shader's control flow,
@@ -369,6 +389,13 @@ public static partial class Gen5SpirvTranslator
                 stage == Gen5SpirvStage.Compute &&
                 _waveLaneCount == 64 &&
                 (ulong)localSizeX * localSizeY * localSizeZ == 64;
+            var immutableFeatures = AnalyzeImmutableProgramFeatures(
+                state.Program.Instructions);
+            _usesLds = immutableFeatures.UsesLds;
+            _usesSubgroupShuffle = immutableFeatures.UsesSubgroupShuffle;
+            _usesSubgroupBroadcast = immutableFeatures.UsesSubgroupBroadcast;
+            _usesWaveControl = immutableFeatures.UsesWaveControl;
+            _usesSubgroupOperations = immutableFeatures.UsesSubgroupOperations;
             _localSizeX = localSizeX;
             _localSizeY = localSizeY;
             _localSizeZ = localSizeZ;
@@ -1068,12 +1095,46 @@ public static partial class Gen5SpirvTranslator
                         SpirvCapability.StorageImageExtendedFormats);
                 }
 
+                // SHARPEMU_V74_0_56_27_1_SAFE_IMAGE_DIM_TRACE
+                // Restore the pre-V56.27 image semantics after the real
+                // VK_ERROR_DEVICE_LOST regression, but keep raw MIMG DIM
+                // diagnostics so later fixes are based on the actual shader
+                // contract rather than descriptor TYPE alone.
+                var rawDimensionV74056271 =
+                    binding.Control.Dimension & 0x7u;
+
                 var dimension = binding.Control.Dimension == 2
                     ? SpirvImageDim.Dim3D
                     : SpirvImageDim.Dim2D;
+
                 var isArrayed = dimension != SpirvImageDim.Dim3D &&
                     !isStorage &&
                     Gen5ShaderTranslator.IsArrayedImageBinding(binding);
+
+                if (_traceImageDimensionsV7405627)
+                {
+                    var dimensionIndexV74056271 =
+                        (int)rawDimensionV74056271;
+                    var dimensionCountV74056271 =
+                        Interlocked.Increment(
+                            ref _imageDimensionCountsV7405627[
+                                dimensionIndexV74056271]);
+
+                    if (dimensionCountV74056271 <= 32 ||
+                        (dimensionCountV74056271 &
+                         (dimensionCountV74056271 - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.56.27.1][IMAGE_DIM_SAFE] " +
+                            $"dim={rawDimensionV74056271} " +
+                            $"count={dimensionCountV74056271} " +
+                            $"stage={_stage} op={binding.Opcode} " +
+                            $"storage={(isStorage ? 1 : 0)} " +
+                            $"legacy_spirv={dimension} " +
+                            $"legacy_arrayed={(isArrayed ? 1 : 0)}");
+                    }
+                }
+
                 var imageType = _module.TypeImage(
                     componentType,
                     dimension,
@@ -2339,6 +2400,37 @@ public static partial class Gen5SpirvTranslator
                         GetRawSource(instruction, 2));
                     return true;
                 }
+                // [V74.0.56.9][RDNA2_POST_PS_STUDIOS_SHADER_FIX]
+                case "DsWrite2B64":
+                case "DsWrite2St64B64":
+                {
+                    if (instruction.Sources.Count < 5)
+                    {
+                        error = "missing LDS write2-b64 source";
+                        return false;
+                    }
+
+                    var st64 = instruction.Opcode == "DsWrite2St64B64";
+                    var address = GetRawSource(instruction, 0);
+                    var firstOffset =
+                        EffectiveDsPair64OffsetBytes(control.Offset0, st64);
+                    var secondOffset =
+                        EffectiveDsPair64OffsetBytes(control.Offset1, st64);
+
+                    StoreLds(
+                        LdsPointer(address, firstOffset),
+                        GetRawSource(instruction, 1));
+                    StoreLds(
+                        LdsPointer(address, firstOffset + sizeof(uint)),
+                        GetRawSource(instruction, 2));
+                    StoreLds(
+                        LdsPointer(address, secondOffset),
+                        GetRawSource(instruction, 3));
+                    StoreLds(
+                        LdsPointer(address, secondOffset + sizeof(uint)),
+                        GetRawSource(instruction, 4));
+                    return true;
+                }
                 case "DsReadB32":
                 {
                     if (instruction.Destinations.Count < 1 ||
@@ -2832,12 +2924,10 @@ public static partial class Gen5SpirvTranslator
                         var address = index == 0
                             ? byteAddress
                             : IAdd(byteAddress, UInt(index * sizeof(uint)));
-                        StoreBufferBytes(
+                        StoreGuestBufferDwordV74054(
                             bindingIndex,
                             address,
-                            LoadV(control.VectorData + index),
-                            sizeof(uint),
-                            0);
+                            LoadV(control.VectorData + index));
                     }
                 });
                 return true;
@@ -2870,7 +2960,7 @@ public static partial class Gen5SpirvTranslator
                     : IAdd(byteAddress, UInt(index * sizeof(uint)));
                 StoreV(
                     control.VectorData + index,
-                    LoadUnalignedBufferWord(bindingIndex, address));
+                    LoadGuestBufferDwordV74054(bindingIndex, address));
             }
 
             return true;
@@ -2976,12 +3066,10 @@ public static partial class Gen5SpirvTranslator
                         var address = index == 0
                             ? byteAddress
                             : IAdd(byteAddress, UInt(index * sizeof(uint)));
-                        StoreBufferBytes(
+                        StoreGuestBufferDwordV74054(
                             bindingIndex,
                             address,
-                            LoadV(control.VectorData + index),
-                            sizeof(uint),
-                            0);
+                            LoadV(control.VectorData + index));
                     }
                 });
 
@@ -3042,7 +3130,7 @@ public static partial class Gen5SpirvTranslator
                     : IAdd(byteAddress, UInt(index * sizeof(uint)));
                 StoreV(
                     control.VectorData + index,
-                    LoadUnalignedBufferWord(bindingIndex, address));
+                    LoadGuestBufferDwordV74054(bindingIndex, address));
             }
 
             return true;
@@ -3486,6 +3574,151 @@ public static partial class Gen5SpirvTranslator
                     UInt(expected)),
                 whenTrue,
                 whenFalse);
+
+        // [V74.0.54][ALIGNED_DWORD_BUFFER_FASTPATH]
+        // Full 32-bit guest buffer operations are normally dword-aligned. The
+        // legacy lowering always reconstructed/stored all four bytes separately.
+        // Keep that byte-exact path for genuinely unaligned addresses.
+        private static readonly bool _alignedDwordBufferFastPathV74054 =
+            string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_ALIGNED_DWORD_BUFFER_FASTPATH"),
+                "1",
+                StringComparison.Ordinal);
+
+        // [V74.0.54.4][TARGET_SCOPED_ALIGNED_DWORD_FASTPATH]
+        // V54.3 proved a large runtime win for cs=0x8027E8500, but emitting the
+        // runtime alignment branch into every shader caused a severe first-time
+        // pipeline compile regression in larger kernels. Keep the generic V54
+        // implementation available, while allowing the test profile to emit it
+        // only for the measured target shader.
+        private static readonly bool _alignedDwordBufferTargetOnlyV740544 =
+            string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_ALIGNED_DWORD_BUFFER_FASTPATH_TARGET_ONLY"),
+                "1",
+                StringComparison.Ordinal);
+        private const ulong AlignedDwordTargetShaderV740544 =
+            0x00000008027E8500UL;
+
+        private bool UseAlignedDwordBufferFastPathV740544() =>
+            _alignedDwordBufferFastPathV74054 &&
+            (!_alignedDwordBufferTargetOnlyV740544 ||
+             _state.Program.Address == AlignedDwordTargetShaderV740544);
+
+        private uint LoadGuestBufferDwordV74054(
+            int bindingIndex,
+            uint byteAddress)
+        {
+            if (!UseAlignedDwordBufferFastPathV740544())
+            {
+                return LoadUnalignedBufferWord(
+                    bindingIndex,
+                    byteAddress);
+            }
+
+            var alignedV74054 = _module.AddInstruction(
+                SpirvOp.IEqual,
+                _boolType,
+                BitwiseAnd(byteAddress, UInt(3)),
+                UInt(0));
+            var alignedLabelV74054 = _module.AllocateId();
+            var unalignedLabelV74054 = _module.AllocateId();
+            var mergeLabelV74054 = _module.AllocateId();
+
+            _module.AddStatement(
+                SpirvOp.SelectionMerge,
+                mergeLabelV74054,
+                0);
+            _module.AddStatement(
+                SpirvOp.BranchConditional,
+                alignedV74054,
+                alignedLabelV74054,
+                unalignedLabelV74054);
+
+            _module.AddLabel(alignedLabelV74054);
+            var alignedValueV74054 = LoadBufferWord(
+                bindingIndex,
+                ShiftRightLogical(byteAddress, UInt(2)));
+            _module.AddStatement(
+                SpirvOp.Branch,
+                mergeLabelV74054);
+
+            _module.AddLabel(unalignedLabelV74054);
+            var unalignedValueV74054 = LoadUnalignedBufferWord(
+                bindingIndex,
+                byteAddress);
+            _module.AddStatement(
+                SpirvOp.Branch,
+                mergeLabelV74054);
+
+            _module.AddLabel(mergeLabelV74054);
+            return _module.AddInstruction(
+                SpirvOp.Phi,
+                _uintType,
+                alignedValueV74054,
+                alignedLabelV74054,
+                unalignedValueV74054,
+                unalignedLabelV74054);
+        }
+
+        private void StoreGuestBufferDwordV74054(
+            int bindingIndex,
+            uint byteAddress,
+            uint value)
+        {
+            if (!UseAlignedDwordBufferFastPathV740544())
+            {
+                StoreBufferBytes(
+                    bindingIndex,
+                    byteAddress,
+                    value,
+                    sizeof(uint),
+                    0);
+                return;
+            }
+
+            var alignedV74054 = _module.AddInstruction(
+                SpirvOp.IEqual,
+                _boolType,
+                BitwiseAnd(byteAddress, UInt(3)),
+                UInt(0));
+            var alignedLabelV74054 = _module.AllocateId();
+            var unalignedLabelV74054 = _module.AllocateId();
+            var mergeLabelV74054 = _module.AllocateId();
+
+            _module.AddStatement(
+                SpirvOp.SelectionMerge,
+                mergeLabelV74054,
+                0);
+            _module.AddStatement(
+                SpirvOp.BranchConditional,
+                alignedV74054,
+                alignedLabelV74054,
+                unalignedLabelV74054);
+
+            _module.AddLabel(alignedLabelV74054);
+            StoreBufferWord(
+                bindingIndex,
+                ShiftRightLogical(byteAddress, UInt(2)),
+                value);
+            _module.AddStatement(
+                SpirvOp.Branch,
+                mergeLabelV74054);
+
+            _module.AddLabel(unalignedLabelV74054);
+            StoreBufferBytes(
+                bindingIndex,
+                byteAddress,
+                value,
+                sizeof(uint),
+                0);
+            _module.AddStatement(
+                SpirvOp.Branch,
+                mergeLabelV74054);
+
+            _module.AddLabel(mergeLabelV74054);
+        }
 
         private uint LoadUnalignedBufferWord(int bindingIndex, uint byteAddress)
         {
@@ -5902,15 +6135,18 @@ public static partial class Gen5SpirvTranslator
                 _vectorRegisters,
                 UInt(register));
 
-        // V61: OpAccessChain also accepts a dynamically computed array index.
-        // This is required by V_MOVREL* because M0 participates in VGPR
-        // addressing at runtime rather than at shader translation time.
+        // Upstream 0.0.3: V_MOVREL* computes the VGPR index at run time.
+        // Mask the dynamic index to the private VGPR array bounds; out-of-range
+        // SPIR-V Private access chains are undefined and can reject/corrupt shaders.
         private uint VectorPointerDynamic(uint register) =>
             _module.AddInstruction(
                 SpirvOp.AccessChain,
                 _privateUintPointer,
                 _vectorRegisters,
-                register);
+                BitwiseAnd(register, UInt(VectorRegisterCount - 1)));
+
+        private uint LoadVDynamic(uint register) =>
+            Load(_uintType, VectorPointerDynamic(register));
 
         private uint PackedHalfPointer(uint register) =>
             _module.AddInstruction(
@@ -6320,43 +6556,69 @@ public static partial class Gen5SpirvTranslator
             _module.AddLabel(mergeLabel);
         }
 
-        private bool UsesLds() =>
-            _state.Program.Instructions.Any(instruction =>
-                instruction.Control is Gen5DataShareControl);
+        private readonly record struct ImmutableProgramFeatures(
+            bool UsesLds,
+            bool UsesSubgroupShuffle,
+            bool UsesSubgroupBroadcast,
+            bool UsesWaveControl,
+            bool UsesSubgroupOperations);
 
-        private bool UsesSubgroupShuffle() =>
-            _state.Program.Instructions.Any(instruction =>
-                instruction.Control is Gen5DppControl or Gen5Dpp8Control ||
-                instruction.Opcode is "VPermlane16B32" or "VPermlanex16B32" or "VReadlaneB32");
+        private static ImmutableProgramFeatures AnalyzeImmutableProgramFeatures(
+            IReadOnlyList<Gen5ShaderInstruction> instructions)
+        {
+            var usesLds = false;
+            var usesSubgroupShuffle = false;
+            var usesSubgroupBroadcast = false;
+            var usesWaveControl = false;
+            var usesMbcnt = false;
 
-        private bool UsesSubgroupBroadcast() =>
-            _state.Program.Instructions.Any(instruction =>
-                instruction.Opcode == "VReadfirstlaneB32");
+            foreach (var instruction in instructions)
+            {
+                usesLds |= instruction.Control is Gen5DataShareControl;
+                usesSubgroupShuffle |=
+                    instruction.Control is Gen5DppControl or Gen5Dpp8Control ||
+                    instruction.Opcode is
+                        "VPermlane16B32" or
+                        "VPermlanex16B32" or
+                        "VReadlaneB32";
+                usesSubgroupBroadcast |=
+                    instruction.Opcode == "VReadfirstlaneB32";
+                usesWaveControl |=
+                    instruction.Opcode.Contains("Saveexec", StringComparison.Ordinal) ||
+                    instruction.Opcode.StartsWith("SCbranchExec", StringComparison.Ordinal) ||
+                    instruction.Opcode.StartsWith("SCbranchVcc", StringComparison.Ordinal) ||
+                    instruction.Opcode.StartsWith("VCmpx", StringComparison.Ordinal) ||
+                    instruction.Sources.Any(IsWaveMaskOperand) ||
+                    instruction.Destinations.Any(IsWaveMaskOperand);
+                usesMbcnt |= instruction.Opcode is
+                    "VMbcntLoU32B32" or
+                    "VMbcntHiU32B32";
+            }
 
-        private bool UsesWaveControl() =>
-            _state.Program.Instructions.Any(instruction =>
-                instruction.Opcode.Contains("Saveexec", StringComparison.Ordinal) ||
-                instruction.Opcode.StartsWith("SCbranchExec", StringComparison.Ordinal) ||
-                instruction.Opcode.StartsWith("SCbranchVcc", StringComparison.Ordinal) ||
-                instruction.Opcode.StartsWith("VCmpx", StringComparison.Ordinal) ||
-                instruction.Sources.Any(IsWaveMaskOperand) ||
-                instruction.Destinations.Any(IsWaveMaskOperand));
+            return new ImmutableProgramFeatures(
+                usesLds,
+                usesSubgroupShuffle,
+                usesSubgroupBroadcast,
+                usesWaveControl,
+                usesSubgroupShuffle ||
+                    usesSubgroupBroadcast ||
+                    usesWaveControl ||
+                    usesMbcnt);
+        }
+
+        private bool UsesLds() => _usesLds;
+
+        private bool UsesSubgroupShuffle() => _usesSubgroupShuffle;
+
+        private bool UsesSubgroupBroadcast() => _usesSubgroupBroadcast;
+
+        private bool UsesWaveControl() => _usesWaveControl;
 
         // RootFix V9 / Kyty-informed RDNA2 semantics:
         // wave operations are properties of the shader program, not of the
-        // compute stage. Vertex and pixel programs can branch on EXEC/VCC,
-        // produce lane masks, use DPP/permlane and consume masked bit counts.
-        // All SharpEmu graphics entry points currently use guest wave32, so a
-        // native Vulkan subgroup maps directly to the guest wave on hardware
-        // exposing 32-lane graphics subgroups.
-        private bool UsesSubgroupOperations() =>
-            UsesSubgroupShuffle() ||
-            UsesSubgroupBroadcast() ||
-            UsesWaveControl() ||
-            _state.Program.Instructions.Any(static instruction =>
-                instruction.Opcode is
-                    "VMbcntLoU32B32" or
-                    "VMbcntHiU32B32");
+        // specific Vulkan entry-point invocation. Preserve all of the existing
+        // native-wave32 capability logic while avoiding repeated program scans.
+        private bool UsesSubgroupOperations() => _usesSubgroupOperations;
 
         private static bool IsWaveMaskOperand(Gen5Operand operand) =>
             operand.Kind == Gen5OperandKind.ScalarRegister &&

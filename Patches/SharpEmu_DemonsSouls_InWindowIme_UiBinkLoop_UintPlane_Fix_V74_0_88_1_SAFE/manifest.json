@@ -1,0 +1,19 @@
+{
+  "name": "SharpEmu_DemonsSouls_InWindowIme_UiBinkLoop_UintPlane_Fix_V74_0_88_1_SAFE",
+  "version": "74.0.88.1",
+  "titleId": "PPSA01341",
+  "safe": true,
+  "writes": [
+    "src/SharpEmu.Libs/Ime/ImeDialogExports.cs",
+    "src/SharpEmu.Libs/Ime/ImeInWindowOverlay.cs",
+    "src/SharpEmu.Libs/VideoOut/SdlHostWindow.cs",
+    "src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs",
+    "src/SharpEmu.Libs/Media/HostMovieBridge.cs"
+  ],
+  "preserves": [
+    "V74.0.84.2.1 UI-Bink frame ownership/sticky planes",
+    "V74.0.86 typed DCC guard",
+    "guest Character Creator and 3D asset ownership"
+  ],
+  "installerRepair": "PowerShell reserved automatic variable $Host collision"
+}

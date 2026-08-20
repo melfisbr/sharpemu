@@ -1,0 +1,86 @@
+        return true;
+    }
+
+    // SHARPEMU_V74_0_88_DIRECT_GUEST_DETILE_STAGING
+    // Variant of RecordDetile that fills the mapped host-visible tiled buffer
+    // directly from guest memory. The AGC parser therefore does not need a large
+    // intermediate managed byte[] while it owns the submitted-GPU Gate.
+    public bool RecordDetileGuestMemory(
+        CommandBuffer commandBuffer,
+        Image image,
+        ImageLayout currentLayout,
+        uint texelWidth,
+        uint texelHeight,
+        uint layers,
+        SharpEmu.HLE.ICpuMemory guestMemory,
+        ulong guestBaseAddress,
+        ulong guestSliceStride,
+        ulong guestBaseOffset,
+        int guestSliceBytes,
+        in DetileParams parameters,
+        out Transients transients)
+    {
+        transients = Transients.Empty;
+        if (_disposed ||
+            !Supports(parameters) ||
+            texelWidth == 0 ||
+            texelHeight == 0 ||
+            layers == 0 ||
+            guestMemory is null ||
+            guestBaseAddress == 0 ||
+            guestSliceBytes <= 0 ||
+            guestSliceStride == 0 ||
+            (ulong)guestSliceBytes * layers > int.MaxValue ||
+            guestSliceBytes % parameters.BytesPerElement != 0)
+        {
+            return false;
+        }
+
+        EnsurePipeline();
+
+        var resources = default(DetileResources);
+        try
+        {
+            if (!PrepareResourcesGuestMemoryV74088(
+                    guestMemory,
+                    guestBaseAddress,
+                    guestSliceStride,
+                    guestBaseOffset,
+                    guestSliceBytes,
+                    parameters,
+                    layers,
+                    ref resources))
+            {
+                ReleaseResources(in resources);
+                return false;
+            }
+
+            RecordCommands(
+                commandBuffer,
+                in resources,
+                image,
+                currentLayout,
+                texelWidth,
+                texelHeight,
+                layers,
+                in parameters);
+        }
+        catch
+        {
+            ReleaseResources(in resources);
+            throw;
+        }
+
+        transients = new Transients
+        {
+            Tiled = resources.Tiled,
+            Output = resources.Output,
+            Set = resources.Set,
+            Rented = true,
+        };
+        return true;
+    }
+
+    public void Retire(Transients transients)
+    {
+        if (_disposed || transients is null || !transients.Rented)

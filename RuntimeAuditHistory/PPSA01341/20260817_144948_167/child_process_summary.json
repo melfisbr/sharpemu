@@ -1,0 +1,10 @@
+{
+  "processId": 17368,
+  "sampleCount": 100,
+  "averageCpuPercent": 49.042766190679544,
+  "peakCpuPercent": 60.91457462220035,
+  "peakWorkingSetMb": 6697.73828125,
+  "peakPrivateMb": 11067.35546875,
+  "maxThreads": 113,
+  "maxHandles": 7308
+}

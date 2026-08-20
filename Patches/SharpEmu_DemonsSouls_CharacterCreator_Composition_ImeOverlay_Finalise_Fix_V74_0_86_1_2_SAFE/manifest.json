@@ -1,0 +1,15 @@
+{
+  "name": "SharpEmu_DemonsSouls_CharacterCreator_Composition_ImeOverlay_Finalise_Fix_V74_0_86_1_2_SAFE",
+  "version": "74.0.86.1.2",
+  "titleId": "PPSA01341",
+  "safe": true,
+  "writes": [
+    "src/SharpEmu.Libs/Ime/ImeDialogExports.cs",
+    "src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs"
+  ],
+  "fixes": [
+    "run_test PowerShell parse regression",
+    "exact return-anchor installer failure",
+    "UI-Bink discovered Y/UV pair learning"
+  ]
+}

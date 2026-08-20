@@ -1,0 +1,87 @@
+            // buffers + descriptor pool retire with the batch fence. On any failure
+            // fall back to a CPU detile + normal staged upload.
+            var gpuDetiled = false;
+
+            // SHARPEMU_V74_0_88_DIRECT_GUEST_STAGING
+            if (gpuDeferredTiledSourceV74088 &&
+                gpuDetileParams is { } deferredDetileParametersV74088 &&
+                _guestMemory is { } deferredGuestMemoryV74088)
+            {
+                try
+                {
+                    var detileCommandBuffer = BeginBatchedGuestCommands();
+                    CloseOpenTranslatedRenderPass();
+                    if (EnsureDetilePass().RecordDetileGuestMemory(
+                            detileCommandBuffer,
+                            image,
+                            ImageLayout.Undefined,
+                            width,
+                            height,
+                            layers,
+                            deferredGuestMemoryV74088,
+                            texture.DeferredTiledGuestBaseAddress,
+                            texture.DeferredTiledGuestSliceStride,
+                            texture.DeferredTiledGuestBaseOffset,
+                            texture.DeferredTiledGuestSliceBytes,
+                            deferredDetileParametersV74088,
+                            out var directDetileTransientsV74088))
+                    {
+                        _batchRetireDetile.Add(directDetileTransientsV74088);
+                        gpuDetiled = true;
+                        var directCountV74088 = Interlocked.Increment(
+                            ref _directGuestStagingTraceCountV74088);
+                        if (directCountV74088 <= 64 || (directCountV74088 & (directCountV74088 - 1)) == 0)
+                        {
+                            var directBytesV74088 =
+                                (long)texture.DeferredTiledGuestSliceBytes * layers;
+                            Console.Error.WriteLine(
+                                $"[V74.0.88][DIRECT_GUEST_STAGING] count={directCountV74088} " +
+                                $"addr=0x{texture.Address:X16} layers={layers} bytes={directBytesV74088} " +
+                                $"managed_bridge_mb=0");
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.88][DIRECT_GUEST_STAGING_FALLBACK] " +
+                        $"addr=0x{texture.Address:X16} reason={exception.Message}");
+                    gpuDetiled = false;
+                }
+
+                if (!gpuDetiled)
+                {
+                    if (TryMaterializeDeferredTiledGuestSourceV74088(
+                            texture,
+                            layers,
+                            out var materializedTiledV74088))
+                    {
+                        gpuTiledSource = materializedTiledV74088;
+                        var fallbackCountV74088 = Interlocked.Increment(
+                            ref _directGuestStagingFallbackTraceCountV74088);
+                        if (fallbackCountV74088 <= 32 || (fallbackCountV74088 & (fallbackCountV74088 - 1)) == 0)
+                        {
+                            Console.Error.WriteLine(
+                                $"[V74.0.88][DIRECT_GUEST_STAGING_FALLBACK] count={fallbackCountV74088} " +
+                                $"addr=0x{texture.Address:X16} bytes={materializedTiledV74088.Length} " +
+                                $"mode=render-thread-managed-fallback");
+                        }
+                    }
+                    else
+                    {
+                        var fallbackBytesV74088 = checked((long)expectedSize * layers);
+                        if (fallbackBytesV74088 > 0 && fallbackBytesV74088 <= int.MaxValue)
+                        {
+                            var zeroFallbackV74088 = new byte[(int)fallbackBytesV74088];
+                            (stagingBuffer, stagingMemory) = CreateTextureStagingBuffer(
+                                zeroFallbackV74088,
+                                $"{TextureDebugName(texture, vkFormat)} staging(v88-read-failed)");
+                        }
+                    }
+                }
+            }
+
+            if (!gpuDetiled && gpuTiledSource is { } detileSource && gpuDetileParams is { } detileParameters)
+            {
+                try
+                {

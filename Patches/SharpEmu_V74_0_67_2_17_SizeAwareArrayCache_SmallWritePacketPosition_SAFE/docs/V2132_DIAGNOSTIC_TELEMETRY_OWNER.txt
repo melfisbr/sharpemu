@@ -1,0 +1,15 @@
+V74.0.67.2.13.2
+
+False diagnostic:
+  active_telemetry=false
+
+Source implementation owner:
+  V74.0.67.2.13
+
+Exact source telemetry:
+  [V74.0.67.2.13][UPSCALER][PROVIDER_INIT] state=active
+
+V2.13.1 was a multicache-anchor correction and intentionally did not retag
+the already accumulated provider-init feature.
+
+V2.13.2 fixes diagnostic.ps1 only.

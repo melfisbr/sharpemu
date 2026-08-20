@@ -1,0 +1,32 @@
+SharpEmu Demon's Souls V74.0.88.3 SAFE
+
+Observed after V74.0.88.2:
+- RUN_5 launched the emulator.
+- The emulator then stopped progressing after the intro.
+- The runner failed while reading a redirected temp stderr file because another process still held the file open.
+- As a result, the final Patches runtime/result ZIP was not produced.
+
+Root-cause split:
+
+1. Test-runner logging bug
+V88.2 used Start-Process with RedirectStandardOutput/RedirectStandardError and then ReadAllText on those temporary files. Even after WaitForExit, Windows can briefly keep the redirected handle open. That makes final log collection race with the process/redirect handle.
+
+V88.3 removes the temporary redirected files entirely. Native stdout/stderr are merged into the PowerShell pipeline and written line-by-line with AutoFlush directly to the final runtime log under Patches. If the emulator stalls and the user closes it, all lines already emitted remain in the final log.
+
+2. Post-intro regression
+V88.2 rewound every movie accepted by IsDemonSoulsUiBinkCompositePathV740841 at EOF. That scope is too broad for boot/title progression. The intro/title loop must be allowed to complete according to the guest timeline; only the persistent NEW GAME menu backgrounds should be forcibly rewound by the host.
+
+V88.3 restricts host EOF rewind to:
+- main_menu.bk2
+- main_menu_ngp.bk2
+
+It does NOT host-rewind logo_intro_loop.bk2.
+
+Preserved unchanged:
+- V74.0.88 in-window IME
+- V74.0.88 NumberType=4/R8Uint/R8G8Uint Bink plane support
+- V74.0.88 single-plane bootstrap
+- V74.0.84.2.1 frame ownership/sticky plane state
+- V74.0.86 typed-DCC guard
+
+This package is intentionally a delta on top of an already-applied V74.0.88.2 source.

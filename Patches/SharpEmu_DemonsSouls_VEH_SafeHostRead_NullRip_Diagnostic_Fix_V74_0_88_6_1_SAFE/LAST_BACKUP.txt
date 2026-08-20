@@ -1,0 +1,2 @@
+﻿Source=C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Core\Cpu\Native\DirectExecutionBackend.Exceptions.cs
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\.sharpemu-hotfix-backup\VehSafeHostReadV740886_20260819_220108\DirectExecutionBackend.Exceptions.cs

@@ -1,0 +1,28 @@
+SharpEmu Demon's Souls V74.0.88.6.1 SAFE
+
+LIVE PACKAGE CORRECTION
+
+The V74.0.88.6 source patch did not run. The user's RUN_2/RUN_3 stopped before
+source modification because precheck.ps1 used bare `True` tokens.
+
+The precheck nevertheless established the exact current accumulated file:
+C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Core\Cpu\Native\DirectExecutionBackend.Exceptions.cs
+SHA256:
+F4C12523911BD7779258E2723B465AD69CC00DC061B70CAA25FA740C72CFBC5F
+
+Both TryReadHostQword and VectoredHandler are in that same partial source.
+
+V88.6 had two package bugs:
+1. `try_read_signature=True` / `vectored_handler_signature=True` are invalid
+   PowerShell values in this context; they attempt to invoke a command named True.
+2. diagnostic.ps1 had an incomplete nested `$()` expression.
+
+V88.6.1 corrects both and adds validation regression guards so RUN_1 rejects
+either defect before precheck/apply.
+
+The technical source fix remains intentionally narrow:
+the V88.5 runtime showed a guest Core.Res.Decompressor execute AV at RIP=0,
+followed by a second fatal managed AccessViolationException in
+VectoredHandler -> TryReadHostQword -> Marshal.ReadInt64.
+V88.6.1 validates the host qword mapping before Marshal.ReadInt64 and does not
+modify the guest exception policy or skip RIP=0.

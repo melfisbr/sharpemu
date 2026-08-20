@@ -1,2 +1,0 @@
-﻿15,4s observed_tbb_limit=2
-46,0s large_array_320mb [V74.0.8][TEX_CACHE] add addr=0x000000102A400000 size=1024x1024 bytes=335544320 resident_mb=416 budget_mb=768 entries=8

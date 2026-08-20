@@ -1,0 +1,27 @@
+SharpEmu Demon's Souls V74.0.84.2.1 - UI Bink frame ownership + sticky sampled-plane integrity
+
+Observed V84.1 runtime:
+- logo_intro_loop colors are correct and PRESS ANY BUTTON works.
+- main_menu.bk2 starts correctly with internal NIHAV and guest HLE/GPU live.
+- later the movie/background becomes green/magenta tiled garbage while NEW GAME / SETTINGS text remains readable.
+- current runtime has no main-menu RAD hard gate, no Vulkan OOM and no device-lost evidence.
+- NIHAV exposes a bounded playback buffer policy (count=5), while VulkanVideoPresenter stores the returned byte[] reference and converts it later when a guest draw consumes the movie.
+- Bluepoint alternates two Y/UV guest surface pairs and the generic guest-image cache also sees those addresses as storage resources.
+
+V84.2 corrections:
+1. UI-BINK FRAME OWNERSHIP
+   For Demon's Souls UI Binks only, every advanced BGRA frame is copied immediately into a presenter-owned persistent byte[] before the asynchronous decoder may recycle its bounded buffer. No per-frame managed allocation occurs after the first size allocation.
+
+2. STICKY SAMPLED PLANE INTEGRITY
+   Once a valid full Bluepoint Y/UV sampled pair is observed, its addresses are learned for the active movie. If a later sampled draw exposes only one previously learned plane, that plane is still substituted with the host-decoded image rather than falling through to the raw guest storage/snapshot resource. Storage descriptors are explicitly excluded, so guest decoder compute writes are never intercepted.
+
+Preserved:
+- V74.0.77.2 attract guest-state completion
+- V74.0.84.1 internal UI-Bink routing
+- V74.0.84.1 VU chroma contract
+- guest UI animation/input
+- RAD for PS Studios / attract
+- guest storage writes to Bink surfaces
+
+Opt-out:
+SHARPEMU_DS_UI_BINK_STICKY_PLANES=0 disables only the sticky-plane fallback.

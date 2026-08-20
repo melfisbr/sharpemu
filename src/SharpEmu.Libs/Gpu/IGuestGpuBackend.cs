@@ -219,6 +219,21 @@ internal interface IGuestGpuBackend
         bool requiresGpuToCpuVisibility) =>
         SubmitOrderedGuestAction(action, debugName);
 
+    // SHARPEMU_V74_0_28_1_WATCHED_WRITE_API_INTERFACE
+    // Extended producer metadata is optional. Backends that do not
+    // consume it preserve the existing ordered-action fallback.
+    long SubmitOrderedGuestActionWithVisibility(
+        Action action,
+        string debugName,
+        bool requiresGpuToCpuVisibility,
+        object? waitProducerMemory,
+        ulong waitProducerAddress,
+        ulong waitProducerLength) =>
+        SubmitOrderedGuestActionWithVisibility(
+            action,
+            debugName,
+            requiresGpuToCpuVisibility);
+
     /// <summary>
     /// Enqueues a CPU-side PM4 action after all earlier work in the current
     /// logical guest queue has completed, without requesting storage-buffer
@@ -229,6 +244,17 @@ internal interface IGuestGpuBackend
         Action action,
         string debugName) =>
         SubmitOrderedGuestAction(action, debugName);
+
+    // SHARPEMU_V74_0_56_12_QUEUE_COMPLETION_PRODUCER_METADATA
+    // Producer metadata is scheduling-only: backends that do not consume it
+    // retain the exact queue-completion semantics above.
+    long SubmitOrderedGuestActionAfterQueueCompletion(
+        Action action,
+        string debugName,
+        object? waitProducerMemory,
+        ulong waitProducerAddress,
+        ulong waitProducerLength) =>
+        SubmitOrderedGuestActionAfterQueueCompletion(action, debugName);
 
     /// <summary>Preserves sceAgcDcbWaitUntilSafeForRendering in queue order.</summary>
     long SubmitOrderedGuestFlipWait(int videoOutHandle, int displayBufferIndex);
@@ -271,6 +297,13 @@ internal interface IGuestGpuBackend
     /// untouched rows on the host already hold the same bytes.
     /// </summary>
     void SubmitGuestImageWrite(ulong address, byte[] pixels, uint rowOffset = 0);
+
+    /// <summary>
+    /// Mirrors a guest DMA copy from the freshest GPU-side source image into a
+    /// compatible destination image. Returns false when no safe live-image copy
+    /// can be queued, allowing the AGC layer to retain its guest-RAM fallback.
+    /// </summary>
+    bool TrySubmitGuestImageCopy(ulong sourceAddress, ulong destinationAddress);
 
     /// <summary>
     /// Whether a non-zero <c>rowOffset</c> is honoured. Backends that cannot

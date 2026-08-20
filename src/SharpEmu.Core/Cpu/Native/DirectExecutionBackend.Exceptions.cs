@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using SharpEmu.Core.Cpu.Disasm;
+using SharpEmu.Core.Cpu.Emulation;
 using SharpEmu.HLE;
 
 namespace SharpEmu.Core.Cpu.Native;
@@ -17,12 +18,23 @@ public sealed partial class DirectExecutionBackend
 {
 	private const ulong LazyCommitWindowBytes = 0x0200_0000UL;
 	private static int _lazyCommitTraceCount;
+	private static int _lazyExecutableTlsRescanCount;
+	private static int _lazyExecutableTlsRescanPatchedCount;
 	private static int _guestAllocatorHoleRecoveries;
+	private static int _unpatchedTlsLoadRecoveries;
+	private static readonly bool _disableTlsLoadFaultRecovery = string.Equals(
+		Environment.GetEnvironmentVariable("SHARPEMU_DISABLE_TLS_LOAD_FAULT_RECOVERY"),
+		"1",
+		StringComparison.Ordinal);
 	// SHARPEMU_V35_DEMON_INLINE_WIDE_NODE_COUNTER
 	private static int _demonInlineWideNodeRecoveries;
 	private static int _demonBadChildFlagRecoveries; // SHARPEMU_V35_1_DEMON_BAD_CHILD_FLAG_COUNTER
+	private static int _demonBpeLowSentinelRecoveriesV74067241; // V74.0.67.2.4.1 BPE low-sentinel list recovery
+	private static int _demonBpeHead2SentinelRecoveriesV74067218; // V74.0.67.2.18 BPE head2 end-sentinel recovery
 	private static int _auxiliaryThreadExecuteFaultRecoveries;
 	private static int _auxiliaryThreadExecuteFaultSkips;
+	// V74.0.67.2.21 HighGraphics pthread-exit null-callback recovery.
+	private static int _highGraphicsPthreadExitNullCallbackRecoveriesV74067221;
 	private nint _workerAbortStack;
 	private const uint WorkerAbortStackSize = 0x10000u;
 
@@ -137,6 +149,14 @@ public sealed partial class DirectExecutionBackend
 			{
 				return -1;
 			}
+			// V74.0.67.2.21 HighGraphics pthread-exit null-callback recovery.
+			if (TryRecoverHighGraphicsPthreadExitNullCallbackV74067221(
+					exceptionRecord,
+					contextRecord,
+					rip))
+			{
+				return -1;
+			}
 			if (TryRecoverAuxiliaryThreadExecuteFault(exceptionRecord, contextRecord, rip))
 			{
 				return -1;
@@ -148,6 +168,11 @@ public sealed partial class DirectExecutionBackend
 			}
 			if (exceptionCode == 3221225477u &&
 				TryRecoverGuestAllocatorHole(exceptionRecord, contextRecord, rip))
+			{
+				return -1;
+			}
+			if (exceptionCode == 3221225477u &&
+				TryRecoverUnpatchedTlsLoad(exceptionRecord, contextRecord, rip))
 			{
 				return -1;
 			}
@@ -164,8 +189,37 @@ public sealed partial class DirectExecutionBackend
 				// SHARPEMU_V46_2_DEMON_VIRTUAL_CALL_PROBE
 				ProbeDemonVirtualCallFaultV462(exceptionRecord, contextRecord, rip);
 			}
+			// V74.0.67.2.18 BPE head2 end-sentinel recovery.
+			if (exceptionCode == 3221225477u &&
+				TryRecoverDemonBpeHead2EndSentinelFaultV74067218(
+					exceptionRecord,
+					contextRecord,
+					rip))
+			{
+				return -1;
+			}
+
+			// V74.0.67.2.4.1 BPE low-sentinel list recovery
+			if (exceptionCode == 3221225477u &&
+				TryRecoverDemonBpeLowSentinelListFaultV74067241(
+					exceptionRecord,
+					contextRecord,
+					rip))
+			{
+				return -1;
+			}
+
 			if (exceptionCode == 3221225477u &&
 				TryRecoverDemonBadChildFlagFault(exceptionRecord, contextRecord, rip))
+			{
+				return -1;
+			}
+			// SHARPEMU_V74_0_56_22_DEMON_BPE_INVALID_LIST_HEAD
+			if (exceptionCode == 3221225477u &&
+				TryRecoverDemonBpeInvalidListHeadV7405622(
+					exceptionRecord,
+					contextRecord,
+					rip))
 			{
 				return -1;
 			}
@@ -383,13 +437,13 @@ public sealed partial class DirectExecutionBackend
 					if (TryReadHostBytes(rip, code))
 					{
 						Console.Error.WriteLine("[LOADER][INFO]   Code at RIP: " + BitConverter.ToString(code).Replace("-", " "));
-						if (code[0] == 100)
+						if (TlsThreadPointerLoad.TryDetectSegmentOverride(
+								code,
+								out var segmentOverride,
+								out var segmentPrefixIndex))
 						{
-							Console.Error.WriteLine("[LOADER][ERROR]   Detected FS segment prefix - TLS access not patched!");
-						}
-						else if (code[0] == 101)
-						{
-							Console.Error.WriteLine("[LOADER][ERROR]   Detected GS segment prefix - TLS access not patched!");
+							Console.Error.WriteLine(
+								$"[LOADER][ERROR]   Detected {segmentOverride} segment prefix at byte {segmentPrefixIndex} - TLS access not patched!");
 						}
 						else if (code[0] == 197 || code[0] == 196)
 						{
@@ -471,6 +525,94 @@ public sealed partial class DirectExecutionBackend
 		}
 	}
 
+	// V74.0.67.2.21 HighGraphics pthread-exit null-callback recovery.
+	//
+	// Runtime proof:
+	//   AV code      = 0xC0000005
+	//   AV kind      = execute
+	//   RIP/target   = 0
+	//   guest thread = HighGraphics
+	//   active import= scePthreadExit (3kg7rT0NQIs)
+	//   import result_valid = false
+	//
+	// scePthreadExit is a noreturn operation. SharpEmu intentionally runs
+	// guest TLS/runtime cleanup callbacks before RequestCurrentEntryExit.
+	// A null indirect call inside that cleanup must terminate only the
+	// failing cleanup callback, not the whole emulator process. Redirect
+	// the nested guest callback to its active host-return sentinel. Control
+	// then returns to managed pthread-exit cleanup, which continues and
+	// requests the normal guest-thread exit itself.
+	//
+	// This is deliberately NOT a generic RIP=0 recovery. Every gate below
+	// must match the captured HighGraphics pthread-exit-in-progress case.
+	private unsafe bool TryRecoverHighGraphicsPthreadExitNullCallbackV74067221(
+		EXCEPTION_RECORD* exceptionRecord,
+		void* contextRecord,
+		ulong rip)
+	{
+		if (string.Equals(
+				Environment.GetEnvironmentVariable(
+					"SHARPEMU_DISABLE_HIGHGRAPHICS_PTHREAD_EXIT_NULL_RECOVERY"),
+				"1",
+				StringComparison.Ordinal) ||
+			exceptionRecord == null ||
+			contextRecord == null ||
+			exceptionRecord->ExceptionCode != 3221225477u ||
+			exceptionRecord->NumberParameters < 2 ||
+			exceptionRecord->ExceptionInformation[0] != 8 ||
+			exceptionRecord->ExceptionInformation[1] != 0 ||
+			rip != 0)
+		{
+			return false;
+		}
+
+		var activeThread = _activeGuestThreadState;
+		if (activeThread is null ||
+			!string.Equals(
+				activeThread.Name,
+				"HighGraphics",
+				StringComparison.Ordinal) ||
+			!string.Equals(
+				Volatile.Read(ref activeThread.LastImportNid),
+				"3kg7rT0NQIs",
+				StringComparison.Ordinal) ||
+			Volatile.Read(ref activeThread.LastImportResultValid) != 0 ||
+			activeThread.LastImportRdi != 0 ||
+			activeThread.LastReturnRip < 0x10000)
+		{
+			return false;
+		}
+
+		var hostExit = ActiveEntryReturnSentinelRip;
+		if (hostExit < 0x10000 ||
+			!TryPatchActiveGuestReturnSlot(hostExit))
+		{
+			return false;
+		}
+
+		// Match the already-established auxiliary callback-return strategy:
+		// return a neutral callback value and resume at the active host exit.
+		// Do not abort/abandon HighGraphics; scePthreadExit still owns the
+		// thread's clean termination after this nested callback unwinds.
+		WriteCtxU64(contextRecord, 120, 0);
+		WriteCtxU64(contextRecord, 248, hostExit);
+
+		var recovery = Interlocked.Increment(
+			ref _highGraphicsPthreadExitNullCallbackRecoveriesV74067221);
+
+		if (recovery <= 32 || (recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[V74.0.67.2.21][PTHREAD_EXIT_NULL_CALLBACK] " +
+				$"count={recovery} thread=HighGraphics " +
+				$"nid=3kg7rT0NQIs result_valid=0 " +
+				$"av=execute-null return=host-exit " +
+				$"host_exit=0x{hostExit:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
 	private unsafe bool TryRecoverAuxiliaryThreadExecuteFault(
 		EXCEPTION_RECORD* exceptionRecord,
 		void* contextRecord,
@@ -690,6 +832,132 @@ public sealed partial class DirectExecutionBackend
 		return true;
 	}
 
+	private static bool TryPlanUnpatchedTlsLoadRecovery(
+		ReadOnlySpan<byte> code,
+		ulong rip,
+		ulong accessType,
+		ulong faultAddress,
+		ulong guestTlsBase,
+		out int contextOffset,
+		out ulong resumeRip,
+		out int destinationRegister)
+	{
+		contextOffset = 0;
+		resumeRip = 0;
+		destinationRegister = 0;
+
+		// An unpatched guest FS:[0] load becomes a host read from address zero.
+		// Reject every other access so an ordinary null dereference remains a real crash.
+		if (accessType != 0 || faultAddress != 0)
+		{
+			return false;
+		}
+
+		if (!TlsThreadPointerLoad.TryDecode(code, out destinationRegister, out var length))
+		{
+			return false;
+		}
+
+		// A thread without a guest TLS block cannot be recovered safely.
+		if (guestTlsBase == 0)
+		{
+			return false;
+		}
+
+		// Win64 CONTEXT stores RAX..R15 in x86 register-encoding order.
+		contextOffset = CTX_RAX + (8 * destinationRegister);
+		resumeRip = rip + (ulong)length;
+		return true;
+	}
+
+	private unsafe bool TryRecoverUnpatchedTlsLoad(
+		EXCEPTION_RECORD* exceptionRecord,
+		void* contextRecord,
+		ulong rip)
+	{
+		if (_disableTlsLoadFaultRecovery ||
+			exceptionRecord->NumberParameters < 2 ||
+			_guestTlsBaseTlsIndex == uint.MaxValue)
+		{
+			return false;
+		}
+
+		Span<byte> code = stackalloc byte[TlsThreadPointerLoad.MaxLength];
+		if (!TryReadTlsInstructionWindow(rip, code, out var codeLength))
+		{
+			return false;
+		}
+
+		ulong tlsBase = (ulong)TlsGetValue(_guestTlsBaseTlsIndex);
+		if (!TryPlanUnpatchedTlsLoadRecovery(
+				code.Slice(0, codeLength),
+				rip,
+				exceptionRecord->ExceptionInformation[0],
+				exceptionRecord->ExceptionInformation[1],
+				tlsBase,
+				out var contextOffset,
+				out var resumeRip,
+				out var destinationRegister))
+		{
+			return false;
+		}
+
+		WriteCtxU64(contextRecord, contextOffset, tlsBase);
+		WriteCtxU64(contextRecord, CTX_RIP, resumeRip);
+
+		var recovery = Interlocked.Increment(ref _unpatchedTlsLoadRecoveries);
+		if (recovery <= 16 || (recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[LOADER][WARN] Recovered unpatched guest TLS load #{recovery}: " +
+				$"rip=0x{rip:X16} reg={destinationRegister} tls=0x{tlsBase:X16} resume=0x{resumeRip:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
+	private unsafe static bool TryReadTlsInstructionWindow(
+		ulong address,
+		Span<byte> buffer,
+		out int bytesRead)
+	{
+		bytesRead = 0;
+		if (address < 0x10000 || buffer.Length == 0)
+		{
+			return false;
+		}
+
+		if (VirtualQuery((void*)address, out var mbi, (nuint)sizeof(MEMORY_BASIC_INFORMATION64)) == 0)
+		{
+			return false;
+		}
+
+		ulong regionEnd = mbi.BaseAddress + mbi.RegionSize;
+		if (mbi.State != MEM_COMMIT ||
+			!IsReadableProtection(mbi.Protect) ||
+			regionEnd <= address)
+		{
+			return false;
+		}
+
+		ulong available = regionEnd - address;
+		bytesRead = (int)Math.Min((ulong)buffer.Length, available);
+		if (bytesRead == 0)
+		{
+			return false;
+		}
+
+		try
+		{
+			new ReadOnlySpan<byte>((void*)address, bytesRead).CopyTo(buffer);
+			return true;
+		}
+		catch
+		{
+			bytesRead = 0;
+			return false;
+		}
+	}
 	// SHARPEMU_V35_DEMON_INLINE_WIDE_NODE_RECOVERY
 	private unsafe static bool TryRecoverDemonInlineWideNodeFault(
 		EXCEPTION_RECORD* exceptionRecord,
@@ -757,6 +1025,409 @@ public sealed partial class DirectExecutionBackend
 		return true;
 	}
 
+	// SHARPEMU_V74_0_56_22_DEMON_BPE_INVALID_LIST_HEAD_RECOVERY
+	private unsafe static bool TryRecoverDemonBpeInvalidListHeadV7405622(
+		EXCEPTION_RECORD* exceptionRecord,
+		void* contextRecord,
+		ulong rip)
+	{
+		if (!string.Equals(
+				Environment.GetEnvironmentVariable(
+					"SHARPEMU_DEMON_BPE_INVALID_LIST_HEAD_RECOVERY"),
+				"1",
+				StringComparison.Ordinal) ||
+			exceptionRecord->NumberParameters < 2 ||
+			exceptionRecord->ExceptionInformation[0] != 0)
+		{
+			return false;
+		}
+
+		// Exact guest code observed repeatedly after the third initial UI:
+		//
+		//   48 8B 0F          mov rcx,[rdi]
+		//   48 85 C9          test rcx,rcx
+		//   74 15             je  <guest-empty-list-path>
+		//   ...
+		//   48 89 C8          mov rax,rcx
+		//   48 8B 49 08       mov rcx,[rcx+8]   <- fault
+		//   48 85 C9          test rcx,rcx
+		//   75 F4             jne loop
+		//   C3                ret
+		//
+		// The repeated fault has rcx=1, so the memory access target is 0x9.
+		// Use the guest's own empty-list branch rather than fabricating a node.
+		if (rip < 0x20)
+		{
+			return false;
+		}
+
+		byte* code = (byte*)(rip - 0x13);
+		byte[] signature =
+		{
+			0x48,0x8B,0x0F,
+			0x48,0x85,0xC9,
+			0x74,0x15,
+			0x0F,0x1F,0x84,0x00,0x00,0x00,0x00,0x00,
+			0x48,0x89,0xC8,
+			0x48,0x8B,0x49,0x08,
+			0x48,0x85,0xC9,
+			0x75,0xF4,
+			0xC3
+		};
+
+		for (int i = 0; i < signature.Length; i++)
+		{
+			if (code[i] != signature[i])
+			{
+				return false;
+			}
+		}
+
+		ulong rcx = ReadCtxU64(contextRecord, CTX_RCX);
+		ulong rdi = ReadCtxU64(contextRecord, CTX_RDI);
+		ulong target = exceptionRecord->ExceptionInformation[1];
+
+		// The node must be an obviously invalid low non-null sentinel and the
+		// fault address must be exactly node+8 for the observed instruction.
+		if (rcx == 0 ||
+			rcx >= 0x10000 ||
+			target != rcx + 8 ||
+			rdi < 0x10000)
+		{
+			return false;
+		}
+
+		if (!TryReadHostQword(rdi, out ulong listHead) ||
+			listHead != rcx)
+		{
+			return false;
+		}
+
+		// Equivalent semantic state to the earlier `je` when [rdi] == 0:
+		// clear the temporary node and enter the guest's own empty-list path.
+		WriteCtxU64(contextRecord, CTX_RAX, 0);
+		WriteCtxU64(contextRecord, CTX_RCX, 0);
+		WriteCtxU64(contextRecord, CTX_RIP, rip + 0x0A);
+
+		long recovery =
+			Interlocked.Increment(
+				ref _demonBpeInvalidListHeadRecoveriesV7405622);
+
+		if (recovery <= 32 ||
+			(recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[V74.0.56.22][BPE_INVALID_LIST_HEAD_RECOVERY] " +
+				$"count={recovery} rip=0x{rip:X16} " +
+				$"header=0x{rdi:X16} bad_head=0x{rcx:X16} " +
+				$"fault=0x{target:X16} " +
+				$"guest_empty_path=0x{rip + 0x0A:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
+
+	private static long _demonBpeInvalidListHeadRecoveriesV7405622;
+
+	// V74.0.67.2.18 BPE head2 end-sentinel recovery.
+	//
+	// Exact semantic variant only:
+	// - read AV at low target 0xA;
+	// - RCX=RAX=2 at the linked-list traversal;
+	// - BPE JobWorkerThread;
+	// - primary tcVi5SivF7Q caller with RDI==R14;
+	// - exact helper instruction signature;
+	// - container [0]=2, [8]=0, [0x10]=canonical payload;
+	// - exact primary post-call shape:
+	//     mov r14,rax
+	//     cmp rax,[rbp-0xC70]
+	//     je ...
+	//     mov eax,[r14+0x20]
+	// - caller [rbp-0xC70] must equal the same canonical payload.
+	//
+	// No absolute guest RIP, caller address, container address or payload
+	// address is embedded. Unrelated AVs continue to the normal handler.
+	private unsafe static bool TryRecoverDemonBpeHead2EndSentinelFaultV74067218(
+		EXCEPTION_RECORD* er,
+		void* ctx,
+		ulong rip)
+	{
+		if (string.Equals(
+				Environment.GetEnvironmentVariable(
+					"SHARPEMU_DISABLE_DEMON_BPE_HEAD2_SENTINEL_RECOVERY"),
+				"1",
+				StringComparison.Ordinal) ||
+			er == null ||
+			ctx == null ||
+			er->NumberParameters < 2 ||
+			er->ExceptionInformation[0] != 0 ||
+			er->ExceptionInformation[1] != 0xA ||
+			rip < 0x10013)
+		{
+			return false;
+		}
+
+		GuestThreadState? activeThread = _activeGuestThreadState;
+		if (activeThread is null ||
+			!activeThread.Name.StartsWith(
+				"BPE JobWorkerThread",
+				StringComparison.Ordinal) ||
+			!string.Equals(
+				Volatile.Read(ref activeThread.LastImportNid),
+				"tcVi5SivF7Q",
+				StringComparison.Ordinal))
+		{
+			return false;
+		}
+
+		ulong rcx = ReadCtxU64(ctx, CTX_RCX);
+		ulong rax = ReadCtxU64(ctx, CTX_RAX);
+		ulong rdi = ReadCtxU64(ctx, CTX_RDI);
+		ulong rbp = ReadCtxU64(ctx, CTX_RBP);
+		ulong rsp = ReadCtxU64(ctx, CTX_RSP);
+		ulong r14 = ReadCtxU64(ctx, CTX_R14);
+
+		if (rcx != 2 ||
+			rax != 2 ||
+			rdi != r14 ||
+			!IsCanonicalUserPointer(rdi) ||
+			!IsCanonicalUserPointer(rbp) ||
+			!IsCanonicalUserPointer(rsp) ||
+			rbp < 0xC70)
+		{
+			return false;
+		}
+
+		// Exact linked-list traversal helper:
+		// mov rcx,[rcx+8]; test rcx,rcx; jne -12; ret
+		byte* code = (byte*)rip;
+		byte[] signature =
+		{
+			0x48, 0x8B, 0x49, 0x08,
+			0x48, 0x85, 0xC9,
+			0x75, 0xF4,
+			0xC3
+		};
+		for (int i = 0; i < signature.Length; i++)
+		{
+			if (code[i] != signature[i])
+			{
+				return false;
+			}
+		}
+
+		if (!TryReadHostQword(rdi, out ulong head) ||
+			head != 2 ||
+			!TryReadHostQword(rdi + 8, out ulong adjacent) ||
+			adjacent != 0 ||
+			!TryReadHostQword(rdi + 0x10, out ulong payload) ||
+			!IsCanonicalUserPointer(payload))
+		{
+			return false;
+		}
+
+		// Validate the actual primary caller structurally through its return
+		// address. The JE displacement is intentionally ignored; the opcodes,
+		// rbp displacement and r14 dereference are exact.
+		if (!TryReadHostQword(rsp, out ulong returnAddress) ||
+			!IsCanonicalUserPointer(returnAddress) ||
+			!TryReadHostQword(returnAddress, out ulong callerBytes0) ||
+			!TryReadHostQword(returnAddress + 8, out ulong callerBytes1) ||
+			!TryReadHostQword(returnAddress + 16, out ulong callerBytes2) ||
+			callerBytes0 != 0xF390853B48C68949UL ||
+			(callerBytes1 & 0xFFFFFFFFUL) != 0x840FFFFFUL ||
+			(callerBytes2 & 0xFFFFFFFFUL) != 0x20468B41UL)
+		{
+			return false;
+		}
+
+		ulong callerEndSlot = rbp - 0xC70;
+		if (!TryReadHostQword(
+				callerEndSlot,
+				out ulong callerEndSentinel) ||
+			callerEndSentinel != payload)
+		{
+			return false;
+		}
+
+		// Same caller contract already proven by V2.11: the end iterator is
+		// the canonical payload pointer, not null. Resume after the faulting
+		// mov rcx,[rcx+8], clear RCX so the helper's test/jne/ret exits, and
+		// return payload in RAX. The guest caller then takes its own equality
+		// branch and remains in control.
+		WriteCtxU64(ctx, CTX_RAX, payload);
+		WriteCtxU64(ctx, CTX_RCX, 0);
+		WriteCtxU64(ctx, CTX_RIP, rip + 4);
+
+		int recovery = Interlocked.Increment(
+			ref _demonBpeHead2SentinelRecoveriesV74067218);
+		if (recovery <= 32 || (recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[V74.0.67.2.18][BPE_HEAD2_SENTINEL_RECOVERY] " +
+				$"count={recovery} worker='{activeThread.Name}' " +
+				$"target=0xA variant=primary-r14 " +
+				$"last_import={activeThread.LastImportNid} " +
+				$"head=0x{head:X} adjacent=0x{adjacent:X} " +
+				$"caller_end_matches_payload=1 " +
+				$"payload=0x{payload:X16} " +
+				$"-> rax=payload rcx=0 next=0x{rip + 4:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
+	// V74.0.67.2.4.1 BPE low-sentinel linked-list recovery.
+	// Exact captured case only: read AV target 0x9, RCX=RAX=1,
+	// BPE JobWorkerThread, exact traversal instruction and container shape.
+	private unsafe static bool TryRecoverDemonBpeLowSentinelListFaultV74067241(
+		EXCEPTION_RECORD* er,
+		void* ctx,
+		ulong rip)
+	{
+		if (string.Equals(
+				Environment.GetEnvironmentVariable(
+					"SHARPEMU_DISABLE_DEMON_BPE_LOW_SENTINEL_RECOVERY"),
+				"1",
+				StringComparison.Ordinal) ||
+			er == null ||
+			ctx == null ||
+			er->NumberParameters < 2 ||
+			er->ExceptionInformation[0] != 0 ||
+			er->ExceptionInformation[1] != 0x9 ||
+			rip < 0x10013)
+		{
+			return false;
+		}
+
+		GuestThreadState? activeThread = _activeGuestThreadState;
+		if (activeThread is null ||
+			!activeThread.Name.StartsWith(
+				"BPE JobWorkerThread",
+				StringComparison.Ordinal))
+		{
+			return false;
+		}
+
+		// V74.0.67.2.12 BPE secondary-caller sentinel recovery.
+		string? lastImportNid =
+			Volatile.Read(ref activeThread.LastImportNid);
+		bool primaryImport = string.Equals(
+			lastImportNid,
+			"tcVi5SivF7Q",
+			StringComparison.Ordinal);
+		bool secondaryImport = string.Equals(
+			lastImportNid,
+			"GuchCTefuZw",
+			StringComparison.Ordinal);
+
+		if (!primaryImport && !secondaryImport)
+		{
+			return false;
+		}
+
+		ulong rcx = ReadCtxU64(ctx, CTX_RCX);
+		ulong rax = ReadCtxU64(ctx, CTX_RAX);
+		ulong rdi = ReadCtxU64(ctx, CTX_RDI);
+		ulong r13 = ReadCtxU64(ctx, CTX_R13);
+		ulong r14 = ReadCtxU64(ctx, CTX_R14);
+		ulong r15 = ReadCtxU64(ctx, CTX_R15);
+		ulong rsp = ReadCtxU64(ctx, CTX_RSP);
+
+		if (rcx != 1 ||
+			rax != 1 ||
+			!IsCanonicalUserPointer(rdi))
+		{
+			return false;
+		}
+
+		bool primaryCaller = primaryImport && rdi == r14;
+		bool secondaryCaller = secondaryImport && rdi == r13;
+		if (!primaryCaller && !secondaryCaller)
+		{
+			return false;
+		}
+
+		byte* code = (byte*)rip;
+		byte[] signature =
+		{
+			0x48, 0x8B, 0x49, 0x08,
+			0x48, 0x85, 0xC9,
+			0x75, 0xF4,
+			0xC3
+		};
+		for (int i = 0; i < signature.Length; i++)
+		{
+			if (code[i] != signature[i])
+			{
+				return false;
+			}
+		}
+
+		if (!TryReadHostQword(rdi, out ulong head) ||
+			head != 1 ||
+			!TryReadHostQword(rdi + 8, out ulong adjacent) ||
+			adjacent != 0 ||
+			!TryReadHostQword(rdi + 0x10, out ulong payload) ||
+			!IsCanonicalUserPointer(payload))
+		{
+			return false;
+		}
+
+		string callerVariant = "primary-r14";
+
+		if (secondaryCaller)
+		{
+			// Exact observed post-call shape:
+			// mov r13,rax; cmp rax,r15; je <rel8>; mov eax,[r13+0x20].
+			// Validate it through the guest return address, without embedding
+			// an absolute RIP/caller address.
+			if (r15 != payload ||
+				!TryReadHostQword(rsp, out ulong returnAddress) ||
+				!IsCanonicalUserPointer(returnAddress) ||
+				!TryReadHostQword(returnAddress, out ulong callerBytes0) ||
+				!TryReadHostQword(returnAddress + 8, out ulong callerBytes1) ||
+				callerBytes0 != 0x8374F8394CC58949UL ||
+				(callerBytes1 & 0xFFFFFFFFUL) != 0x20458B41UL)
+			{
+				return false;
+			}
+
+			callerVariant = "secondary-r13-r15";
+		}
+
+		// V74.0.67.2.11 BPE end-sentinel return repair.
+		//
+		// The low-sentinel traversal is an empty-list/end-iterator case, but
+		// the caller does not use null as its end value. Runtime evidence
+		// shows the caller compares the returned RAX against the same payload
+		// pointer stored in this container. Returning zero made the caller
+		// execute mov eax,[r14+0x20] with r14=0 and caused AV target 0x20.
+		//
+		// Return the container's canonical payload/end-sentinel pointer, clear
+		// RCX so the guest executes test/jne/ret naturally, and keep the guest
+		// in control of the caller's own equality branch.
+		WriteCtxU64(ctx, CTX_RAX, payload);
+		WriteCtxU64(ctx, CTX_RCX, 0);
+		WriteCtxU64(ctx, CTX_RIP, rip + 4);
+
+		int recovery = Interlocked.Increment(
+			ref _demonBpeLowSentinelRecoveriesV74067241);
+		if (recovery <= 16 || (recovery & (recovery - 1)) == 0)
+		{
+			Console.Error.WriteLine(
+				$"[V74.0.67.2.4.1][BPE_LOW_SENTINEL_RECOVERY] " +
+				$"count={recovery} worker='{activeThread.Name}' " +
+				$"rip=0x{rip:X16} target=0x9 " +
+				$"variant={callerVariant} last_import={lastImportNid} " +
+				$"head=0x{head:X} adjacent=0x{adjacent:X} " +
+				$"payload=0x{payload:X16} -> rax=payload rcx=0 next=0x{rip + 4:X16}");
+			Console.Error.Flush();
+		}
+
+		return true;
+	}
 	// SHARPEMU_V35_1_DEMON_BAD_CHILD_FLAG_RECOVERY
 	private unsafe static bool TryRecoverDemonBadChildFlagFault(
 		EXCEPTION_RECORD* er,
@@ -1407,27 +2078,79 @@ public sealed partial class DirectExecutionBackend
 		}
 	}
 
-	private static bool TryReadHostQword(ulong address, out ulong value)
+	private unsafe static bool TryReadHostQword(ulong address, out ulong value)
 	{
-		if (!OperatingSystem.IsWindows())
-		{
-			// A stray read inside the signal handler would raise a nested
-			// SIGSEGV and kill the process before diagnostics finish, so
-			// probe the region table instead of relying on try/catch.
-			return TryReadStackU64(address, out value);
-		}
+        // SHARPEMU_V74_0_88_6_2_VEH_SAFE_HOST_QWORD
+        // This helper is called from the Windows VEH diagnostic/recovery path.
+        // Never dereference a host pointer until the complete qword lies inside
+        // a committed, readable, non-guarded region.  A managed
+        // AccessViolationException raised inside VEH is process-fatal and
+        // prevents the emulator from reporting/recovering the original guest
+        // exception.
+        value = 0;
 
-		value = 0;
-		try
-		{
-			value = (ulong)Marshal.ReadInt64((nint)address);
-			return true;
-		}
-		catch
-		{
-			return false;
-		}
-	}
+        if (address == 0 || address > (ulong)nint.MaxValue)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.88.6.2][VEH_SAFE_READ_REJECT] addr=0x{address:X16} reason=range");
+            return false;
+        }
+
+        if (VirtualQuery(
+                (void*)address,
+                out var memoryInfoV740886,
+                (nuint)sizeof(MEMORY_BASIC_INFORMATION64)) == 0 ||
+            memoryInfoV740886.RegionSize < sizeof(ulong))
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.88.6.2][VEH_SAFE_READ_REJECT] addr=0x{address:X16} reason=query");
+            return false;
+        }
+
+        const uint MemCommitV740886 = 0x00001000;
+        const uint PageNoAccessV740886 = 0x00000001;
+        const uint PageGuardV740886 = 0x00000100;
+
+        var baseProtectV740886 = memoryInfoV740886.Protect & 0x000000FFu;
+        var readableProtectV740886 =
+            baseProtectV740886 == 0x00000002u || // PAGE_READONLY
+            baseProtectV740886 == 0x00000004u || // PAGE_READWRITE
+            baseProtectV740886 == 0x00000008u || // PAGE_WRITECOPY
+            baseProtectV740886 == 0x00000020u || // PAGE_EXECUTE_READ
+            baseProtectV740886 == 0x00000040u || // PAGE_EXECUTE_READWRITE
+            baseProtectV740886 == 0x00000080u;   // PAGE_EXECUTE_WRITECOPY
+
+        if (memoryInfoV740886.State != MemCommitV740886 ||
+            memoryInfoV740886.Protect == 0 ||
+            (memoryInfoV740886.Protect &
+                (PageNoAccessV740886 | PageGuardV740886)) != 0 ||
+            !readableProtectV740886)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.88.6.2][VEH_SAFE_READ_REJECT] addr=0x{address:X16} " +
+                $"reason=protect state=0x{memoryInfoV740886.State:X8} " +
+                $"protect=0x{memoryInfoV740886.Protect:X8}");
+            return false;
+        }
+
+        var regionStartV740886 = memoryInfoV740886.BaseAddress;
+        var regionEndV740886 =
+            regionStartV740886 > ulong.MaxValue - memoryInfoV740886.RegionSize
+                ? ulong.MaxValue
+                : regionStartV740886 + memoryInfoV740886.RegionSize;
+
+        if (address < regionStartV740886 ||
+            regionEndV740886 < sizeof(ulong) ||
+            address > regionEndV740886 - sizeof(ulong))
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.88.6.2][VEH_SAFE_READ_REJECT] addr=0x{address:X16} reason=boundary");
+            return false;
+        }
+
+        // The page is committed/readable and the whole qword fits in it.
+        value = unchecked((ulong)Marshal.ReadInt64((nint)address));
+        return true;}
 
 	private unsafe static bool TryReadHostBytes(ulong address, byte[] buffer)
 	{
@@ -1627,6 +2350,11 @@ public sealed partial class DirectExecutionBackend
 			}
 
 			TryCommitRange(pageBase + 4096, 4096uL, commitProtect);
+			RescanTlsPatternsIfExecutable(
+				committedBase,
+				committedSize,
+				commitProtect,
+				traceIndex);
 			if (traceLazyCommit)
 			{
 				Console.Error.WriteLine($"[LOADER][TRACE] lazy-reserve-commit#{traceIndex}: addr=0x{committedBase:X16} size=0x{committedSize:X16} access={accessType} protect=0x{commitProtect:X8}");
@@ -1686,6 +2414,11 @@ public sealed partial class DirectExecutionBackend
 		}
 
 		TryCommitRange(pageBase + 4096, 4096uL, commitProtect);
+		RescanTlsPatternsIfExecutable(
+			committedBase,
+			committedSize,
+			commitProtect,
+			traceIndex);
 		if (traceLazyCommit)
 		{
 			Console.Error.WriteLine($"[LOADER][TRACE] lazy-commit#{traceIndex}: addr=0x{committedBase:X16} size=0x{committedSize:X16} access={accessType} protect=0x{commitProtect:X8}");
@@ -1784,6 +2517,86 @@ public sealed partial class DirectExecutionBackend
 				8 => access is pageExecute or pageExecuteRead or pageExecuteReadWrite or pageExecuteWriteCopy,
 				_ => false
 			};
+		}
+	}
+
+	/// <summary>
+	/// Re-runs the already validated native TLS patcher on code that becomes
+	/// executable only after the initial module scan. The initial V74.1.x scan
+	/// covers the canonical Gen5 image window, but uncommitted pages cannot be
+	/// byte-scanned until the guest faults them in.
+	/// </summary>
+	private unsafe void RescanTlsPatternsIfExecutable(
+		ulong committedBase,
+		ulong committedSize,
+		uint commitProtect,
+		int traceIndex)
+	{
+		const uint executableProtectionMask =
+			PAGE_EXECUTE |
+			PAGE_EXECUTE_READ |
+			PAGE_EXECUTE_READWRITE |
+			PAGE_EXECUTE_WRITECOPY;
+
+		if ((commitProtect & executableProtectionMask) == 0 ||
+			committedSize == 0)
+		{
+			return;
+		}
+
+		var rescanIndex = Interlocked.Increment(
+			ref _lazyExecutableTlsRescanCount);
+
+		// TryHandleLazyCommittedPage also attempts to commit the following 4 KiB
+		// page. Widen the range by one page like upstream #824; PatchTlsRange()
+		// independently VirtualQuery-checks every region, so a failed adjacent
+		// commit is safely skipped rather than read.
+		ulong rescanSize =
+			committedSize > ulong.MaxValue - 4096UL
+				? ulong.MaxValue
+				: committedSize + 4096UL;
+		ulong rangeEnd =
+			rescanSize == ulong.MaxValue ||
+			committedBase > ulong.MaxValue - rescanSize
+				? ulong.MaxValue
+				: committedBase + rescanSize;
+
+		int tlsLoadPatchCount = 0;
+		int tlsStorePatchCount = 0;
+		int stackCanaryPatchCount = 0;
+		int sse4aPatchCount = 0;
+
+		PatchTlsRange(
+			committedBase,
+			rangeEnd,
+			ref tlsLoadPatchCount,
+			ref tlsStorePatchCount,
+			ref stackCanaryPatchCount,
+			ref sse4aPatchCount);
+
+		int totalPatched =
+			tlsLoadPatchCount +
+			tlsStorePatchCount +
+			stackCanaryPatchCount +
+			sse4aPatchCount;
+
+		if (totalPatched > 0)
+		{
+			Interlocked.Add(
+				ref _lazyExecutableTlsRescanPatchedCount,
+				totalPatched);
+		}
+
+		if (totalPatched > 0 ||
+			ShouldTraceLazyCommit(traceIndex))
+		{
+			Console.Error.WriteLine(
+				$"[LOADER][INFO] lazy-exec-rescan#{rescanIndex}: " +
+				$"range=0x{committedBase:X16}-0x{rangeEnd:X16} " +
+				$"tls_loads={tlsLoadPatchCount} tls_stores={tlsStorePatchCount} " +
+				$"canary={stackCanaryPatchCount} sse4a={sse4aPatchCount} " +
+				$"total_patched={totalPatched} " +
+				$"cumulative={Volatile.Read(ref _lazyExecutableTlsRescanPatchedCount)}");
 		}
 	}
 

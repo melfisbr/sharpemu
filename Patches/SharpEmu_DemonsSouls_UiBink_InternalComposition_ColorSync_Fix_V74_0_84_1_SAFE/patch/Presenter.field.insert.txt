@@ -1,0 +1,3 @@
+
+        // SHARPEMU_V74_0_84_1_UI_BINK_COLOR_CONTRACT
+        private long _v740841UiBinkChromaTraceCount;

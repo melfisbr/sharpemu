@@ -49,6 +49,29 @@ public static class PlayGoExports
     private static int _unknownChunkDiagnostics;
     private static int _locusTraceDiagnostics;
 
+    // SHARPEMU_V74_0_56_31_DEMONS_PLAYGO_LEVEL_STREAMING
+    // V56.30 runtime evidence:
+    // - parsed package chunk set: 0..23
+    // - PPSA01341 then queries chunks 24..31 via scePlayGoGetLocus
+    // - current implementation answers BAD_CHUNK_ID for each one
+    //
+    // A full local game dump has no background downloader; those title-side
+    // chunks must be reported as locally present or the BPE level streamer can
+    // remain in its loading path after attract_movie.
+    //
+    // Keep this title-scoped and opt-in so games that intentionally enumerate
+    // until BAD_CHUNK_ID retain the generic firmware-compatible behavior.
+    private static readonly bool _demonsPlayGoChunks24To31V7405631 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DEMONS_PLAYGO_CHUNKS_24_31"),
+            "1",
+            StringComparison.Ordinal);
+
+    private const ushort DemonsPlayGoCompatFirstChunkV7405631 = 24;
+    private const ushort DemonsPlayGoCompatLastChunkV7405631 = 31;
+    private static long _v7405631SyntheticChunkCount;
+
     [SysAbiExport(
         Nid = "ts6GlZOKRrE",
         ExportName = "scePlayGoInitialize",
@@ -431,6 +454,23 @@ public static class PlayGoExports
             }
 
             loci[i] = PlayGoLocusLocalFast;
+
+            if (_demonsPlayGoChunks24To31V7405631 &&
+                chunkId >= DemonsPlayGoCompatFirstChunkV7405631 &&
+                chunkId <= DemonsPlayGoCompatLastChunkV7405631)
+            {
+                var servedV7405631 = Interlocked.Increment(
+                    ref _v7405631SyntheticChunkCount);
+
+                if (servedV7405631 <= 64 ||
+                    (servedV7405631 & (servedV7405631 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.56.31][PLAYGO] " +
+                        $"action=local-fast chunk={chunkId} " +
+                        $"count={servedV7405631}");
+                }
+            }
         }
 
         TracePlayGoLocus(ctx, numberOfEntries, chunkIds, outLoci);
@@ -729,6 +769,54 @@ public static class PlayGoExports
         foreach (var scenarioChunkId in LoadScenarioChunkIds(scenarioJson))
         {
             mergedChunkIds.Add(scenarioChunkId);
+        }
+
+        // SHARPEMU_V74_0_56_31_DEMONS_PLAYGO_LEVEL_STREAMING
+        // The title queries 24..31 even though the accumulated metadata
+        // providers currently yield 0..23. For a complete local PPSA01341
+        // dump, expose precisely those eight additional ids as installed.
+        // Chunk 32 remains unknown, preserving an enumeration terminator.
+        var normalizedApp0V7405631 =
+            app0Root.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+
+        var isDemonsSoulsV7405631 =
+            normalizedApp0V7405631.EndsWith(
+                "PPSA01341",
+                StringComparison.OrdinalIgnoreCase);
+
+        if (_demonsPlayGoChunks24To31V7405631 &&
+            isDemonsSoulsV7405631)
+        {
+            var beforeCountV7405631 = mergedChunkIds.Count;
+
+            for (ushort chunkIdV7405631 =
+                     DemonsPlayGoCompatFirstChunkV7405631;
+                 chunkIdV7405631 <=
+                     DemonsPlayGoCompatLastChunkV7405631;
+                 chunkIdV7405631++)
+            {
+                mergedChunkIds.Add(chunkIdV7405631);
+            }
+
+            var addedV7405631 =
+                mergedChunkIds.Count - beforeCountV7405631;
+
+            if (addedV7405631 != 0)
+            {
+                Interlocked.Add(
+                    ref _v7405631SyntheticChunkCount,
+                    addedV7405631);
+            }
+
+            Console.Error.WriteLine(
+                $"[V74.0.56.31][PLAYGO] " +
+                $"action=full-install-expand " +
+                $"added={addedV7405631} " +
+                $"range={DemonsPlayGoCompatFirstChunkV7405631}-" +
+                $"{DemonsPlayGoCompatLastChunkV7405631} " +
+                $"app0='{normalizedApp0V7405631}'");
         }
 
         var chunkIds = mergedChunkIds.ToArray();

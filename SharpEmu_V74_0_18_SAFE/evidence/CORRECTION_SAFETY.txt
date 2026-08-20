@@ -1,8 +1,0 @@
-V74.0.18 safety constraints
-- Native memcpy is opt-in via SHARPEMU_NATIVE_MEMCPY_INTRINSIC=1.
-- IsHlePreferredNid itself is not edited; default global behavior is preserved.
-- Existing Q3VBxCXhUHs intrinsic bytecode is reused rather than replaced.
-- WAIT_REG_MEM values and producer history are not fabricated.
-- V74.0.17 pthread gate remains installed and is explicitly enabled in RUN_4.
-- Build failure restores DirectExecutionBackend.cs from backup.
-- PRECHECK executes the exact structural transformer in memory before APPLY.

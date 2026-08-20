@@ -1,0 +1,23 @@
+SharpEmu V74.0.56.35 DCC FAST-CLEAR MATERIALIZATION RESULT
+wall_seconds=325.347
+exit_code=
+dcc_fastclear_materialize_counter=103
+dcc_fastclear_target_counter=103
+dcc_fastclear_45d55_hits=103
+dcc_fastclear_46089_hits=0
+dcc_fastclear_45bc_hits=0
+dcc_deferred_reference_counter=1024
+dcc_deferred_45d55_hits=29
+dcc_deferred_46089_hits=31
+dcc_metadata_alias_hit_counter=0
+dcc_metadata_alias_45d55_hit_logs=0
+dcc_metadata_alias_46089_hit_logs=0
+dcc_metadata_alias_miss_counter=1024
+direct_zero_noop_hits=208
+indirect_zero_noop_hits=48
+timeline_completed=33560
+timeline_submitted=33560
+native_exception_hits=0
+device_lost_hits=0
+render_fps_last=0.9
+render_fps_peak=1.3

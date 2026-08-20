@@ -126,6 +126,8 @@ public sealed partial class DirectExecutionBackend
 	// SHARPEMU_V74_0_1_ROOT_AND_TRANSIENT_NATIVE_EXECUTION
 	private int _v740RootNativeTraceCount;
 	private int _v740TransientNativeTraceCount;
+	// SHARPEMU_EXTERNAL_CALLBACK_OWNER_FIELD_V1_8_23
+	private int _v1823ExternalCallbackOwnerRecoveryTraceCount;
 	private readonly SemaphoreSlim _nativeWorkerRunLimiter = new(NativeWorkerMaxConcurrent);
 	private readonly SemaphoreSlim _rendererResourceNativeWorkerRunLimiter =
 		new(RendererResourceNativeWorkerMaxConcurrent);
@@ -328,6 +330,25 @@ public sealed partial class DirectExecutionBackend
 		if (guestThreadHandle == 0 && state is { } activeState)
 		{
 			guestThreadHandle = activeState.ThreadHandle;
+		}
+
+		// SHARPEMU_EXTERNAL_CALLBACK_OWNER_V1_8_23
+		// Root/external guest execution already publishes its synthetic pthread
+		// identity through RegisterGuestThreadContext. Reuse that identity for a
+		// nested guest callback so repeated AGC allocator/refill callbacks stay on
+		// one persistent raw NativeGuestExecutor instead of creating and disposing
+		// a transient OS thread for every callback.
+		if (guestThreadHandle == 0 && _currentExternalGuestThreadHandle != 0)
+		{
+			guestThreadHandle = _currentExternalGuestThreadHandle;
+			var recovered = Interlocked.Increment(
+				ref _v1823ExternalCallbackOwnerRecoveryTraceCount);
+			if (recovered <= 64 || recovered % 256 == 0)
+			{
+				Console.Error.WriteLine(
+					$"[DBFZ-CB-1823] external_owner_recovered n={recovered} " +
+					$"guest=0x{guestThreadHandle:X16}");
+			}
 		}
 
 		if (guestThreadHandle == 0)

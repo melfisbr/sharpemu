@@ -1,0 +1,23 @@
+{
+  "Schema": "SharpEmu.RuntimeDebug.V1.3.1",
+  "TitleKey": "PPSA01341",
+  "StartedUtc": "2026-08-17T15:50:00.1076168+00:00",
+  "EndedUtc": "2026-08-17T15:51:42.2226021+00:00",
+  "DurationSeconds": 102.1149853,
+  "StopReason": "user",
+  "SampleCount": 102,
+  "AverageCpuPercent": 0.4720746417701002,
+  "PeakCpuPercent": 3.371925928220449,
+  "PeakWorkingSetMb": 363.125,
+  "PeakPrivateMb": 839.12890625,
+  "PeakManagedMb": 122.41741180419922,
+  "MaxThreads": 111,
+  "MaxHandles": 1225,
+  "ExceptionCount": 0,
+  "TouchedFileCount": 3,
+  "EvidenceFileCount": 6,
+  "TraceCoverageCategoryCount": 7,
+  "EbootAuditFound": true,
+  "EbootFormat": "SCE_SELF_PS5",
+  "BuildFingerprintSha256": "DDFAD9D15DA326411170933420079BE9AC79B2ED5BD70B41AA9923C3C8CF3341"
+}

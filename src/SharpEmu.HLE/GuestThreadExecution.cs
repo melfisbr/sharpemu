@@ -41,6 +41,8 @@ public interface IGuestThreadScheduler
 {
     bool SupportsGuestContextTransfer { get; }
 
+    bool IsManagedGuestThread(ulong guestThreadHandle);
+
     /// <summary>
     /// Associates a pthread identity created on the primary guest executor
     /// with its live CPU context. Primary execution does not pass through
@@ -248,6 +250,20 @@ public static class GuestThreadExecution
 
     public static ulong CurrentGuestThreadHandle => _currentGuestThreadHandle;
 
+    // SHARPEMU_DBFZ_COOPERATIVE_WAITER_LANE_RELEASE_V1_8_37
+    // Only scheduler-owned pthreads can safely yield an HLE continuation. External/root
+    // guest execution is not present in the scheduler's blocked-thread table and must
+    // retain the host-wait fallback instead of losing its continuation.
+    public static bool CanCooperativelyBlockCurrentThread()
+    {
+        var handle = _currentGuestThreadHandle;
+        var scheduler = Scheduler;
+        return handle != 0 &&
+            scheduler is not null &&
+            scheduler.SupportsGuestContextTransfer &&
+            scheduler.IsManagedGuestThread(handle);
+    }
+
     public static ulong CurrentFiberAddress => _currentFiberAddress;
 
     public static ulong EnterGuestThread(ulong threadHandle)
@@ -313,7 +329,7 @@ public static class GuestThreadExecution
         IGuestThreadBlockWaiter? waiter = null,
         long blockDeadlineTimestamp = 0)
     {
-        if (!IsGuestThread)
+        if (!CanCooperativelyBlockCurrentThread())
         {
             return false;
         }

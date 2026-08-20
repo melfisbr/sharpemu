@@ -1,0 +1,3434 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO.Compression;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace SharpEmu.GUI;
+
+internal static class RuntimeDebugSession
+{
+    private static readonly object Gate = new();
+    private static CancellationTokenSource? _cts;
+    private static Task? _sampler;
+    private static string? _repoRoot;
+    private static string? _sessionDir;
+    private static string? _titleKey;
+    private static DateTimeOffset _startedUtc;
+    private static DateTimeOffset _startedLocal;
+    private static TimeSpan _previousCpu;
+    private static DateTimeOffset _previousSampleUtc;
+    private static int _exceptionCount;
+    private static string? _buildFingerprint;
+    private static bool _eventsSubscribed;
+    private static readonly List<Sample> Samples = new();
+
+    private static readonly Dictionary<string, string?> TraceEnvironmentPrevious =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, string> ActiveTraceProfile =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            // Guest file I/O and content/resource routing.
+            ["SHARPEMU_LOG_IO"] = "1",
+            ["SHARPEMU_LOG_IO_FILTER"] = "ui",
+            ["SHARPEMU_LOG_OPEN"] = "0",
+            ["SHARPEMU_LOG_STDIO"] = "0",
+            ["SHARPEMU_CONTENT_ROUTE_TRACE"] = "1",
+
+            // Focused producer/UI provenance found relevant by V1.3.2.
+            ["SHARPEMU_TRACE_45D_PRODUCER"] = "1",
+            ["SHARPEMU_TRACE_SCANOUT_LINEAGE"] = "1",
+            ["SHARPEMU_TRACE_DCC_ALIAS"] = "1",
+            ["SHARPEMU_TRACE_KRZ_CALLSITE"] = "1",
+            ["SHARPEMU_TRACE_KRZ_EBOOT_FIX"] = "1",
+            ["SHARPEMU_TRACE_ACM_COMMANDS"] = "1",
+
+            // Audio/media. These are existing SharpEmu trace switches.
+            ["SHARPEMU_LOG_AJM"] = "1",
+            ["SHARPEMU_LOG_AJM_SUMMARY"] = "1",
+            ["SHARPEMU_LOG_AUDIO_OUT"] = "1",
+            ["SHARPEMU_LOG_AUDIO_OUT2"] = "1",
+            ["SHARPEMU_LOG_ACM"] = "1",
+            ["SHARPEMU_LOG_NGS2"] = "1",
+            ["SHARPEMU_LOG_MOVIE_SYNC"] = "1",
+            ["SHARPEMU_LOG_BINK2"] = "1",
+            ["SHARPEMU_TRACE_MOVIE_IO"] = "1",
+
+            // Low-volume GPU/shader timing and queue/presentation evidence.
+            // Do NOT enable SHARPEMU_LOG_AGC or SHARPEMU_LOG_AGC_SHADER here:
+            // the current source explicitly documents those paths as hot and
+            // capable of producing enormous logs.
+            ["SHARPEMU_TRACE_SHADER_PIPELINE_TIMING"] = "1",
+            ["SHARPEMU_TRACE_PRESENT_CADENCE"] = "1",
+            ["SHARPEMU_TRACE_SLOW_RENDER_WORK"] = "1",
+            ["SHARPEMU_TRACE_RESOURCE_DEPENDENCIES"] = "1",
+            ["SHARPEMU_LOG_GPU_DETILE"] = "1",
+            ["SHARPEMU_TRACE_DEMONS_TEXTURE_CONTRACT"] = "1",
+
+            // Demon's Souls EBOOT-derived UI/script reachability probes.
+            ["SHARPEMU_TRACE_DEMONS_UI_METHODS"] = "1",
+            ["SHARPEMU_TRACE_DEMONS_SCRIPT_LOADER"] = "1",
+
+            // Loader/runtime resolution without full import spam.
+            ["SHARPEMU_LOG_DLSYM"] = "1",
+            ["SHARPEMU_LOG_EXPECTED_IMPORT_RESULTS"] = "1",
+            ["SHARPEMU_LOG_BOOTSTRAP"] = "1",
+            ["SHARPEMU_LOG_GUEST_EXCEPTIONS"] = "1",
+
+            // Synchronization primitives with bounded/specific tracing.
+            ["SHARPEMU_LOG_PTHREAD_CONDS"] = "0",
+            ["SHARPEMU_LOG_EVENT_FLAG"] = "0",
+            ["SHARPEMU_LOG_SEMA"] = "0",
+            ["SHARPEMU_LOG_EQUEUE"] = "0"
+        };
+
+    private static TextWriter? _previousConsoleOut;
+    private static TextWriter? _previousConsoleError;
+    private static StreamWriter? _consoleOutCapture;
+    private static StreamWriter? _consoleErrorCapture;
+    private static bool _consoleCaptureEnabled;
+
+    private static readonly object ChildOutputGate = new();
+    private static readonly List<ChildSample> ChildSamples = new();
+    private static int _childProcessId;
+    private static TimeSpan _childPreviousCpu;
+    private static DateTimeOffset _childPreviousSampleUtc;
+    private static bool _childCpuBaselineReady;
+
+    public static bool IsActive
+    {
+        get
+        {
+            lock (Gate)
+            {
+                return _cts is not null;
+            }
+        }
+    }
+
+    public static string Start(object? dataContext)
+    {
+        lock (Gate)
+        {
+            if (_cts is not null)
+            {
+                return _sessionDir ?? string.Empty;
+            }
+
+            _repoRoot = FindRepoRoot();
+            var context = CaptureContext(dataContext);
+            _titleKey = ResolveTitleKey(context);
+            _startedUtc = DateTimeOffset.UtcNow;
+            _startedLocal = DateTimeOffset.Now;
+
+            var historyBucket = IsUnknownTitle(_titleKey) ? "_PENDING" : _titleKey;
+            var historyRoot = Path.Combine(_repoRoot, "RuntimeAuditHistory", historyBucket);
+            Directory.CreateDirectory(historyRoot);
+
+            FinalizeStaleSessions(historyRoot);
+
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+            _sessionDir = Path.Combine(historyRoot, stamp);
+            Directory.CreateDirectory(_sessionDir);
+
+            EnableDeepTraceProfileBestEffort(_sessionDir);
+            StartConsoleCaptureBestEffort(_sessionDir);
+
+            _exceptionCount = 0;
+            Samples.Clear();
+            ChildSamples.Clear();
+            _childProcessId = 0;
+            _childPreviousCpu = TimeSpan.Zero;
+            _childPreviousSampleUtc = DateTimeOffset.MinValue;
+            _childCpuBaselineReady = false;
+
+            File.WriteAllText(
+                Path.Combine(_sessionDir, "emulator_child_output.log"),
+                string.Empty,
+                new UTF8Encoding(false));
+
+            File.WriteAllText(
+                Path.Combine(_sessionDir, "child_process_samples.csv"),
+                "timestamp_utc,pid,cpu_percent,working_set_mb,private_mb,managed_mb,threads,handles,total_cpu_ms" +
+                Environment.NewLine,
+                new UTF8Encoding(false));
+
+            WriteJson(Path.Combine(_sessionDir, "session_start.json"), new
+            {
+                schema = "SharpEmu.RuntimeDebug.V1.3.3",
+                startedUtc = _startedUtc,
+                startedLocal = _startedLocal,
+                processId = Environment.ProcessId,
+                processName = Process.GetCurrentProcess().ProcessName,
+                commandLine = Environment.CommandLine,
+                currentDirectory = Environment.CurrentDirectory,
+                appBaseDirectory = AppContext.BaseDirectory,
+                framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                os = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+                architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
+                processorCount = Environment.ProcessorCount,
+                titleKey = _titleKey,
+                selectedContext = context
+            });
+
+            CaptureEnvironment(_sessionDir);
+            _buildFingerprint = CaptureBuildFingerprint(_repoRoot, _sessionDir);
+
+            File.WriteAllText(
+                Path.Combine(_sessionDir, "process_samples.csv"),
+                "timestamp_utc,cpu_percent,working_set_mb,private_mb,managed_mb,threads,handles,total_cpu_ms" + Environment.NewLine,
+                new UTF8Encoding(false));
+
+            var process = Process.GetCurrentProcess();
+            process.Refresh();
+            _previousCpu = process.TotalProcessorTime;
+            _previousSampleUtc = DateTimeOffset.UtcNow;
+
+            _cts = new CancellationTokenSource();
+            SubscribeEventsOnce();
+            _sampler = Task.Run(() => SampleLoopAsync(_cts.Token));
+
+            WriteCurrentMarker(_repoRoot, _sessionDir, _titleKey);
+            return _sessionDir;
+        }
+    }
+
+    public static string Stop(string reason)
+    {
+        CancellationTokenSource? cts;
+        Task? sampler;
+        string? sessionDir;
+
+        lock (Gate)
+        {
+            if (_cts is null)
+            {
+                return string.Empty;
+            }
+
+            cts = _cts;
+            sampler = _sampler;
+            sessionDir = _sessionDir;
+            _cts = null;
+            _sampler = null;
+        }
+
+        try
+        {
+            cts.Cancel();
+            try
+            {
+                sampler?.Wait(1500);
+            }
+            catch
+            {
+            }
+
+            StopConsoleCaptureBestEffort();
+
+            if (!string.IsNullOrWhiteSpace(sessionDir))
+            {
+                sessionDir = FinalizeSession(sessionDir, reason);
+                lock (Gate)
+                {
+                    _sessionDir = sessionDir;
+                }
+            }
+        }
+        finally
+        {
+            StopConsoleCaptureBestEffort();
+            DisableDeepTraceProfileBestEffort();
+            cts.Dispose();
+            if (!string.IsNullOrWhiteSpace(_repoRoot))
+            {
+                DeleteCurrentMarker(_repoRoot);
+            }
+        }
+
+        return sessionDir ?? string.Empty;
+    }
+
+    public static void RecordChildProcessOutput(string line, bool isError)
+    {
+        if (string.IsNullOrEmpty(line))
+        {
+            return;
+        }
+
+        string? dir;
+        lock (Gate)
+        {
+            dir = _sessionDir;
+        }
+
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            return;
+        }
+
+        lock (ChildOutputGate)
+        {
+            try
+            {
+                File.AppendAllText(
+                    Path.Combine(dir, "emulator_child_output.log"),
+                    DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) +
+                    (isError ? " [stderr] " : " [stdout] ") +
+                    line + Environment.NewLine,
+                    new UTF8Encoding(false));
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    public static void RecordForwardedConsoleLine(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+        {
+            return;
+        }
+
+        string? dir;
+        lock (Gate)
+        {
+            dir = _sessionDir;
+        }
+
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            return;
+        }
+
+        lock (ChildOutputGate)
+        {
+            try
+            {
+                File.AppendAllText(
+                    Path.Combine(dir, "emulator_child_output.log"),
+                    DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) +
+                    " [backlog] " + line + Environment.NewLine,
+                    new UTF8Encoding(false));
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    public static void RecordFrontendError(Exception ex)
+    {
+        try
+        {
+            var dir = _sessionDir;
+            if (string.IsNullOrWhiteSpace(dir))
+            {
+                var repo = FindRepoRoot();
+                var emergency = Path.Combine(repo, "RuntimeAuditHistory", "_frontend_errors");
+                Directory.CreateDirectory(emergency);
+                File.AppendAllText(
+                    Path.Combine(emergency, "frontend_errors.log"),
+                    DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine +
+                    ex + Environment.NewLine + Environment.NewLine,
+                    new UTF8Encoding(false));
+                return;
+            }
+
+            Interlocked.Increment(ref _exceptionCount);
+            File.AppendAllText(
+                Path.Combine(dir, "exceptions.log"),
+                DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine +
+                ex + Environment.NewLine + Environment.NewLine,
+                new UTF8Encoding(false));
+        }
+        catch
+        {
+        }
+    }
+
+    private static void EnableDeepTraceProfileBestEffort(string sessionDir)
+    {
+        var applied = new List<object>();
+        try
+        {
+            TraceEnvironmentPrevious.Clear();
+            foreach (var pair in ActiveTraceProfile)
+            {
+                var previous = Environment.GetEnvironmentVariable(pair.Key);
+                TraceEnvironmentPrevious[pair.Key] = previous;
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+                applied.Add(new
+                {
+                    name = pair.Key,
+                    value = pair.Value,
+                    previous
+                });
+            }
+
+            WriteJson(Path.Combine(sessionDir, "debug_trace_profile.json"), new
+            {
+                schema = "SharpEmu.RuntimeDebug.TraceProfile.V1",
+                activatedUtc = DateTimeOffset.UtcNow,
+                mustStartBeforeGameLaunch = true,
+                profile = "diagnostic-balanced",
+                intentionallyNotEnabled = new[]
+                {
+                    "SHARPEMU_LOG_AGC",
+                    "SHARPEMU_LOG_AGC_SHADER",
+                    "SHARPEMU_LOG_VK_SHADER",
+                    "SHARPEMU_LOG_ALL_IMPORTS",
+                    "SHARPEMU_LOG_GUEST_THREADS"
+                },
+                reason = "Avoid hot-path trace volume that can materially alter timing while enabling existing targeted subsystem diagnostics.",
+                variables = applied
+            });
+        }
+        catch (Exception ex)
+        {
+            TryAppendDiagnostic(
+                Path.Combine(sessionDir, "trace_profile_errors.log"),
+                "enable",
+                ex);
+        }
+    }
+
+    private static void DisableDeepTraceProfileBestEffort()
+    {
+        try
+        {
+            foreach (var pair in TraceEnvironmentPrevious)
+            {
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+            }
+
+            TraceEnvironmentPrevious.Clear();
+        }
+        catch
+        {
+        }
+    }
+
+    private static void StartConsoleCaptureBestEffort(string sessionDir)
+    {
+        if (_consoleCaptureEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            _previousConsoleOut = Console.Out;
+            _previousConsoleError = Console.Error;
+
+            _consoleOutCapture = new StreamWriter(
+                new FileStream(
+                    Path.Combine(sessionDir, "emulator_console_out.log"),
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete),
+                new UTF8Encoding(false))
+            {
+                AutoFlush = true
+            };
+
+            _consoleErrorCapture = new StreamWriter(
+                new FileStream(
+                    Path.Combine(sessionDir, "emulator_console_error.log"),
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete),
+                new UTF8Encoding(false))
+            {
+                AutoFlush = true
+            };
+
+            Console.SetOut(new TeeTextWriter(_previousConsoleOut, _consoleOutCapture));
+            Console.SetError(new TeeTextWriter(_previousConsoleError, _consoleErrorCapture));
+            _consoleCaptureEnabled = true;
+        }
+        catch (Exception ex)
+        {
+            TryAppendDiagnostic(
+                Path.Combine(sessionDir, "trace_profile_errors.log"),
+                "console_capture_start",
+                ex);
+            StopConsoleCaptureBestEffort();
+        }
+    }
+
+    private static void StopConsoleCaptureBestEffort()
+    {
+        if (!_consoleCaptureEnabled &&
+            _consoleOutCapture is null &&
+            _consoleErrorCapture is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_previousConsoleOut is not null)
+            {
+                Console.SetOut(_previousConsoleOut);
+            }
+
+            if (_previousConsoleError is not null)
+            {
+                Console.SetError(_previousConsoleError);
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            _consoleOutCapture?.Flush();
+            _consoleErrorCapture?.Flush();
+        }
+        catch
+        {
+        }
+
+        try { _consoleOutCapture?.Dispose(); } catch { }
+        try { _consoleErrorCapture?.Dispose(); } catch { }
+
+        _consoleOutCapture = null;
+        _consoleErrorCapture = null;
+        _previousConsoleOut = null;
+        _previousConsoleError = null;
+        _consoleCaptureEnabled = false;
+    }
+
+    private static void TryAppendDiagnostic(
+        string path,
+        string operation,
+        Exception ex)
+    {
+        try
+        {
+            File.AppendAllText(
+                path,
+                DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) +
+                " operation=" + operation + Environment.NewLine +
+                ex + Environment.NewLine + Environment.NewLine,
+                new UTF8Encoding(false));
+        }
+        catch
+        {
+        }
+    }
+
+    private static void SubscribeEventsOnce()
+    {
+        if (_eventsSubscribed)
+        {
+            return;
+        }
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            try
+            {
+                var ex = args.ExceptionObject as Exception ??
+                         new Exception("UnhandledException object: " + Convert.ToString(args.ExceptionObject, CultureInfo.InvariantCulture));
+                RecordFrontendError(ex);
+                if (IsActive)
+                {
+                    Stop("unhandled_exception");
+                }
+            }
+            catch
+            {
+            }
+        };
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try
+            {
+                if (IsActive)
+                {
+                    Stop("process_exit");
+                }
+            }
+            catch
+            {
+            }
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            try
+            {
+                RecordFrontendError(args.Exception);
+            }
+            catch
+            {
+            }
+        };
+
+        _eventsSubscribed = true;
+    }
+
+    private static async Task SampleLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            try
+            {
+                CaptureSample();
+            }
+            catch (Exception ex)
+            {
+                RecordFrontendError(ex);
+            }
+        }
+    }
+
+    private static void CaptureSample()
+    {
+        string? sessionDir;
+        lock (Gate)
+        {
+            sessionDir = _sessionDir;
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionDir))
+        {
+            return;
+        }
+
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+
+        var now = DateTimeOffset.UtcNow;
+        var totalCpu = process.TotalProcessorTime;
+        var wallMs = Math.Max(1.0, (now - _previousSampleUtc).TotalMilliseconds);
+        var cpuMs = Math.Max(0.0, (totalCpu - _previousCpu).TotalMilliseconds);
+        var cpuPercent = cpuMs / wallMs / Math.Max(1, Environment.ProcessorCount) * 100.0;
+
+        _previousCpu = totalCpu;
+        _previousSampleUtc = now;
+
+        var sample = new Sample
+        {
+            TimestampUtc = now,
+            CpuPercent = cpuPercent,
+            WorkingSetMb = process.WorkingSet64 / 1048576.0,
+            PrivateMb = process.PrivateMemorySize64 / 1048576.0,
+            ManagedMb = GC.GetTotalMemory(false) / 1048576.0,
+            Threads = SafeThreadCount(process),
+            Handles = SafeHandleCount(process),
+            TotalCpuMs = totalCpu.TotalMilliseconds
+        };
+
+        lock (Gate)
+        {
+            Samples.Add(sample);
+        }
+
+        var line = string.Join(",",
+            sample.TimestampUtc.ToString("O", CultureInfo.InvariantCulture),
+            sample.CpuPercent.ToString("F3", CultureInfo.InvariantCulture),
+            sample.WorkingSetMb.ToString("F3", CultureInfo.InvariantCulture),
+            sample.PrivateMb.ToString("F3", CultureInfo.InvariantCulture),
+            sample.ManagedMb.ToString("F3", CultureInfo.InvariantCulture),
+            sample.Threads.ToString(CultureInfo.InvariantCulture),
+            sample.Handles.ToString(CultureInfo.InvariantCulture),
+            sample.TotalCpuMs.ToString("F3", CultureInfo.InvariantCulture));
+
+        File.AppendAllText(
+            Path.Combine(sessionDir, "process_samples.csv"),
+            line + Environment.NewLine,
+            new UTF8Encoding(false));
+
+        CaptureChildProcessSample(sessionDir, now);
+    }
+
+    private static void CaptureChildProcessSample(
+        string sessionDir,
+        DateTimeOffset now)
+    {
+        Process? child = null;
+        try
+        {
+            child = ResolveChildProcess(now);
+            if (child is null)
+            {
+                return;
+            }
+
+            child.Refresh();
+            var totalCpu = child.TotalProcessorTime;
+            var cpuPercent = 0.0;
+
+            if (_childCpuBaselineReady && child.Id == _childProcessId)
+            {
+                var wallMs = Math.Max(
+                    1.0,
+                    (now - _childPreviousSampleUtc).TotalMilliseconds);
+                var cpuMs = Math.Max(
+                    0.0,
+                    (totalCpu - _childPreviousCpu).TotalMilliseconds);
+                cpuPercent =
+                    cpuMs /
+                    wallMs /
+                    Math.Max(1, Environment.ProcessorCount) *
+                    100.0;
+            }
+
+            _childProcessId = child.Id;
+            _childPreviousCpu = totalCpu;
+            _childPreviousSampleUtc = now;
+            _childCpuBaselineReady = true;
+
+            var sample = new ChildSample
+            {
+                TimestampUtc = now,
+                ProcessId = child.Id,
+                CpuPercent = cpuPercent,
+                WorkingSetMb = child.WorkingSet64 / 1048576.0,
+                PrivateMb = child.PrivateMemorySize64 / 1048576.0,
+                ManagedMb = -1.0,
+                Threads = SafeThreadCount(child),
+                Handles = SafeHandleCount(child),
+                TotalCpuMs = totalCpu.TotalMilliseconds
+            };
+
+            lock (Gate)
+            {
+                ChildSamples.Add(sample);
+            }
+
+            var line = string.Join(",",
+                sample.TimestampUtc.ToString("O", CultureInfo.InvariantCulture),
+                sample.ProcessId.ToString(CultureInfo.InvariantCulture),
+                sample.CpuPercent.ToString("F3", CultureInfo.InvariantCulture),
+                sample.WorkingSetMb.ToString("F3", CultureInfo.InvariantCulture),
+                sample.PrivateMb.ToString("F3", CultureInfo.InvariantCulture),
+                sample.ManagedMb.ToString("F3", CultureInfo.InvariantCulture),
+                sample.Threads.ToString(CultureInfo.InvariantCulture),
+                sample.Handles.ToString(CultureInfo.InvariantCulture),
+                sample.TotalCpuMs.ToString("F3", CultureInfo.InvariantCulture));
+
+            File.AppendAllText(
+                Path.Combine(sessionDir, "child_process_samples.csv"),
+                line + Environment.NewLine,
+                new UTF8Encoding(false));
+        }
+        catch
+        {
+        }
+        finally
+        {
+            child?.Dispose();
+        }
+    }
+
+    private static Process? ResolveChildProcess(DateTimeOffset now)
+    {
+        if (_childProcessId > 0)
+        {
+            try
+            {
+                var known = Process.GetProcessById(_childProcessId);
+                if (!known.HasExited)
+                {
+                    return known;
+                }
+
+                known.Dispose();
+            }
+            catch
+            {
+            }
+        }
+
+        Process? best = null;
+        DateTime bestStartUtc = DateTime.MinValue;
+        var currentPid = Environment.ProcessId;
+        var currentName = Process.GetCurrentProcess().ProcessName;
+        var earliest = _startedUtc.UtcDateTime.AddSeconds(-5);
+        var latest = now.UtcDateTime.AddSeconds(2);
+
+        foreach (var process in Process.GetProcessesByName(currentName))
+        {
+            try
+            {
+                if (process.Id == currentPid || process.HasExited)
+                {
+                    process.Dispose();
+                    continue;
+                }
+
+                var startedUtc = process.StartTime.ToUniversalTime();
+                if (startedUtc < earliest || startedUtc > latest)
+                {
+                    process.Dispose();
+                    continue;
+                }
+
+                if (best is null || startedUtc > bestStartUtc)
+                {
+                    best?.Dispose();
+                    best = process;
+                    bestStartUtc = startedUtc;
+                }
+                else
+                {
+                    process.Dispose();
+                }
+            }
+            catch
+            {
+                process.Dispose();
+            }
+        }
+
+        if (best is not null && best.Id != _childProcessId)
+        {
+            _childProcessId = best.Id;
+            _childCpuBaselineReady = false;
+            try
+            {
+                WriteJson(
+                    Path.Combine(_sessionDir ?? string.Empty, "child_process_identity.json"),
+                    new
+                    {
+                        processId = best.Id,
+                        processName = best.ProcessName,
+                        startTimeUtc = best.StartTime.ToUniversalTime(),
+                        detectedUtc = DateTimeOffset.UtcNow
+                    });
+            }
+            catch
+            {
+            }
+        }
+
+        return best;
+    }
+
+    private static int SafeThreadCount(Process process)
+    {
+        try { return process.Threads.Count; } catch { return -1; }
+    }
+
+    private static int SafeHandleCount(Process process)
+    {
+        try { return process.HandleCount; } catch { return -1; }
+    }
+
+    private static string FinalizeSession(string sessionDir, string reason)
+    {
+        try
+        {
+            CaptureSample();
+        }
+        catch
+        {
+        }
+
+        var endedUtc = DateTimeOffset.UtcNow;
+        List<Sample> snapshot;
+        lock (Gate)
+        {
+            snapshot = Samples.ToList();
+        }
+
+        var touchedFiles = CaptureTouchedFiles(sessionDir, endedUtc);
+        var initialTitleKey = _titleKey ?? "UNKNOWN_TITLE";
+        var resolvedTitleKey = ResolveTitleKeyFromRuntimeEvidence(initialTitleKey, touchedFiles);
+        sessionDir = RelocateSessionIfNeeded(sessionDir, resolvedTitleKey);
+        _titleKey = resolvedTitleKey;
+
+        var evidenceFiles = CaptureRuntimeEvidence(sessionDir, touchedFiles);
+        var traceCoverage = BuildTraceCoverage(sessionDir, evidenceFiles);
+        var ebootAudit = CaptureEbootAudit(sessionDir, resolvedTitleKey, evidenceFiles);
+        BuildRootCauseSummary(sessionDir);
+
+        WriteJson(Path.Combine(sessionDir, "title_resolution.json"), new
+        {
+            schema = "SharpEmu.RuntimeDebug.TitleResolution.V1",
+            initialTitleKey,
+            resolvedTitleKey,
+            resolvedFromRuntimeEvidence = !string.Equals(
+                initialTitleKey,
+                resolvedTitleKey,
+                StringComparison.OrdinalIgnoreCase),
+            evidence = touchedFiles
+                .Select(x => x.Path)
+                .Where(x => TryExtractTitleIdFromPath(x) is not null)
+                .Take(20)
+                .ToArray()
+        });
+
+        var avgCpu = snapshot.Count == 0 ? 0.0 : snapshot.Average(x => x.CpuPercent);
+        var peakCpu = snapshot.Count == 0 ? 0.0 : snapshot.Max(x => x.CpuPercent);
+        var peakWorking = snapshot.Count == 0 ? 0.0 : snapshot.Max(x => x.WorkingSetMb);
+        var peakPrivate = snapshot.Count == 0 ? 0.0 : snapshot.Max(x => x.PrivateMb);
+        var peakManaged = snapshot.Count == 0 ? 0.0 : snapshot.Max(x => x.ManagedMb);
+        var maxThreads = snapshot.Count == 0 ? -1 : snapshot.Max(x => x.Threads);
+        var maxHandles = snapshot.Count == 0 ? -1 : snapshot.Max(x => x.Handles);
+
+        List<ChildSample> childSnapshot;
+        lock (Gate)
+        {
+            childSnapshot = ChildSamples.ToList();
+        }
+
+        var childAverageCpu = childSnapshot.Count == 0
+            ? 0.0
+            : childSnapshot.Average(x => x.CpuPercent);
+        var childPeakCpu = childSnapshot.Count == 0
+            ? 0.0
+            : childSnapshot.Max(x => x.CpuPercent);
+        var childPeakWorking = childSnapshot.Count == 0
+            ? 0.0
+            : childSnapshot.Max(x => x.WorkingSetMb);
+        var childPeakPrivate = childSnapshot.Count == 0
+            ? 0.0
+            : childSnapshot.Max(x => x.PrivateMb);
+        var childMaxThreads = childSnapshot.Count == 0
+            ? -1
+            : childSnapshot.Max(x => x.Threads);
+        var childMaxHandles = childSnapshot.Count == 0
+            ? -1
+            : childSnapshot.Max(x => x.Handles);
+
+        WriteJson(
+            Path.Combine(sessionDir, "child_process_summary.json"),
+            new
+            {
+                processId = _childProcessId,
+                sampleCount = childSnapshot.Count,
+                averageCpuPercent = childAverageCpu,
+                peakCpuPercent = childPeakCpu,
+                peakWorkingSetMb = childPeakWorking,
+                peakPrivateMb = childPeakPrivate,
+                maxThreads = childMaxThreads,
+                maxHandles = childMaxHandles
+            });
+
+        var summary = new SessionSummary
+        {
+            Schema = "SharpEmu.RuntimeDebug.V1.3.3",
+            TitleKey = resolvedTitleKey,
+            StartedUtc = _startedUtc,
+            EndedUtc = endedUtc,
+            DurationSeconds = Math.Max(0.0, (endedUtc - _startedUtc).TotalSeconds),
+            StopReason = reason,
+            SampleCount = snapshot.Count,
+            AverageCpuPercent = avgCpu,
+            PeakCpuPercent = peakCpu,
+            PeakWorkingSetMb = peakWorking,
+            PeakPrivateMb = peakPrivate,
+            PeakManagedMb = peakManaged,
+            MaxThreads = maxThreads,
+            MaxHandles = maxHandles,
+            ExceptionCount = _exceptionCount,
+            TouchedFileCount = touchedFiles.Count,
+            EvidenceFileCount = evidenceFiles.Count,
+            TraceCoverageCategoryCount = traceCoverage.Count,
+            EbootAuditFound = ebootAudit.Found,
+            EbootFormat = ebootAudit.Format,
+            ChildProcessId = _childProcessId,
+            ChildSampleCount = childSnapshot.Count,
+            ChildAverageCpuPercent = childAverageCpu,
+            ChildPeakCpuPercent = childPeakCpu,
+            ChildPeakWorkingSetMb = childPeakWorking,
+            ChildPeakPrivateMb = childPeakPrivate,
+            ChildMaxThreads = childMaxThreads,
+            ChildMaxHandles = childMaxHandles,
+            BuildFingerprintSha256 = _buildFingerprint ?? string.Empty
+        };
+
+        WriteJson(Path.Combine(sessionDir, "summary.json"), summary);
+        WriteComparison(sessionDir, summary);
+
+        File.WriteAllText(
+            Path.Combine(sessionDir, "SESSION_COMPLETE.txt"),
+            $"completed={DateTimeOffset.Now:O}{Environment.NewLine}" +
+            $"reason={reason}{Environment.NewLine}" +
+            $"titleKey={resolvedTitleKey}{Environment.NewLine}" +
+            $"evidenceFiles={evidenceFiles.Count}{Environment.NewLine}" +
+            $"ebootAuditFound={ebootAudit.Found}{Environment.NewLine}",
+            new UTF8Encoding(false));
+
+        var zipPath = CreateSessionZip(sessionDir);
+        UpdateHistoryIndex(sessionDir, zipPath);
+        WriteCurrentMarker(_repoRoot!, sessionDir, resolvedTitleKey);
+
+        return sessionDir;
+    }
+
+    private static Dictionary<string, string> CaptureContext(object? dataContext)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (dataContext is null)
+        {
+            return result;
+        }
+
+        CaptureObjectProperties(dataContext, "DataContext", result, 0);
+
+        foreach (var selectedName in new[] { "SelectedGame", "SelectedItem", "SelectedEntry", "SelectedTitle", "Game" })
+        {
+            try
+            {
+                var prop = dataContext.GetType().GetProperty(selectedName, BindingFlags.Instance | BindingFlags.Public);
+                var value = prop?.GetValue(dataContext);
+                if (value is not null)
+                {
+                    CaptureObjectProperties(value, selectedName, result, 1);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return result;
+    }
+
+    private static void CaptureObjectProperties(
+        object value,
+        string prefix,
+        Dictionary<string, string> result,
+        int depth)
+    {
+        if (depth > 2)
+        {
+            return;
+        }
+
+        string[] preferred =
+        {
+            "TitleId", "TitleID", "Serial", "ContentId", "ContentID", "GameId", "GameID",
+            "Id", "Title", "Name", "EbootPath", "ExecutablePath", "Path", "Location"
+        };
+
+        foreach (var name in preferred)
+        {
+            try
+            {
+                var prop = value.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public);
+                if (prop is null || prop.GetIndexParameters().Length != 0)
+                {
+                    continue;
+                }
+
+                var propValue = prop.GetValue(value);
+                if (propValue is null)
+                {
+                    continue;
+                }
+
+                var text = Convert.ToString(propValue, CultureInfo.InvariantCulture);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    result[prefix + "." + name] = text!;
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static string ResolveTitleKey(Dictionary<string, string> context)
+    {
+        foreach (var suffix in new[] { ".TitleId", ".TitleID", ".Serial", ".ContentId", ".ContentID", ".GameId", ".GameID" })
+        {
+            var hit = context.FirstOrDefault(kv => kv.Key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(hit.Value))
+            {
+                return SanitizeKey(hit.Value);
+            }
+        }
+
+        foreach (var suffix in new[] { ".Title", ".Name", ".Id" })
+        {
+            var hit = context.FirstOrDefault(kv => kv.Key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(hit.Value))
+            {
+                return SanitizeKey(hit.Value);
+            }
+        }
+
+        return "UNKNOWN_TITLE";
+    }
+
+    private static bool IsUnknownTitle(string? titleKey)
+    {
+        return string.IsNullOrWhiteSpace(titleKey) ||
+               string.Equals(titleKey, "UNKNOWN_TITLE", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(titleKey, "_PENDING", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveTitleKeyFromRuntimeEvidence(
+        string initialTitleKey,
+        IReadOnlyList<TouchedFile> touchedFiles)
+    {
+        if (!IsUnknownTitle(initialTitleKey))
+        {
+            return SanitizeKey(initialTitleKey);
+        }
+
+        var candidates = touchedFiles
+            .Select(x => new
+            {
+                TitleId = TryExtractTitleIdFromPath(x.Path),
+                x.LastWriteUtc
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(x.TitleId))
+            .GroupBy(x => x.TitleId!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new
+            {
+                TitleId = g.Key,
+                Count = g.Count(),
+                Latest = g.Max(x => x.LastWriteUtc)
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Latest)
+            .ThenBy(x => x.TitleId, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+
+        return candidates is null ? "UNKNOWN_TITLE" : SanitizeKey(candidates.TitleId);
+    }
+
+    private static string? TryExtractTitleIdFromPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var normalized = path.Replace('/', '\\');
+        var marker = "\\game_logs\\";
+        var markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex >= 0)
+        {
+            var start = markerIndex + marker.Length;
+            var end = normalized.IndexOf('\\', start);
+            var segment = end < 0
+                ? normalized.Substring(start)
+                : normalized.Substring(start, end - start);
+
+            if (!string.IsNullOrWhiteSpace(segment))
+            {
+                var cleaned = new string(segment
+                    .Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.')
+                    .ToArray());
+
+                if (!string.IsNullOrWhiteSpace(cleaned))
+                {
+                    return cleaned.ToUpperInvariant();
+                }
+            }
+        }
+
+        for (var i = 0; i + 9 <= normalized.Length; i++)
+        {
+            var candidate = normalized.Substring(i, 9);
+            if (candidate.Take(4).All(char.IsLetter) &&
+                candidate.Skip(4).Take(5).All(char.IsDigit))
+            {
+                return candidate.ToUpperInvariant();
+            }
+        }
+
+        return null;
+    }
+
+    private static string RelocateSessionIfNeeded(string sessionDir, string resolvedTitleKey)
+    {
+        if (string.IsNullOrWhiteSpace(_repoRoot) || IsUnknownTitle(resolvedTitleKey))
+        {
+            return sessionDir;
+        }
+
+        var currentParent = Directory.GetParent(sessionDir)?.FullName;
+        var targetParent = Path.Combine(_repoRoot, "RuntimeAuditHistory", resolvedTitleKey);
+        Directory.CreateDirectory(targetParent);
+
+        if (string.Equals(currentParent, targetParent, StringComparison.OrdinalIgnoreCase))
+        {
+            return sessionDir;
+        }
+
+        var name = Path.GetFileName(sessionDir);
+        var target = Path.Combine(targetParent, name);
+        var suffix = 1;
+        while (Directory.Exists(target) || File.Exists(target + ".zip"))
+        {
+            target = Path.Combine(targetParent, name + "_" + suffix.ToString(CultureInfo.InvariantCulture));
+            suffix++;
+        }
+
+        Directory.Move(sessionDir, target);
+        return target;
+    }
+
+    private static string SanitizeKey(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder();
+        foreach (var c in value.Trim())
+        {
+            sb.Append(invalid.Contains(c) ? '_' : c);
+            if (sb.Length >= 80)
+            {
+                break;
+            }
+        }
+
+        var result = sb.ToString().Trim();
+        return string.IsNullOrWhiteSpace(result) ? "UNKNOWN_TITLE" : result;
+    }
+
+    private static string FindRepoRoot()
+    {
+        var starts = new[]
+        {
+            Environment.CurrentDirectory,
+            AppContext.BaseDirectory,
+            Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty
+        };
+
+        foreach (var start in starts.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            try
+            {
+                var dir = new DirectoryInfo(Path.GetFullPath(start));
+                for (var i = 0; dir is not null && i < 14; i++, dir = dir.Parent)
+                {
+                    var marker = Path.Combine(dir.FullName, "src", "SharpEmu.GUI", "SharpEmu.GUI.csproj");
+                    if (File.Exists(marker))
+                    {
+                        return dir.FullName;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return Environment.CurrentDirectory;
+    }
+
+    private static void CaptureEnvironment(string sessionDir)
+    {
+        var prefixes = new[] { "SHARPEMU_", "DOTNET_", "COMPlus_", "VK_", "VULKAN_" };
+        var lines = new List<string>();
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            var key = Convert.ToString(entry.Key, CultureInfo.InvariantCulture) ?? string.Empty;
+            if (prefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            {
+                lines.Add(key + "=" + Convert.ToString(entry.Value, CultureInfo.InvariantCulture));
+            }
+        }
+
+        lines.Sort(StringComparer.OrdinalIgnoreCase);
+        File.WriteAllLines(Path.Combine(sessionDir, "environment.txt"), lines, new UTF8Encoding(false));
+    }
+
+    private static string CaptureBuildFingerprint(string repoRoot, string sessionDir)
+    {
+        var artifacts = Path.Combine(repoRoot, "artifacts", "bin", "Debug", "net10.0");
+        var rows = new List<FingerprintEntry>();
+
+        if (Directory.Exists(artifacts))
+        {
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(artifacts, "SharpEmu*.dll", SearchOption.AllDirectories)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                    .Take(100)
+                    .ToArray();
+            }
+            catch
+            {
+                files = Array.Empty<string>();
+            }
+
+            foreach (var file in files)
+            {
+                try
+                {
+                    var info = new FileInfo(file);
+                    rows.Add(new FingerprintEntry
+                    {
+                        Path = Path.GetRelativePath(repoRoot, file),
+                        Size = info.Length,
+                        Sha256 = HashFile(file)
+                    });
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        WriteJson(Path.Combine(sessionDir, "build_fingerprint.json"), rows);
+
+        var canonical = string.Join(
+            "\n",
+            rows.OrderBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Path + "|" + x.Size.ToString(CultureInfo.InvariantCulture) + "|" + x.Sha256));
+
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical)));
+    }
+
+    private static List<TouchedFile> CaptureTouchedFiles(
+        string sessionDir,
+        DateTimeOffset endedUtc)
+    {
+        var rows = new List<TouchedFile>();
+        if (string.IsNullOrWhiteSpace(_repoRoot))
+        {
+            WriteJson(Path.Combine(sessionDir, "touched_runtime_files.json"), rows);
+            return rows;
+        }
+
+        var roots = new[]
+        {
+            Path.Combine(_repoRoot, "artifacts", "bin", "Debug", "net10.0", "win-x64", "user"),
+            Path.Combine(_repoRoot, "artifacts", "bin", "Debug", "net10.0", "win-x64", "logs"),
+            Path.Combine(_repoRoot, "artifacts", "logs"),
+            Path.Combine(_repoRoot, "logs"),
+            Path.Combine(_repoRoot, "RuntimeLogs")
+        };
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lowerBoundUtc = _startedUtc.UtcDateTime.AddSeconds(-2);
+        var upperBoundUtc = endedUtc.UtcDateTime.AddSeconds(5);
+
+        foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                if (rows.Count >= 1000)
+                {
+                    break;
+                }
+
+                try
+                {
+                    if (!seen.Add(file))
+                    {
+                        continue;
+                    }
+
+                    var ext = Path.GetExtension(file);
+                    if (!new[] { ".log", ".txt", ".json", ".csv" }
+                            .Contains(ext, StringComparer.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var info = new FileInfo(file);
+                    if (info.LastWriteTimeUtc < lowerBoundUtc ||
+                        info.LastWriteTimeUtc > upperBoundUtc)
+                    {
+                        continue;
+                    }
+
+                    rows.Add(new TouchedFile
+                    {
+                        Path = Path.GetRelativePath(_repoRoot, file),
+                        Size = info.Length,
+                        LastWriteUtc = info.LastWriteTimeUtc
+                    });
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        rows = rows
+            .OrderByDescending(x => x.LastWriteUtc)
+            .ThenBy(x => x.Path, StringComparer.OrdinalIgnoreCase)
+            .Take(1000)
+            .ToList();
+
+        WriteJson(Path.Combine(sessionDir, "touched_runtime_files.json"), rows);
+        return rows;
+    }
+
+
+    private static List<EvidenceFile> CaptureRuntimeEvidence(
+        string sessionDir,
+        IReadOnlyList<TouchedFile> touchedFiles)
+    {
+        var result = new List<EvidenceFile>();
+        if (string.IsNullOrWhiteSpace(_repoRoot))
+        {
+            WriteJson(Path.Combine(sessionDir, "runtime_evidence_index.json"), result);
+            return result;
+        }
+
+        var evidenceRoot = Path.Combine(sessionDir, "runtime_evidence");
+        Directory.CreateDirectory(evidenceRoot);
+
+        var sources = new List<(string FullPath, string RelativePath, string Kind)>();
+        foreach (var touched in touchedFiles)
+        {
+            try
+            {
+                var full = Path.GetFullPath(Path.Combine(_repoRoot, touched.Path));
+                if (File.Exists(full))
+                {
+                    sources.Add((full, touched.Path, "runtime_touched"));
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        foreach (var debugFileName in new[]
+                 {
+                     "emulator_console_error.log",
+                     "emulator_console_out.log",
+                     "emulator_child_output.log",
+                     "child_process_samples.csv",
+                     "child_process_identity.json",
+                     "child_process_summary.json",
+                     "debug_trace_profile.json",
+                     "trace_profile_errors.log"
+                 })
+        {
+            var debugPath = Path.Combine(sessionDir, debugFileName);
+            if (File.Exists(debugPath))
+            {
+                sources.Add((
+                    debugPath,
+                    Path.Combine("debug_session", debugFileName),
+                    "debug_console"));
+            }
+        }
+
+        var staticContextCandidates = new[]
+        {
+            Path.Combine(_repoRoot, "artifacts", "bin", "Debug", "net10.0", "win-x64", "user", "library_cache.json"),
+            Path.Combine(_repoRoot, "artifacts", "bin", "Debug", "net10.0", "win-x64", "user", "config.json"),
+            Path.Combine(_repoRoot, "artifacts", "bin", "Debug", "net10.0", "win-x64", "user", "settings.json")
+        };
+
+        foreach (var candidate in staticContextCandidates)
+        {
+            try
+            {
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                var relative = Path.GetRelativePath(_repoRoot, candidate);
+                if (!sources.Any(x => string.Equals(
+                        x.FullPath,
+                        candidate,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    sources.Add((candidate, relative, "static_context"));
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        long totalCopied = 0;
+        const long MaxTotalBytes = 128L * 1024L * 1024L;
+        const long MaxPerFileBytes = 16L * 1024L * 1024L;
+
+        foreach (var source in sources
+                     .OrderBy(x => x.RelativePath, StringComparer.OrdinalIgnoreCase))
+        {
+            if (totalCopied >= MaxTotalBytes)
+            {
+                break;
+            }
+
+            try
+            {
+                var safeRelative = MakeSafeEvidenceRelativePath(source.RelativePath);
+                var destination = Path.Combine(evidenceRoot, safeRelative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+
+                var info = new FileInfo(source.FullPath);
+                var remaining = MaxTotalBytes - totalCopied;
+                var copyLimit = Math.Min(MaxPerFileBytes, remaining);
+                var copyResult = CopyEvidenceFile(source.FullPath, destination, copyLimit);
+                totalCopied += copyResult.CopiedBytes;
+
+                result.Add(new EvidenceFile
+                {
+                    OriginalPath = source.RelativePath,
+                    CopiedPath = Path.GetRelativePath(sessionDir, copyResult.DestinationPath),
+                    Kind = source.Kind,
+                    OriginalSize = info.Length,
+                    CopiedBytes = copyResult.CopiedBytes,
+                    Truncated = copyResult.Truncated,
+                    Sha256 = copyResult.Sha256
+                });
+            }
+            catch (Exception ex)
+            {
+                result.Add(new EvidenceFile
+                {
+                    OriginalPath = source.RelativePath,
+                    CopiedPath = string.Empty,
+                    Kind = source.Kind,
+                    OriginalSize = -1,
+                    CopiedBytes = 0,
+                    Truncated = false,
+                    Sha256 = string.Empty,
+                    Error = ex.GetType().Name + ": " + ex.Message
+                });
+            }
+        }
+
+        WriteJson(Path.Combine(sessionDir, "runtime_evidence_index.json"), result);
+        return result;
+    }
+
+    private static EvidenceCopyResult CopyEvidenceFile(
+        string sourcePath,
+        string destinationPath,
+        long maxBytes)
+    {
+        using var source = new FileStream(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+
+        var originalLength = source.Length;
+        var bytesToCopy = Math.Min(originalLength, Math.Max(0, maxBytes));
+        var truncated = bytesToCopy < originalLength;
+
+        var actualDestination = truncated
+            ? destinationPath + ".truncated"
+            : destinationPath;
+
+        using (var destination = new FileStream(
+                   actualDestination,
+                   FileMode.Create,
+                   FileAccess.Write,
+                   FileShare.Read))
+        {
+            var buffer = new byte[128 * 1024];
+            long remaining = bytesToCopy;
+            while (remaining > 0)
+            {
+                var request = (int)Math.Min(buffer.Length, remaining);
+                var read = source.Read(buffer, 0, request);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                destination.Write(buffer, 0, read);
+                remaining -= read;
+            }
+        }
+
+        return new EvidenceCopyResult
+        {
+            DestinationPath = actualDestination,
+            CopiedBytes = new FileInfo(actualDestination).Length,
+            Truncated = truncated,
+            Sha256 = HashFile(actualDestination)
+        };
+    }
+
+    private static string MakeSafeEvidenceRelativePath(string relativePath)
+    {
+        var normalized = relativePath
+            .Replace(':', '_')
+            .Replace('/', Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar);
+
+        var parts = normalized.Split(
+            new[] { Path.DirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+
+        var safeParts = parts
+            .Where(x => x != "." && x != "..")
+            .Select(x => SanitizeEvidenceSegment(x))
+            .ToArray();
+
+        return safeParts.Length == 0
+            ? "evidence.bin"
+            : Path.Combine(safeParts);
+    }
+
+    private static string SanitizeEvidenceSegment(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            sb.Append(invalid.Contains(c) ? '_' : c);
+        }
+
+        var result = sb.ToString().Trim();
+        return string.IsNullOrWhiteSpace(result) ? "_" : result;
+    }
+
+    private static List<TraceCoverageEntry> BuildTraceCoverage(
+        string sessionDir,
+        IReadOnlyList<EvidenceFile> evidenceFiles)
+    {
+        var definitions = new[]
+        {
+            new TraceDefinition(
+                "loader_eboot_imports",
+                new[]
+                {
+                    "[LOADER]", "[LOADER][TLS]", "[LOADER][ELF]", "sceKernelDlsym",
+                    "nid=", "unresolved import", "import_result", "relocation",
+                    "relocations", "PT_TLS", "tls module", "import stubs",
+                    "unique NIDs", "SELF", "ELF type"
+                }),
+            new TraceDefinition(
+                "shader_gpu",
+                new[]
+                {
+                    "[COMPAT][SHADER]", "[SHADER_", "[PIPELINE_CREATE_SLOW]",
+                    "agc.shader_", "spir-v", "spirv", "shader_translate",
+                    "translated vertex shader failed", "translated pixel shader failed",
+                    "translated compute shader failed", "GPU_DETILE", "texture_contract",
+                    "resource_dependency", "vkQueuePresentKHR", "present_cadence"
+                }),
+            new TraceDefinition(
+                "audio_media",
+                new[]
+                {
+                    "[AJM", "ajm.", "sceAjm", "ATRAC9", "AudioOut", "audio_out",
+                    "AudioOut2", "sceAudio", "ACM", "NGS2", "BINK", "BK2",
+                    "movie_io_candidate", "MOVIE_SYNC", "decoder_started",
+                    "audio_decoder_started"
+                }),
+            new TraceDefinition(
+                "ui_resources",
+                new[]
+                {
+                    "[CONTENT-ROUTE]", ".ctxr", ".ctxc", ".csdr", ".cmat",
+                    ".cmsh", ".cmdl", ".dds", "StartMenu", "ShowHUDScene",
+                    "ui_method", "UI_METHOD", "SCRIPT_LOADER", "ScriptPackage",
+                    "texture_contract"
+                }),
+            new TraceDefinition(
+                "file_io",
+                new[]
+                {
+                    "_open ", "sceKernelOpen", "open path=", "read path=",
+                    "pread", "lseek path=", "stat path=", "fopen", "fread",
+                    "[CONTENT-ROUTE]", "movie_io_candidate"
+                }),
+            new TraceDefinition(
+                "thread_sync",
+                new[]
+                {
+                    "pthread_", "mutex", "cond_", "semaphore", "event_flag",
+                    "equeue", "waiter", "blocked_thread", "WakeBlockedThreads"
+                }),
+            new TraceDefinition(
+                "errors_stalls",
+                new[]
+                {
+                    " ERROR", "[ERROR", "[WARN", "failed", " failure",
+                    "missing", "unsupported", "unimplemented", "stall",
+                    "timeout", "exception", "invalid", "fatal", "assert",
+                    "SLOW]", "_SLOW]"
+                })
+        };
+
+        var coverage = definitions
+            .Select(x => new TraceCoverageEntry
+            {
+                Category = x.Category,
+                MatchedLines = 0,
+                EvidenceFiles = 0,
+                Status = "GAP"
+            })
+            .ToList();
+
+        var samples = definitions.ToDictionary(
+            x => x.Category,
+            _ => new List<string>(),
+            StringComparer.OrdinalIgnoreCase);
+
+        var filesPerCategory = definitions.ToDictionary(
+            x => x.Category,
+            _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var evidence in evidenceFiles)
+        {
+            if (string.IsNullOrWhiteSpace(evidence.CopiedPath))
+            {
+                continue;
+            }
+
+            if (evidence.OriginalPath.EndsWith(
+                    "debug_trace_profile.json",
+                    StringComparison.OrdinalIgnoreCase) ||
+                evidence.OriginalPath.EndsWith(
+                    "environment.txt",
+                    StringComparison.OrdinalIgnoreCase) ||
+                evidence.OriginalPath.EndsWith(
+                    "child_process_samples.csv",
+                    StringComparison.OrdinalIgnoreCase) ||
+                evidence.OriginalPath.EndsWith(
+                    "child_process_summary.json",
+                    StringComparison.OrdinalIgnoreCase) ||
+                evidence.OriginalPath.EndsWith(
+                    "child_process_identity.json",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var extension = Path.GetExtension(evidence.CopiedPath);
+            if (!new[] { ".log", ".txt", ".json", ".csv", ".md", ".truncated" }
+                    .Contains(extension, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var path = Path.Combine(sessionDir, evidence.CopiedPath);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            IEnumerable<string> lines;
+            try
+            {
+                lines = ReadEvidenceLines(path, 250000);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                foreach (var definition in definitions)
+                {
+                    if (!definition.Keywords.Any(k =>
+                            line.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        continue;
+                    }
+
+                    var entry = coverage.First(x =>
+                        string.Equals(
+                            x.Category,
+                            definition.Category,
+                            StringComparison.OrdinalIgnoreCase));
+
+                    entry.MatchedLines++;
+                    filesPerCategory[definition.Category].Add(evidence.OriginalPath);
+
+                    var sampleList = samples[definition.Category];
+                    if (sampleList.Count < 250)
+                    {
+                        sampleList.Add(
+                            evidence.OriginalPath + " :: " +
+                            LimitText(line.Trim(), 1200));
+                    }
+                }
+            }
+        }
+
+        var sampleRoot = Path.Combine(sessionDir, "trace_samples");
+        Directory.CreateDirectory(sampleRoot);
+
+        foreach (var entry in coverage)
+        {
+            entry.EvidenceFiles = filesPerCategory[entry.Category].Count;
+            entry.Status = entry.MatchedLines > 0 ? "OBSERVED" : "GAP";
+
+            File.WriteAllLines(
+                Path.Combine(sampleRoot, entry.Category + ".log"),
+                samples[entry.Category],
+                new UTF8Encoding(false));
+        }
+
+        WriteJson(Path.Combine(sessionDir, "trace_coverage.json"), coverage);
+
+        var md = new StringBuilder();
+        md.AppendLine("# Runtime Trace Coverage");
+        md.AppendLine();
+        md.AppendLine("| Category | Status | Matched lines | Evidence files |");
+        md.AppendLine("|---|---|---:|---:|");
+        foreach (var entry in coverage)
+        {
+            md.AppendLine(
+                $"| {entry.Category} | **{entry.Status}** | {entry.MatchedLines} | {entry.EvidenceFiles} |");
+        }
+
+        md.AppendLine();
+        md.AppendLine("`OBSERVED` means the captured runtime logs contain evidence for that category.");
+        md.AppendLine("`GAP` means this session did not expose enough evidence in existing logs; source-level tracing is still required.");
+        md.AppendLine();
+        md.AppendLine("Important: this collector can preserve and classify existing SharpEmu logs, but it cannot infer guest file reads, shader compiler transitions, HLE calls or audio/UI calls that SharpEmu never logs.");
+
+        File.WriteAllText(
+            Path.Combine(sessionDir, "TRACE_COVERAGE.md"),
+            md.ToString(),
+            new UTF8Encoding(false));
+
+        return coverage;
+    }
+
+    private static IEnumerable<string> ReadEvidenceLines(string path, int maxLines)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 64 * 1024,
+            leaveOpen: false);
+
+        var count = 0;
+        while (!reader.EndOfStream && count < maxLines)
+        {
+            var line = reader.ReadLine();
+            if (line is not null)
+            {
+                yield return line;
+                count++;
+            }
+        }
+    }
+
+    private static string LimitText(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value.Substring(0, maxLength) + "...";
+    }
+
+    private static EbootAudit CaptureEbootAudit(
+        string sessionDir,
+        string titleKey,
+        IReadOnlyList<EvidenceFile> evidenceFiles)
+    {
+        var audit = new EbootAudit
+        {
+            Found = false,
+            TitleKey = titleKey,
+            Format = "NOT_FOUND"
+        };
+
+        if (string.IsNullOrWhiteSpace(_repoRoot))
+        {
+            WriteJson(Path.Combine(sessionDir, "eboot_audit.json"), audit);
+            return audit;
+        }
+
+        try
+        {
+            var candidates = FindEbootCandidates(sessionDir, titleKey, evidenceFiles);
+            audit.Candidates = candidates.ToArray();
+
+            var eboot = candidates.FirstOrDefault(File.Exists);
+            if (string.IsNullOrWhiteSpace(eboot))
+            {
+                WriteJson(Path.Combine(sessionDir, "eboot_audit.json"), audit);
+                WriteEbootCoverageNote(sessionDir, audit);
+                return audit;
+            }
+
+            var info = new FileInfo(eboot);
+            audit.Found = true;
+            audit.Path = eboot;
+            audit.Size = info.Length;
+            audit.Sha256 = HashFile(eboot);
+
+            using (var stream = new FileStream(
+                       eboot,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                var header = new byte[Math.Min(256, (int)Math.Min(int.MaxValue, stream.Length))];
+                var read = stream.Read(header, 0, header.Length);
+                if (read < header.Length)
+                {
+                    Array.Resize(ref header, read);
+                }
+
+                audit.FirstBytesHex = Convert.ToHexString(header.Take(64).ToArray());
+                audit.Format = DetectExecutableFormat(header);
+
+                if (audit.Format == "ELF64_LE")
+                {
+                    PopulateElf64Audit(stream, header, audit, sessionDir);
+                }
+                else if (audit.Format is "SCE_SELF_PS4" or "SCE_SELF_PS5")
+                {
+                    PopulateSelfAudit(stream, audit, sessionDir);
+                }
+            }
+
+            var strings = ExtractInterestingExecutableStrings(eboot, 5000);
+            File.WriteAllLines(
+                Path.Combine(sessionDir, "eboot_interesting_strings.txt"),
+                strings,
+                new UTF8Encoding(false));
+
+            audit.InterestingStringCount = strings.Count;
+            audit.FeatureCounts = BuildExecutableFeatureCounts(strings);
+            WriteEbootReferenceInventories(sessionDir, strings, audit);
+
+            WriteJson(Path.Combine(sessionDir, "eboot_audit.json"), audit);
+            WriteEbootCoverageNote(sessionDir, audit);
+        }
+        catch (Exception ex)
+        {
+            audit.Error = ex.GetType().Name + ": " + ex.Message;
+            WriteJson(Path.Combine(sessionDir, "eboot_audit.json"), audit);
+            WriteEbootCoverageNote(sessionDir, audit);
+        }
+
+        return audit;
+    }
+
+    private static List<string> FindEbootCandidates(
+        string sessionDir,
+        string titleKey,
+        IReadOnlyList<EvidenceFile> evidenceFiles)
+    {
+        var result = new List<string>();
+
+        foreach (var evidence in evidenceFiles)
+        {
+            if (string.IsNullOrWhiteSpace(evidence.CopiedPath))
+            {
+                continue;
+            }
+
+            var path = Path.Combine(sessionDir, evidence.CopiedPath);
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Length > 32L * 1024L * 1024L)
+                {
+                    continue;
+                }
+
+                var raw = File.ReadAllText(path);
+                var normalized = raw.Replace("\\\\", "\\");
+                foreach (Match match in Regex.Matches(
+                             normalized,
+                             @"(?i)[A-Z]:\\[^""'\r\n<>|]*?eboot\.bin"))
+                {
+                    AddUniquePath(result, match.Value);
+                }
+
+                if (!IsUnknownTitle(titleKey))
+                {
+                    foreach (Match match in Regex.Matches(
+                                 normalized,
+                                 @"(?i)[A-Z]:\\[^""'\r\n<>|]{0,500}"))
+                    {
+                        var value = match.Value.Trim();
+                        if (value.IndexOf(titleKey, StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            continue;
+                        }
+
+                        if (Directory.Exists(value))
+                        {
+                            AddUniquePath(result, Path.Combine(value, "eboot.bin"));
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        if (!IsUnknownTitle(titleKey))
+        {
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    if (!drive.IsReady)
+                    {
+                        continue;
+                    }
+
+                    var root = drive.RootDirectory.FullName;
+                    var directCandidates = new[]
+                    {
+                        Path.Combine(root, "JOGOSPS5", titleKey, "eboot.bin"),
+                        Path.Combine(root, "JOGOSPS5", titleKey + "-app", "eboot.bin"),
+                        Path.Combine(root, "JOGOSPS5", titleKey, "app0", "eboot.bin"),
+                        Path.Combine(root, "Games", titleKey, "eboot.bin")
+                    };
+
+                    foreach (var candidate in directCandidates)
+                    {
+                        AddUniquePath(result, candidate);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static void AddUniquePath(List<string> paths, string path)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path.Trim().Trim('"'));
+            if (!paths.Contains(full, StringComparer.OrdinalIgnoreCase))
+            {
+                paths.Add(full);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static string DetectExecutableFormat(byte[] header)
+    {
+        if (header.Length >= 6 &&
+            header[0] == 0x7F &&
+            header[1] == (byte)'E' &&
+            header[2] == (byte)'L' &&
+            header[3] == (byte)'F' &&
+            header[4] == 2 &&
+            header[5] == 1)
+        {
+            return "ELF64_LE";
+        }
+
+        if (header.Length >= 4 &&
+            header[0] == 0x4F &&
+            header[1] == 0x15 &&
+            header[2] == 0x3D &&
+            header[3] == 0x1D)
+        {
+            return "SCE_SELF_PS4";
+        }
+
+        // Exact PS5 SELF magic used by SharpEmu.Core.Loader.SelfLoader:
+        // 54 14 F5 EE -> Ps5SelfMagic 0x5414F5EE when read big-endian.
+        if (header.Length >= 4 &&
+            header[0] == 0x54 &&
+            header[1] == 0x14 &&
+            header[2] == 0xF5 &&
+            header[3] == 0xEE)
+        {
+            return "SCE_SELF_PS5";
+        }
+
+        return "UNKNOWN";
+    }
+
+    private static void PopulateSelfAudit(
+        FileStream stream,
+        EbootAudit audit,
+        string sessionDir)
+    {
+        // Mirrors the fixed SELF layout used by SharpEmu.Core.Loader.SelfLoader:
+        // 32-byte header followed by N 32-byte SELF segment descriptors,
+        // then the embedded ELF header.
+        const int SelfHeaderSize = 32;
+        const int SelfSegmentSize = 32;
+
+        if (stream.Length < SelfHeaderSize)
+        {
+            return;
+        }
+
+        var selfHeader = ReadAt(stream, 0, SelfHeaderSize);
+        if (selfHeader.Length < SelfHeaderSize)
+        {
+            return;
+        }
+
+        audit.SelfFileSize = ReadU64(selfHeader, 16);
+        audit.SelfSegmentCount = ReadU16(selfHeader, 24);
+
+        if (audit.SelfSegmentCount > 4096)
+        {
+            audit.Error = "SELF segment count is unreasonable: " +
+                          audit.SelfSegmentCount.ToString(CultureInfo.InvariantCulture);
+            return;
+        }
+
+        var elfOffset = checked(
+            (long)SelfHeaderSize +
+            (long)audit.SelfSegmentCount * SelfSegmentSize);
+
+        audit.EmbeddedElfOffset = elfOffset;
+
+        var encrypted = 0;
+        var compressed = 0;
+        for (var i = 0; i < audit.SelfSegmentCount; i++)
+        {
+            var segmentOffset = SelfHeaderSize + (long)i * SelfSegmentSize;
+            if (segmentOffset + SelfSegmentSize > stream.Length)
+            {
+                break;
+            }
+
+            var segment = ReadAt(stream, segmentOffset, SelfSegmentSize);
+            if (segment.Length < SelfSegmentSize)
+            {
+                break;
+            }
+
+            var type = ReadU64(segment, 0);
+            if ((type & 0x2UL) != 0)
+            {
+                encrypted++;
+            }
+
+            if ((type & 0x8UL) != 0)
+            {
+                compressed++;
+            }
+        }
+
+        audit.SelfEncryptedSegmentCount = encrypted;
+        audit.SelfCompressedSegmentCount = compressed;
+
+        if (elfOffset < 0 || elfOffset + 64 > stream.Length)
+        {
+            audit.EmbeddedElfFormat = "OUT_OF_RANGE";
+            return;
+        }
+
+        var embeddedHeader = ReadAt(stream, elfOffset, 256);
+        audit.EmbeddedElfFormat = DetectExecutableFormat(embeddedHeader);
+
+        if (audit.EmbeddedElfFormat != "ELF64_LE")
+        {
+            return;
+        }
+
+        // PopulateElf64Audit expects ELF offsets relative to stream position 0.
+        // Copy the embedded ELF payload to a bounded temporary stream so section
+        // and program-header offsets are interpreted exactly as the loader does.
+        var remaining = stream.Length - elfOffset;
+        if (remaining <= 0 || remaining > int.MaxValue)
+        {
+            audit.EmbeddedElfAuditNote =
+                "Embedded ELF detected but payload is too large for in-memory static audit.";
+            return;
+        }
+
+        var embeddedBytes = ReadAt(stream, elfOffset, checked((int)remaining));
+        using var embeddedStream = new MemoryStream(embeddedBytes, writable: false);
+        PopulateElf64Audit(
+            embeddedStream,
+            embeddedHeader,
+            audit,
+            sessionDir);
+
+        audit.EmbeddedElfAuditNote =
+            "Embedded ELF64 parsed from PS SELF using the same fixed header/segment layout as SharpEmu SelfLoader.";
+    }
+
+    private static void PopulateElf64Audit(
+        Stream stream,
+        byte[] header,
+        EbootAudit audit,
+        string sessionDir)
+    {
+        if (header.Length < 64)
+        {
+            return;
+        }
+
+        audit.ElfType = ReadU16(header, 16);
+        audit.ElfMachine = ReadU16(header, 18);
+        audit.ElfEntry = ReadU64(header, 24);
+        audit.ElfProgramHeaderOffset = ReadU64(header, 32);
+        audit.ElfSectionHeaderOffset = ReadU64(header, 40);
+        audit.ElfProgramHeaderEntrySize = ReadU16(header, 54);
+        audit.ElfProgramHeaderCount = ReadU16(header, 56);
+        audit.ElfSectionHeaderEntrySize = ReadU16(header, 58);
+        audit.ElfSectionHeaderCount = ReadU16(header, 60);
+        audit.ElfSectionNameIndex = ReadU16(header, 62);
+
+        var programTypeCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (audit.ElfProgramHeaderEntrySize >= 56 &&
+            audit.ElfProgramHeaderCount > 0 &&
+            audit.ElfProgramHeaderCount < 4096)
+        {
+            for (var i = 0; i < audit.ElfProgramHeaderCount; i++)
+            {
+                var offset = checked((long)audit.ElfProgramHeaderOffset +
+                                     (long)i * audit.ElfProgramHeaderEntrySize);
+                if (offset < 0 || offset + 56 > stream.Length)
+                {
+                    break;
+                }
+
+                var ph = ReadAt(stream, offset, 56);
+                var type = ReadU32(ph, 0);
+                var key = type switch
+                {
+                    0 => "PT_NULL",
+                    1 => "PT_LOAD",
+                    2 => "PT_DYNAMIC",
+                    3 => "PT_INTERP",
+                    4 => "PT_NOTE",
+                    6 => "PT_PHDR",
+                    7 => "PT_TLS",
+                    _ => "0x" + type.ToString("X8", CultureInfo.InvariantCulture)
+                };
+
+                if (!programTypeCounts.TryAdd(key, 1))
+                {
+                    programTypeCounts[key]++;
+                }
+            }
+        }
+
+        audit.ProgramHeaderTypeCounts = programTypeCounts;
+        ExtractElfDynamicImports(stream, audit, sessionDir);
+    }
+
+    private static void ExtractElfDynamicImports(
+        Stream stream,
+        EbootAudit audit,
+        string sessionDir)
+    {
+        if (audit.ElfSectionHeaderEntrySize < 64 ||
+            audit.ElfSectionHeaderCount <= 0 ||
+            audit.ElfSectionHeaderCount > 8192)
+        {
+            return;
+        }
+
+        var sections = new List<ElfSection>();
+        for (var i = 0; i < audit.ElfSectionHeaderCount; i++)
+        {
+            var offset = checked((long)audit.ElfSectionHeaderOffset +
+                                 (long)i * audit.ElfSectionHeaderEntrySize);
+            if (offset < 0 || offset + 64 > stream.Length)
+            {
+                break;
+            }
+
+            var sh = ReadAt(stream, offset, 64);
+            sections.Add(new ElfSection
+            {
+                Index = i,
+                Type = ReadU32(sh, 4),
+                Offset = ReadU64(sh, 24),
+                Size = ReadU64(sh, 32),
+                Link = ReadU32(sh, 40),
+                EntrySize = ReadU64(sh, 56)
+            });
+        }
+
+        var imports = new List<string>();
+        foreach (var section in sections.Where(x => x.Type == 11))
+        {
+            if (section.Link >= sections.Count ||
+                section.EntrySize < 24 ||
+                section.EntrySize > 4096 ||
+                section.Size > 512L * 1024L * 1024L)
+            {
+                continue;
+            }
+
+            var strtab = sections[(int)section.Link];
+            if (strtab.Size > 128L * 1024L * 1024L ||
+                strtab.Offset + strtab.Size > (ulong)stream.Length)
+            {
+                continue;
+            }
+
+            var strBytes = ReadAt(
+                stream,
+                checked((long)strtab.Offset),
+                checked((int)Math.Min(strtab.Size, int.MaxValue)));
+
+            var symbolCount = (long)(section.Size / section.EntrySize);
+            symbolCount = Math.Min(symbolCount, 200000);
+
+            for (long i = 0; i < symbolCount; i++)
+            {
+                var symbolOffset = checked((long)section.Offset +
+                                           i * (long)section.EntrySize);
+                if (symbolOffset < 0 || symbolOffset + 24 > stream.Length)
+                {
+                    break;
+                }
+
+                var sym = ReadAt(stream, symbolOffset, 24);
+                var nameOffset = ReadU32(sym, 0);
+                var sectionIndex = ReadU16(sym, 6);
+
+                if (sectionIndex != 0 || nameOffset == 0 || nameOffset >= strBytes.Length)
+                {
+                    continue;
+                }
+
+                var name = ReadNullTerminatedUtf8(strBytes, checked((int)nameOffset), 512);
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                if (imports.Count < 20000)
+                {
+                    imports.Add(name);
+                }
+            }
+        }
+
+        imports = imports
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+
+        audit.DynamicImportCount = imports.Count;
+        File.WriteAllLines(
+            Path.Combine(sessionDir, "eboot_dynamic_imports.txt"),
+            imports,
+            new UTF8Encoding(false));
+    }
+
+    private static byte[] ReadAt(Stream stream, long offset, int count)
+    {
+        var buffer = new byte[count];
+        stream.Position = offset;
+        var total = 0;
+        while (total < count)
+        {
+            var read = stream.Read(buffer, total, count - total);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            total += read;
+        }
+
+        if (total != count)
+        {
+            Array.Resize(ref buffer, total);
+        }
+
+        return buffer;
+    }
+
+    private static ushort ReadU16(byte[] data, int offset)
+    {
+        if (offset < 0 || offset + 2 > data.Length)
+        {
+            return 0;
+        }
+
+        return (ushort)(data[offset] | (data[offset + 1] << 8));
+    }
+
+    private static uint ReadU32(byte[] data, int offset)
+    {
+        if (offset < 0 || offset + 4 > data.Length)
+        {
+            return 0;
+        }
+
+        return (uint)(
+            data[offset] |
+            (data[offset + 1] << 8) |
+            (data[offset + 2] << 16) |
+            (data[offset + 3] << 24));
+    }
+
+    private static ulong ReadU64(byte[] data, int offset)
+    {
+        var low = ReadU32(data, offset);
+        var high = ReadU32(data, offset + 4);
+        return low | ((ulong)high << 32);
+    }
+
+    private static string ReadNullTerminatedUtf8(byte[] data, int offset, int maxLength)
+    {
+        if (offset < 0 || offset >= data.Length)
+        {
+            return string.Empty;
+        }
+
+        var end = offset;
+        var limit = Math.Min(data.Length, offset + maxLength);
+        while (end < limit && data[end] != 0)
+        {
+            end++;
+        }
+
+        return Encoding.UTF8.GetString(data, offset, end - offset);
+    }
+
+    private static List<string> ExtractInterestingExecutableStrings(
+        string path,
+        int maxStrings)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var sb = new StringBuilder();
+        const long FirstScanBytes = 96L * 1024L * 1024L;
+        const long TailScanBytes = 16L * 1024L * 1024L;
+
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+
+        void FlushString()
+        {
+            if (sb.Length >= 4 && sb.Length <= 2048)
+            {
+                var value = sb.ToString();
+                if (IsInterestingExecutableString(value) && seen.Add(value))
+                {
+                    result.Add(value);
+                }
+            }
+
+            sb.Clear();
+        }
+
+        void ScanRange(long start, long length)
+        {
+            stream.Position = start;
+            var buffer = new byte[256 * 1024];
+            long remaining = length;
+            while (remaining > 0 && result.Count < maxStrings)
+            {
+                var request = (int)Math.Min(buffer.Length, remaining);
+                var read = stream.Read(buffer, 0, request);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                remaining -= read;
+                for (var i = 0; i < read; i++)
+                {
+                    var b = buffer[i];
+                    if (b >= 0x20 && b <= 0x7E)
+                    {
+                        if (sb.Length < 2048)
+                        {
+                            sb.Append((char)b);
+                        }
+                    }
+                    else
+                    {
+                        FlushString();
+                        if (result.Count >= maxStrings)
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            FlushString();
+        }
+
+        var firstLength = Math.Min(stream.Length, FirstScanBytes);
+        ScanRange(0, firstLength);
+
+        if (stream.Length > FirstScanBytes && result.Count < maxStrings)
+        {
+            var tailLength = Math.Min(stream.Length, TailScanBytes);
+            var tailStart = Math.Max(firstLength, stream.Length - tailLength);
+            if (tailStart < stream.Length)
+            {
+                ScanRange(tailStart, stream.Length - tailStart);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsInterestingExecutableString(string value)
+    {
+        string[] keywords =
+        {
+            "sce", "lib", ".prx", ".sprx", "shader", "spirv", "vulkan", "agc",
+            "audio", "ajm", "atrac", "bink", ".bk2", "menu", "texture", ".ctxr",
+            ".gnf", ".png", ".dds", "resource", "asset", "font", "localization",
+            "pthread", "mutex", "semaphore", "eboot", "module", "import",
+            "mount", "app0", "hostapp", "ui", "video", "movie"
+        };
+
+        return keywords.Any(k =>
+            value.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
+    private static Dictionary<string, int> BuildExecutableFeatureCounts(
+        IReadOnlyList<string> strings)
+    {
+        var definitions = new Dictionary<string, string[]>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["loader_modules"] = new[] { "sce", "lib", ".prx", ".sprx", "module", "import" },
+            ["shader_gpu"] = new[] { "shader", "spirv", "vulkan", "agc", "gpu" },
+            ["audio_media"] = new[] { "audio", "ajm", "atrac", "bink", ".bk2", "video", "movie" },
+            ["ui_resources"] = new[] { "ui", "menu", "texture", ".ctxr", ".gnf", ".png", ".dds", "resource", "asset", "font", "localization" },
+            ["thread_sync"] = new[] { "pthread", "mutex", "semaphore", "thread" },
+            ["filesystem"] = new[] { "mount", "app0", "hostapp", "path", "file" }
+        };
+
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var definition in definitions)
+        {
+            result[definition.Key] = strings.Count(value =>
+                definition.Value.Any(keyword =>
+                    value.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0));
+        }
+
+        return result;
+    }
+
+    private static void WriteEbootReferenceInventories(
+        string sessionDir,
+        IReadOnlyList<string> strings,
+        EbootAudit audit)
+    {
+        var libraryPattern = new Regex(
+            @"\blibSce[A-Za-z0-9_]+(?:\.native)?(?:\.(?:prx|sprx))?\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        var apiPattern = new Regex(
+            @"\bsce[A-Z][A-Za-z0-9_]{2,}\b",
+            RegexOptions.CultureInvariant);
+
+        string[] resourceExtensions =
+        {
+            ".ctxr", ".ctxc", ".csdr", ".cmat", ".cmsh", ".cmdl",
+            ".gnf", ".dds", ".png", ".jpg", ".jpeg", ".bk2", ".at9",
+            ".bnk", ".script", ".cgpr", ".txt"
+        };
+
+        var libraries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var apis = new HashSet<string>(StringComparer.Ordinal);
+        var resources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var uiMarkers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var value in strings)
+        {
+            foreach (Match match in libraryPattern.Matches(value))
+            {
+                libraries.Add(match.Value);
+            }
+
+            foreach (Match match in apiPattern.Matches(value))
+            {
+                apis.Add(match.Value);
+            }
+
+            if (resourceExtensions.Any(extension =>
+                    value.IndexOf(
+                        extension,
+                        StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                resources.Add(value);
+            }
+
+            if (value.IndexOf("StartMenu", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                value.IndexOf("ShowHUDScene", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                value.IndexOf("MainMenu", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                value.IndexOf("UIManager", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                uiMarkers.Add(value);
+            }
+        }
+
+        var orderedLibraries = libraries
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var orderedApis = apis
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        var orderedResources = resources
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var orderedUiMarkers = uiMarkers
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        File.WriteAllLines(
+            Path.Combine(sessionDir, "eboot_referenced_libraries.txt"),
+            orderedLibraries,
+            new UTF8Encoding(false));
+        File.WriteAllLines(
+            Path.Combine(sessionDir, "eboot_referenced_apis.txt"),
+            orderedApis,
+            new UTF8Encoding(false));
+        File.WriteAllLines(
+            Path.Combine(sessionDir, "eboot_resource_references.txt"),
+            orderedResources,
+            new UTF8Encoding(false));
+        File.WriteAllLines(
+            Path.Combine(sessionDir, "eboot_ui_markers.txt"),
+            orderedUiMarkers,
+            new UTF8Encoding(false));
+
+        audit.ReferencedLibraryStringCount = orderedLibraries.Length;
+        audit.ReferencedApiStringCount = orderedApis.Length;
+        audit.ResourceReferenceStringCount = orderedResources.Length;
+        audit.UiMarkerStringCount = orderedUiMarkers.Length;
+    }
+
+    private static void WriteEbootCoverageNote(
+        string sessionDir,
+        EbootAudit audit)
+    {
+        var md = new StringBuilder();
+        md.AppendLine("# EBOOT Audit");
+        md.AppendLine();
+        md.AppendLine($"Found: **{audit.Found}**");
+        md.AppendLine($"Format: **{audit.Format}**");
+        if (!string.IsNullOrWhiteSpace(audit.Path))
+        {
+            md.AppendLine($"Path: `{audit.Path}`");
+            md.AppendLine($"SHA256: `{audit.Sha256}`");
+            md.AppendLine($"Size: {audit.Size} bytes");
+        }
+
+        md.AppendLine();
+        if (!audit.Found)
+        {
+            md.AppendLine("The collector could not locate eboot.bin automatically. Dynamic runtime evidence remains available, but eboot static inventory is incomplete.");
+        }
+        else if (audit.Format == "ELF64_LE")
+        {
+            md.AppendLine($"Dynamic undefined/import symbols extracted: **{audit.DynamicImportCount}**");
+            md.AppendLine($"Interesting executable strings extracted: **{audit.InterestingStringCount}**");
+        }
+        else if (audit.Format is "SCE_SELF_PS4" or "SCE_SELF_PS5")
+        {
+            md.AppendLine($"SELF segments: **{audit.SelfSegmentCount}**");
+            md.AppendLine($"Encrypted segments: **{audit.SelfEncryptedSegmentCount}**");
+            md.AppendLine($"Compressed segments: **{audit.SelfCompressedSegmentCount}**");
+            md.AppendLine($"Embedded ELF offset: **0x{audit.EmbeddedElfOffset:X}**");
+            md.AppendLine($"Embedded ELF format: **{audit.EmbeddedElfFormat}**");
+            if (audit.EmbeddedElfFormat == "ELF64_LE")
+            {
+                md.AppendLine($"Standard ELF section-table undefined/import symbols extracted: **{audit.DynamicImportCount}**");
+                md.AppendLine("For PS5 SELF this count is not authoritative for SCE imports; SharpEmu resolves imports from PT_DYNAMIC / DT_SCE_* metadata and relocations. Runtime child loader output is captured separately by V1.3.2.");
+            }
+            else
+            {
+                md.AppendLine("The SELF wrapper was recognized, but a directly parseable embedded ELF was not available at the expected fSELF layout offset.");
+            }
+        }
+
+        md.AppendLine();
+        md.AppendLine("Static eboot evidence does not replace dynamic HLE/import/file-I/O tracing. It is used to compare what the executable declares/references with what SharpEmu actually reaches at runtime.");
+
+        File.WriteAllText(
+            Path.Combine(sessionDir, "EBOOT_AUDIT.md"),
+            md.ToString(),
+            new UTF8Encoding(false));
+    }
+
+    private static void BuildRootCauseSummary(string sessionDir)
+    {
+        var childLog = Path.Combine(sessionDir, "emulator_child_output.log");
+        var summary = new RootCauseSummary();
+        if (!File.Exists(childLog))
+        {
+            WriteJson(Path.Combine(sessionDir, "root_cause_summary.json"), summary);
+            return;
+        }
+
+        double slowWaitTotalMs = 0.0;
+        var slowWaitMaxMs = 0.0;
+
+        try
+        {
+            using var stream = new FileStream(
+                childLog,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(
+                stream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true,
+                bufferSize: 128 * 1024);
+
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (line.Contains("[SLOW_WAIT_PRODUCER]", StringComparison.Ordinal))
+                {
+                    summary.SlowWaitCount++;
+                    if (line.Contains("producer_found=True", StringComparison.OrdinalIgnoreCase))
+                    {
+                        summary.SlowWaitKnownProducerCount++;
+                    }
+
+                    if (line.Contains("action='write_data ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        summary.SlowWaitWriteDataProducerCount++;
+                    }
+
+                    var waited = ExtractDoubleAfter(line, "waited_ms=");
+                    if (waited >= 0)
+                    {
+                        slowWaitTotalMs += waited;
+                        slowWaitMaxMs = Math.Max(slowWaitMaxMs, waited);
+                    }
+                }
+
+                if (line.Contains("[TEXTURE_CONTRACT]", StringComparison.Ordinal) &&
+                    line.Contains("sample=0x000000045D550000", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.Target45DTextureContractCount++;
+                    if (line.Contains("exact_known=0", StringComparison.Ordinal))
+                    {
+                        summary.Target45DExactUnknownCount++;
+                    }
+                    if (line.Contains("exact_resident=0", StringComparison.Ordinal))
+                    {
+                        summary.Target45DNotResidentCount++;
+                    }
+                    if (line.Contains("exact_writer=0", StringComparison.Ordinal))
+                    {
+                        summary.Target45DNoWriterCount++;
+                    }
+                }
+
+                if (line.Contains("[45D_PRODUCER]", StringComparison.Ordinal))
+                {
+                    summary.Target45DProducerTraceCount++;
+                }
+
+                if (line.Contains("[PRESENT_CADENCE]", StringComparison.Ordinal))
+                {
+                    summary.PresentCadenceCount++;
+                    var span = ExtractDoubleAfter(line, "span_ms=");
+                    if (span >= 0)
+                    {
+                        summary.MaxPresentSpanMs = Math.Max(summary.MaxPresentSpanMs, span);
+                    }
+                }
+
+                if (line.Contains("[SHADER_TRANSLATE_SLOW]", StringComparison.Ordinal))
+                {
+                    summary.ShaderTranslateSlowCount++;
+                    if (line.Contains("success=1", StringComparison.Ordinal))
+                    {
+                        summary.ShaderTranslateSuccessCount++;
+                    }
+                    else
+                    {
+                        summary.ShaderTranslateFailureCount++;
+                    }
+                }
+
+                if (line.Contains("ajm.batch_start ", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AjmBatchStartCount++;
+                }
+                if (line.Contains("ajm.batch_wait ", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AjmBatchWaitCount++;
+                }
+                if (line.Contains("ajm.batch_job_run", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("ajm.batch_job_decode", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AjmDecodeJobCount++;
+                }
+
+                if (line.Contains("acm.batch_start ", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AcmBatchStartCount++;
+                }
+                if (line.Contains("[ACM_COMMAND]", StringComparison.Ordinal))
+                {
+                    summary.AcmCommandProbeCount++;
+                }
+
+                if (line.Contains("audio_out2.port-zero-pcm", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AudioZeroPcmTraceCount++;
+                }
+                if (line.Contains("audio_out2.port-nonzero-pcm", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AudioNonZeroPcmTraceCount++;
+                }
+                if (line.Contains("audio_out2.context-submit", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AudioContextSubmitCount++;
+                }
+
+                if (line.Contains("uistartmenu.cgpr", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.UiStartMenuScriptResolvedCount++;
+                }
+                if (line.Contains("subscreen_overlay_backing.ctxr", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.UiSubscreenTextureResolvedCount++;
+                }
+                if (line.Contains("[UI_RIP]", StringComparison.Ordinal))
+                {
+                    summary.UiRipTraceCount++;
+                }
+                if (line.Contains("[SCRIPT_RIP]", StringComparison.Ordinal))
+                {
+                    summary.ScriptRipTraceCount++;
+                }
+
+                if (line.Contains("APR_READ_COMPLETE", StringComparison.Ordinal) &&
+                    !line.Contains("result=0x00000000", StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.AprReadFailureCount++;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            summary.Error = ex.GetType().Name + ": " + ex.Message;
+        }
+
+        summary.SlowWaitTotalMs = slowWaitTotalMs;
+        summary.SlowWaitAverageMs = summary.SlowWaitCount == 0
+            ? 0.0
+            : slowWaitTotalMs / summary.SlowWaitCount;
+        summary.SlowWaitMaxMs = slowWaitMaxMs;
+
+        if (summary.SlowWaitCount > 0 &&
+            summary.SlowWaitKnownProducerCount == summary.SlowWaitCount &&
+            summary.SlowWaitWriteDataProducerCount == summary.SlowWaitCount)
+        {
+            summary.Findings.Add(
+                "GPU_WAIT_KNOWN_WRITE_DATA: every >=1s WAIT_REG_MEM sampled by the tracer had a known explicit WRITE_DATA producer. The delay is producer scheduling/visibility, not a missing producer.");
+        }
+
+        if (summary.Target45DTextureContractCount > 0 &&
+            summary.Target45DExactUnknownCount > 0 &&
+            summary.Target45DNoWriterCount > 0)
+        {
+            summary.Findings.Add(
+                "FULLRES_TEXTURE_PROVENANCE_GAP: the 3840x2160 compositor surface 0x45D550000 is sampled while its exact render-target/writer/residency provenance is missing.");
+        }
+
+        if (summary.AcmBatchStartCount > 0 &&
+            summary.AudioZeroPcmTraceCount > 0 &&
+            summary.AudioNonZeroPcmTraceCount == 0 &&
+            summary.AudioContextSubmitCount == 0)
+        {
+            summary.Findings.Add(
+                "AUDIO_PIPELINE_ZERO_PCM: ACM/AJM batches run, but AudioOut2 observes only zero PCM and no host context-submit. ACM command processing / decode-to-mix lineage must be audited.");
+        }
+
+        if (summary.UiStartMenuScriptResolvedCount > 0 &&
+            summary.UiSubscreenTextureResolvedCount > 0 &&
+            summary.UiRipTraceCount == 0)
+        {
+            summary.Findings.Add(
+                "UI_ASSETS_RESOLVED_BEFORE_NATIVE_MENU: uistartmenu.cgpr and subscreen_overlay_backing.ctxr are resolved successfully, but the sampled native UI ranges were not observed. File discovery is not the primary UI blocker in this session.");
+        }
+
+        if (summary.ShaderTranslateSlowCount > 0 &&
+            summary.ShaderTranslateFailureCount == 0)
+        {
+            summary.Findings.Add(
+                "SHADER_TRANSLATION_SUCCEEDS_FOR_OBSERVED_SLOW_SHADERS: observed slow shader translations completed successfully; GPU synchronization/provenance remains a stronger blocker than translation failure in this session.");
+        }
+
+        WriteJson(Path.Combine(sessionDir, "root_cause_summary.json"), summary);
+
+        var md = new StringBuilder();
+        md.AppendLine("# Runtime Root-Cause Summary");
+        md.AppendLine();
+        md.AppendLine($"Slow WAIT_REG_MEM >=1s: **{summary.SlowWaitCount}**");
+        md.AppendLine($"Known producer: **{summary.SlowWaitKnownProducerCount}/{summary.SlowWaitCount}**");
+        md.AppendLine($"WRITE_DATA producer: **{summary.SlowWaitWriteDataProducerCount}/{summary.SlowWaitCount}**");
+        md.AppendLine($"Slow-wait total/avg/max ms: **{summary.SlowWaitTotalMs:F1} / {summary.SlowWaitAverageMs:F1} / {summary.SlowWaitMaxMs:F1}**");
+        md.AppendLine($"45D texture contracts: **{summary.Target45DTextureContractCount}**, unknown={summary.Target45DExactUnknownCount}, no-writer={summary.Target45DNoWriterCount}, non-resident={summary.Target45DNotResidentCount}");
+        md.AppendLine($"45D producer provenance traces: **{summary.Target45DProducerTraceCount}**");
+        md.AppendLine($"Shader translate slow/success/fail: **{summary.ShaderTranslateSlowCount}/{summary.ShaderTranslateSuccessCount}/{summary.ShaderTranslateFailureCount}**");
+        md.AppendLine($"AJM batch start/wait/decode-jobs: **{summary.AjmBatchStartCount}/{summary.AjmBatchWaitCount}/{summary.AjmDecodeJobCount}**");
+        md.AppendLine($"ACM batches/command probes: **{summary.AcmBatchStartCount}/{summary.AcmCommandProbeCount}**");
+        md.AppendLine($"AudioOut2 zero/nonzero/context-submit: **{summary.AudioZeroPcmTraceCount}/{summary.AudioNonZeroPcmTraceCount}/{summary.AudioContextSubmitCount}**");
+        md.AppendLine($"UI start-menu script/subscreen/UI-RIP/script-RIP: **{summary.UiStartMenuScriptResolvedCount}/{summary.UiSubscreenTextureResolvedCount}/{summary.UiRipTraceCount}/{summary.ScriptRipTraceCount}**");
+        md.AppendLine($"APR read failures: **{summary.AprReadFailureCount}**");
+        md.AppendLine();
+        md.AppendLine("## Findings");
+        md.AppendLine();
+        foreach (var finding in summary.Findings)
+        {
+            md.AppendLine("- " + finding);
+        }
+
+        File.WriteAllText(
+            Path.Combine(sessionDir, "ROOT_CAUSE_SUMMARY.md"),
+            md.ToString(),
+            new UTF8Encoding(false));
+    }
+
+    private static double ExtractDoubleAfter(string line, string marker)
+    {
+        var index = line.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0)
+        {
+            return -1.0;
+        }
+
+        index += marker.Length;
+        var end = index;
+        while (end < line.Length &&
+               (char.IsDigit(line[end]) ||
+                line[end] == '.' ||
+                line[end] == ',' ||
+                line[end] == '-'))
+        {
+            end++;
+        }
+
+        if (end <= index)
+        {
+            return -1.0;
+        }
+
+        var text = line.Substring(index, end - index).Replace(',', '.');
+        return double.TryParse(
+            text,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : -1.0;
+    }
+
+    private static void WriteComparison(string sessionDir, SessionSummary current)
+    {
+        var titleDir = Directory.GetParent(sessionDir)?.FullName;
+        if (string.IsNullOrWhiteSpace(titleDir))
+        {
+            return;
+        }
+
+        SessionSummary? previous = null;
+        string? previousDir = null;
+
+        foreach (var dir in Directory.EnumerateDirectories(titleDir)
+                     .Where(d => !string.Equals(d, sessionDir, StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            var path = Path.Combine(dir, "summary.json");
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                previous = JsonSerializer.Deserialize<SessionSummary>(File.ReadAllText(path));
+                if (previous is not null)
+                {
+                    previousDir = dir;
+                    break;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var md = new StringBuilder();
+        md.AppendLine("# Runtime Debug Comparison");
+        md.AppendLine();
+        md.AppendLine($"Current: `{Path.GetFileName(sessionDir)}`");
+        md.AppendLine();
+
+        if (previous is null)
+        {
+            md.AppendLine("No completed previous session was available. This run is the baseline.");
+        }
+        else
+        {
+            md.AppendLine($"Previous: `{Path.GetFileName(previousDir)}`");
+            md.AppendLine();
+            md.AppendLine("| Metric | Previous | Current | Delta |");
+            md.AppendLine("|---|---:|---:|---:|");
+            AppendMetric(md, "Duration (s)", previous.DurationSeconds, current.DurationSeconds);
+            AppendMetric(md, "Average CPU (%)", previous.AverageCpuPercent, current.AverageCpuPercent);
+            AppendMetric(md, "Peak CPU (%)", previous.PeakCpuPercent, current.PeakCpuPercent);
+            AppendMetric(md, "Peak Working Set (MB)", previous.PeakWorkingSetMb, current.PeakWorkingSetMb);
+            AppendMetric(md, "Peak Private Memory (MB)", previous.PeakPrivateMb, current.PeakPrivateMb);
+            AppendMetric(md, "Peak Managed Memory (MB)", previous.PeakManagedMb, current.PeakManagedMb);
+            AppendMetric(md, "Max Threads", previous.MaxThreads, current.MaxThreads);
+            AppendMetric(md, "Max Handles", previous.MaxHandles, current.MaxHandles);
+            AppendMetric(md, "Exceptions", previous.ExceptionCount, current.ExceptionCount);
+            AppendMetric(md, "Touched runtime files", previous.TouchedFileCount, current.TouchedFileCount);
+            md.AppendLine();
+            md.AppendLine("Build fingerprint changed: **" +
+                          (!string.Equals(previous.BuildFingerprintSha256, current.BuildFingerprintSha256, StringComparison.OrdinalIgnoreCase)
+                              ? "YES"
+                              : "NO") + "**");
+        }
+
+        File.WriteAllText(
+            Path.Combine(sessionDir, "COMPARISON_PREVIOUS.md"),
+            md.ToString(),
+            new UTF8Encoding(false));
+    }
+
+    private static void AppendMetric(StringBuilder md, string name, double previous, double current)
+    {
+        md.AppendLine(
+            $"| {name} | {previous.ToString("F3", CultureInfo.InvariantCulture)} | " +
+            $"{current.ToString("F3", CultureInfo.InvariantCulture)} | " +
+            $"{(current - previous).ToString("+0.000;-0.000;0.000", CultureInfo.InvariantCulture)} |");
+    }
+
+    private static string CreateSessionZip(string sessionDir)
+    {
+        var zipPath = sessionDir.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + ".zip";
+
+        if (File.Exists(zipPath))
+        {
+            File.Delete(zipPath);
+        }
+
+        ZipFile.CreateFromDirectory(
+            sessionDir,
+            zipPath,
+            CompressionLevel.Optimal,
+            includeBaseDirectory: true);
+
+        return zipPath;
+    }
+
+    private static void UpdateHistoryIndex(string sessionDir, string zipPath)
+    {
+        var titleDir = Directory.GetParent(sessionDir)?.FullName;
+        if (string.IsNullOrWhiteSpace(titleDir))
+        {
+            return;
+        }
+
+        var sessions = Directory.EnumerateDirectories(titleDir)
+            .OrderByDescending(x => x, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new
+            {
+                name = Path.GetFileName(x),
+                completed = File.Exists(Path.Combine(x, "summary.json")),
+                comparison = File.Exists(Path.Combine(x, "COMPARISON_PREVIOUS.md")),
+                zip = File.Exists(x + ".zip")
+            })
+            .Take(200)
+            .ToArray();
+
+        WriteJson(Path.Combine(titleDir, "history_index.json"), new
+        {
+            title = Path.GetFileName(titleDir),
+            updatedUtc = DateTimeOffset.UtcNow,
+            latestZip = Path.GetFileName(zipPath),
+            sessions
+        });
+    }
+
+    private static void FinalizeStaleSessions(string historyRoot)
+    {
+        foreach (var dir in Directory.EnumerateDirectories(historyRoot))
+        {
+            try
+            {
+                var start = Path.Combine(dir, "session_start.json");
+                var summary = Path.Combine(dir, "summary.json");
+                var stale = Path.Combine(dir, "STALE_OR_INTERRUPTED.txt");
+                if (File.Exists(start) && !File.Exists(summary) && !File.Exists(stale))
+                {
+                    File.WriteAllText(
+                        stale,
+                        "A previous debug session did not finalize. The GUI may have exited, crashed, or the process was terminated." +
+                        Environment.NewLine +
+                        "detected=" + DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) +
+                        Environment.NewLine,
+                        new UTF8Encoding(false));
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static void WriteCurrentMarker(string repoRoot, string sessionDir, string titleKey)
+    {
+        WriteJson(Path.Combine(repoRoot, "RuntimeAuditHistory", "current_session.json"), new
+        {
+            titleKey,
+            sessionDir,
+            startedUtc = _startedUtc,
+            processId = Environment.ProcessId
+        });
+    }
+
+    private static void DeleteCurrentMarker(string repoRoot)
+    {
+        try
+        {
+            var path = Path.Combine(repoRoot, "RuntimeAuditHistory", "current_session.json");
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(stream));
+    }
+
+    private static void WriteJson<T>(string path, T value)
+    {
+        File.WriteAllText(
+            path,
+            JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }),
+            new UTF8Encoding(false));
+    }
+
+    private sealed class Sample
+    {
+        public DateTimeOffset TimestampUtc { get; set; }
+        public double CpuPercent { get; set; }
+        public double WorkingSetMb { get; set; }
+        public double PrivateMb { get; set; }
+        public double ManagedMb { get; set; }
+        public int Threads { get; set; }
+        public int Handles { get; set; }
+        public double TotalCpuMs { get; set; }
+    }
+
+    private sealed class ChildSample
+    {
+        public DateTimeOffset TimestampUtc { get; set; }
+        public int ProcessId { get; set; }
+        public double CpuPercent { get; set; }
+        public double WorkingSetMb { get; set; }
+        public double PrivateMb { get; set; }
+        public double ManagedMb { get; set; }
+        public int Threads { get; set; }
+        public int Handles { get; set; }
+        public double TotalCpuMs { get; set; }
+    }
+
+    private sealed class FingerprintEntry
+    {
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+    }
+
+    private sealed class TouchedFile
+    {
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public DateTime LastWriteUtc { get; set; }
+    }
+
+
+    private sealed class EvidenceCopyResult
+    {
+        public string DestinationPath { get; set; } = string.Empty;
+        public long CopiedBytes { get; set; }
+        public bool Truncated { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+    }
+
+    private sealed class EvidenceFile
+    {
+        public string OriginalPath { get; set; } = string.Empty;
+        public string CopiedPath { get; set; } = string.Empty;
+        public string Kind { get; set; } = string.Empty;
+        public long OriginalSize { get; set; }
+        public long CopiedBytes { get; set; }
+        public bool Truncated { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
+    }
+
+    private sealed class TraceDefinition
+    {
+        public TraceDefinition(string category, string[] keywords)
+        {
+            Category = category;
+            Keywords = keywords;
+        }
+
+        public string Category { get; }
+        public string[] Keywords { get; }
+    }
+
+    private sealed class TraceCoverageEntry
+    {
+        public string Category { get; set; } = string.Empty;
+        public int MatchedLines { get; set; }
+        public int EvidenceFiles { get; set; }
+        public string Status { get; set; } = string.Empty;
+    }
+
+    private sealed class ElfSection
+    {
+        public int Index { get; set; }
+        public uint Type { get; set; }
+        public ulong Offset { get; set; }
+        public ulong Size { get; set; }
+        public uint Link { get; set; }
+        public ulong EntrySize { get; set; }
+    }
+
+    private sealed class EbootAudit
+    {
+        public bool Found { get; set; }
+        public string TitleKey { get; set; } = string.Empty;
+        public string Format { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+        public string FirstBytesHex { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
+        public string[] Candidates { get; set; } = Array.Empty<string>();
+        public ushort ElfType { get; set; }
+        public ushort ElfMachine { get; set; }
+        public ulong ElfEntry { get; set; }
+        public ulong ElfProgramHeaderOffset { get; set; }
+        public ulong ElfSectionHeaderOffset { get; set; }
+        public ushort ElfProgramHeaderEntrySize { get; set; }
+        public ushort ElfProgramHeaderCount { get; set; }
+        public ushort ElfSectionHeaderEntrySize { get; set; }
+        public ushort ElfSectionHeaderCount { get; set; }
+        public ushort ElfSectionNameIndex { get; set; }
+        public Dictionary<string, int> ProgramHeaderTypeCounts { get; set; } =
+            new(StringComparer.OrdinalIgnoreCase);
+        public int DynamicImportCount { get; set; }
+        public int InterestingStringCount { get; set; }
+        public ulong SelfFileSize { get; set; }
+        public ushort SelfSegmentCount { get; set; }
+        public int SelfEncryptedSegmentCount { get; set; }
+        public int SelfCompressedSegmentCount { get; set; }
+        public long EmbeddedElfOffset { get; set; }
+        public string EmbeddedElfFormat { get; set; } = string.Empty;
+        public string EmbeddedElfAuditNote { get; set; } = string.Empty;
+        public int ReferencedLibraryStringCount { get; set; }
+        public int ReferencedApiStringCount { get; set; }
+        public int ResourceReferenceStringCount { get; set; }
+        public int UiMarkerStringCount { get; set; }
+        public Dictionary<string, int> FeatureCounts { get; set; } =
+            new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class TeeTextWriter : TextWriter
+    {
+        private readonly TextWriter _primary;
+        private readonly TextWriter _secondary;
+        private readonly object _gate = new();
+
+        public TeeTextWriter(TextWriter primary, TextWriter secondary)
+        {
+            _primary = primary;
+            _secondary = secondary;
+        }
+
+        public override Encoding Encoding => _primary.Encoding;
+
+        public override void Write(char value)
+        {
+            lock (_gate)
+            {
+                _primary.Write(value);
+                _secondary.Write(value);
+            }
+        }
+
+        public override void Write(string? value)
+        {
+            lock (_gate)
+            {
+                _primary.Write(value);
+                _secondary.Write(value);
+            }
+        }
+
+        public override void WriteLine(string? value)
+        {
+            lock (_gate)
+            {
+                _primary.WriteLine(value);
+                _secondary.WriteLine(value);
+            }
+        }
+
+        public override void Flush()
+        {
+            lock (_gate)
+            {
+                _primary.Flush();
+                _secondary.Flush();
+            }
+        }
+    }
+
+    private sealed class RootCauseSummary
+    {
+        public int SlowWaitCount { get; set; }
+        public int SlowWaitKnownProducerCount { get; set; }
+        public int SlowWaitWriteDataProducerCount { get; set; }
+        public double SlowWaitTotalMs { get; set; }
+        public double SlowWaitAverageMs { get; set; }
+        public double SlowWaitMaxMs { get; set; }
+        public int Target45DTextureContractCount { get; set; }
+        public int Target45DExactUnknownCount { get; set; }
+        public int Target45DNotResidentCount { get; set; }
+        public int Target45DNoWriterCount { get; set; }
+        public int Target45DProducerTraceCount { get; set; }
+        public int PresentCadenceCount { get; set; }
+        public double MaxPresentSpanMs { get; set; }
+        public int ShaderTranslateSlowCount { get; set; }
+        public int ShaderTranslateSuccessCount { get; set; }
+        public int ShaderTranslateFailureCount { get; set; }
+        public int AjmBatchStartCount { get; set; }
+        public int AjmBatchWaitCount { get; set; }
+        public int AjmDecodeJobCount { get; set; }
+        public int AcmBatchStartCount { get; set; }
+        public int AcmCommandProbeCount { get; set; }
+        public int AudioZeroPcmTraceCount { get; set; }
+        public int AudioNonZeroPcmTraceCount { get; set; }
+        public int AudioContextSubmitCount { get; set; }
+        public int UiStartMenuScriptResolvedCount { get; set; }
+        public int UiSubscreenTextureResolvedCount { get; set; }
+        public int UiRipTraceCount { get; set; }
+        public int ScriptRipTraceCount { get; set; }
+        public int AprReadFailureCount { get; set; }
+        public string Error { get; set; } = string.Empty;
+        public List<string> Findings { get; set; } = new();
+    }
+
+    private sealed class SessionSummary
+    {
+        public string Schema { get; set; } = string.Empty;
+        public string TitleKey { get; set; } = string.Empty;
+        public DateTimeOffset StartedUtc { get; set; }
+        public DateTimeOffset EndedUtc { get; set; }
+        public double DurationSeconds { get; set; }
+        public string StopReason { get; set; } = string.Empty;
+        public int SampleCount { get; set; }
+        public double AverageCpuPercent { get; set; }
+        public double PeakCpuPercent { get; set; }
+        public double PeakWorkingSetMb { get; set; }
+        public double PeakPrivateMb { get; set; }
+        public double PeakManagedMb { get; set; }
+        public int MaxThreads { get; set; }
+        public int MaxHandles { get; set; }
+        public int ExceptionCount { get; set; }
+        public int TouchedFileCount { get; set; }
+        public int EvidenceFileCount { get; set; }
+        public int TraceCoverageCategoryCount { get; set; }
+        public bool EbootAuditFound { get; set; }
+        public string EbootFormat { get; set; } = string.Empty;
+        public int ChildProcessId { get; set; }
+        public int ChildSampleCount { get; set; }
+        public double ChildAverageCpuPercent { get; set; }
+        public double ChildPeakCpuPercent { get; set; }
+        public double ChildPeakWorkingSetMb { get; set; }
+        public double ChildPeakPrivateMb { get; set; }
+        public int ChildMaxThreads { get; set; }
+        public int ChildMaxHandles { get; set; }
+        public string BuildFingerprintSha256 { get; set; } = string.Empty;
+    }
+}
+

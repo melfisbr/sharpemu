@@ -78,6 +78,9 @@ public static class KernelPthreadCompatExports
         public int QueuedWaiterCount => Volatile.Read(ref _queuedWaiterCount);
         public int Type { get; set; } = MutexTypeErrorCheck;
         public int Protocol { get; set; }
+        // SHARPEMU_PTHREAD_OPAQUE_OWNER_RESOLVE_REUSE_V1_8_35
+        // Canonical opaque guest object for this mutex state; alias slots may change, the allocated object does not.
+        public ulong OpaqueObjectAddress { get; set; }
         public LinkedList<PthreadMutexWaiter> Waiters { get; } = new();
 
         public PthreadMutexState()
@@ -768,6 +771,7 @@ public static class KernelPthreadCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
+        InvalidateMutexResolveCacheV1836(mutexAddress);
         var attr = ResolveMutexAttrState(ctx, attrAddress);
         var state = new PthreadMutexState(attr.Type, attr.Protocol);
 
@@ -775,6 +779,7 @@ public static class KernelPthreadCompatExports
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
+        state.OpaqueObjectAddress = handle;
         if (!InitializeMutexObject(ctx, handle, state))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
@@ -791,6 +796,7 @@ public static class KernelPthreadCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
 
+        CacheResolvedMutexStateV1836(mutexAddress, handle, mutexAddress, state);
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
@@ -801,6 +807,7 @@ public static class KernelPthreadCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
+        InvalidateMutexResolveCacheV1836(mutexAddress);
         var resolvedAddress = ResolveMutexHandle(ctx, mutexAddress);
         if (!_mutexStates.TryGetValue(resolvedAddress, out var state))
         {
@@ -827,6 +834,24 @@ public static class KernelPthreadCompatExports
 
     // SHARPEMU_DBFZ_PTHREAD_OPAQUE_OWNER_SYNC_V1_4_5
     private static int _dbfzOpaqueOwnerTraceCount;
+    // V1.8.35: hand the state resolved by lock/unlock core directly to opaque-owner sync.
+    [ThreadStatic] private static ulong _v1835LastResolvedMutexAddress;
+    [ThreadStatic] private static PthreadMutexState? _v1835LastResolvedMutexState;
+    // SHARPEMU_PTHREAD_MUTEX_RESOLVE_VALIDATED_CACHE_V1_8_36
+    // Keep a tiny per-host-thread cache of validated guest mutex slots. The guest pointer is still
+    // read on every resolve, so stack/slot reuse invalidates naturally before cached state is reused.
+    private const int MutexResolveCacheSizeV1836 = 16;
+    private struct MutexResolveCacheEntryV1836
+    {
+        public ulong Slot;
+        public ulong ObservedPointer;
+        public ulong ResolvedAddress;
+        public PthreadMutexState? State;
+    }
+    [ThreadStatic] private static MutexResolveCacheEntryV1836[]? _v1836MutexResolveCache;
+    [ThreadStatic] private static bool _v1836MutexResolveCacheHitAnnounced;
+    private static readonly bool _v1836MutexResolveCacheTrace =
+        string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_DBFZ_MUTEX_RESOLVE_CACHE_TRACE"), "1", StringComparison.Ordinal);
     // SHARPEMU_V74_0_17_DEMONS_PTHREAD_OPAQUE_OWNER_GATE
     // DBFZ V1.4.5 mirrors adaptive mutex ownership into an opaque guest
     // pthread field. Keep that compatibility enabled by default, but let
@@ -887,14 +912,37 @@ public static class KernelPthreadCompatExports
         ulong mutexAddress,
         string operation)
     {
-        if (!TryResolveMutexState(ctx, mutexAddress, createIfZero: false, out _, out var state) ||
-            state.Type != MutexTypeAdaptiveNp ||
-            !TryResolveGuestMutexOpaqueObject(ctx, mutexAddress, state, out var objectAddress) ||
-            ulong.MaxValue - objectAddress < 0x28)
+        var reusedResolvedStateV1835 =
+            _v1835LastResolvedMutexAddress == mutexAddress &&
+            _v1835LastResolvedMutexState is not null;
+        PthreadMutexState? state = reusedResolvedStateV1835
+            ? _v1835LastResolvedMutexState
+            : null;
+        if (state is null &&
+            !TryResolveMutexState(ctx, mutexAddress, createIfZero: false, out _, out state))
         {
             return;
         }
 
+        if (state.Type != MutexTypeAdaptiveNp)
+        {
+            return;
+        }
+
+        var objectAddress = state.OpaqueObjectAddress;
+        if (objectAddress == 0)
+        {
+            if (!TryResolveGuestMutexOpaqueObject(ctx, mutexAddress, state, out objectAddress))
+            {
+                return;
+            }
+            state.OpaqueObjectAddress = objectAddress;
+        }
+
+        if (ulong.MaxValue - objectAddress < 0x28)
+        {
+            return;
+        }
         // FreeBSD/Orbis pthread mutex layout: type lives at +0x20; the pthread
         // owner pointer follows at +0x28. Keep the lower-level umutex lock word
         // untouched here because it may carry kernel/contested bits.
@@ -918,6 +966,89 @@ public static class KernelPthreadCompatExports
         }
     }
 
+    // SHARPEMU_PTHREAD_MUTEX_IMPORT_HOTPATH_V1_8_24
+    // Handle only strictly uncontended success. Recursive, contended, invalid,
+    // waiter and error cases fall back to the existing ABI methods, preserving
+    // cooperative blocking, waiter wake ordering and all diagnostics.
+    public static bool TryPthreadMutexImportHotPathV1824(
+        CpuContext ctx,
+        string nid,
+        ulong mutexAddress,
+        out ulong result)
+    {
+        result = 0;
+        if (_tracePthreads ||
+            _tracePthreadFastPath ||
+            _tracePthreadCallsites ||
+            (_tracePthreadMutexFilter is not null &&
+             _tracePthreadMutexFilter.Count > 0) ||
+            GuestThreadExecution.CurrentGuestThreadHandle == 0 ||
+            mutexAddress == 0)
+        {
+            return false;
+        }
+
+        var isLock = nid is "9UK1vLZQft4" or "7H0iTOciTLo";
+        var isTryLock = nid is "upoVrzMHFeE" or "K-jXhbt2gn4";
+        var isUnlock = nid is "tn3VlD0hG60" or "2Z+PpY6CaJg";
+        if (!isLock && !isTryLock && !isUnlock)
+        {
+            return false;
+        }
+
+        if (!TryResolveMutexState(
+                ctx,
+                mutexAddress,
+                createIfZero: true,
+                out _,
+                out var state))
+        {
+            return false;
+        }
+
+        _v1835LastResolvedMutexAddress = mutexAddress;
+        _v1835LastResolvedMutexState = state;
+        var currentThreadId = GuestThreadExecution.CurrentGuestThreadHandle;
+        if (isLock || isTryLock)
+        {
+            if (!state.TryAcquireUncontended(
+                    currentThreadId,
+                    allowWaiterBarge: isTryLock))
+            {
+                return false;
+            }
+
+            if (_v74017OpaqueOwnerSyncEnabled)
+            {
+                SyncAdaptiveGuestMutexOpaqueOwner(
+                    ctx,
+                    mutexAddress,
+                    isTryLock ? "trylock-fast1824" : "lock-fast1824");
+            }
+
+            result = 0;
+            return true;
+        }
+
+        if (state.OwnerThreadId != currentThreadId ||
+            state.RecursionCount != 1 ||
+            state.QueuedWaiterCount != 0 ||
+            !state.TryReleaseUncontended(currentThreadId))
+        {
+            return false;
+        }
+
+        if (_v74017OpaqueOwnerSyncEnabled)
+        {
+            SyncAdaptiveGuestMutexOpaqueOwner(
+                ctx,
+                mutexAddress,
+                "unlock-fast1824");
+        }
+
+        result = 0;
+        return true;
+    }
     private static int PthreadMutexLockCoreWithOpaqueOwnerSync(CpuContext ctx, ulong mutexAddress, bool tryOnly)
     {
         var result = PthreadMutexLockCore(ctx, mutexAddress, tryOnly);
@@ -951,6 +1082,8 @@ public static class KernelPthreadCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
+        _v1835LastResolvedMutexAddress = mutexAddress;
+        _v1835LastResolvedMutexState = state;
         var currentThreadId = KernelPthreadState.GetCurrentThreadHandle();
         if (state.TryAcquireUncontended(currentThreadId, allowWaiterBarge: tryOnly))
         {
@@ -1015,9 +1148,39 @@ public static class KernelPthreadCompatExports
             return ownedResult;
         }
 
-        var canCooperativelyBlock = !tryOnly &&
+                // V31.7.15.1_RESOURCE_WORKER_MUTEX_STABILITY
+        // V31.7.15 crashed in Core.Res.Decompressor immediately after
+        // scePthreadMutexLock returned from guest return site 0x8010FB121.
+        // Keep every other mutex path unchanged. When the diagnostic opt-in is
+        // enabled and this exact contended call site is reached, do not stage a
+        // cooperative guest continuation; park this dedicated native worker on
+        // the already-existing host waiter and return only after ownership has
+        // actually transferred.
+        var currentImportFrame = default(GuestImportCallFrame);
+        var hasCurrentImportFrame =
             GuestThreadExecution.IsGuestThread &&
-            GuestThreadExecution.TryGetCurrentImportCallFrame(out _);
+            GuestThreadExecution.TryGetCurrentImportCallFrame(out currentImportFrame);
+
+        var forceResourceWorkerHostWait =
+            !tryOnly &&
+            hasCurrentImportFrame &&
+            currentImportFrame.ReturnRip == 0x00000008010FB121UL &&
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_RESOURCE_WORKER_MUTEX_HOST_WAIT") == "1";
+
+        if (forceResourceWorkerHostWait)
+        {
+            Console.Error.WriteLine(
+                "[LOADER][INFO] pthread.resource_worker_callsite_host_wait " +
+                $"return_rip=0x{currentImportFrame.ReturnRip:X16} " +
+                $"mutex=0x{mutexAddress:X16} resolved=0x{resolvedAddress:X16} " +
+                $"thread=0x{currentThreadId:X16}");
+        }
+
+        var canCooperativelyBlock =
+            !tryOnly &&
+            hasCurrentImportFrame &&
+            !forceResourceWorkerHostWait;
         PthreadMutexWaiter? waiter = null;
         var acquiredWhileQueueing = false;
         lock (state.SyncRoot)
@@ -1150,6 +1313,8 @@ public static class KernelPthreadCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
+        _v1835LastResolvedMutexAddress = mutexAddress;
+        _v1835LastResolvedMutexState = state;
         var currentThreadId = KernelPthreadState.GetCurrentThreadHandle();
         if (state.OwnerThreadId == currentThreadId)
         {
@@ -1366,6 +1531,77 @@ public static class KernelPthreadCompatExports
         return mutexAddress;
     }
 
+    private static int GetMutexResolveCacheIndexV1836(ulong mutexAddress) =>
+        (int)(((mutexAddress >> 3) ^ (mutexAddress >> 11)) & (MutexResolveCacheSizeV1836 - 1));
+
+    private static bool TryGetCachedMutexStateV1836(
+        ulong mutexAddress,
+        ulong observedPointer,
+        out ulong resolvedAddress,
+        [NotNullWhen(true)] out PthreadMutexState? state)
+    {
+        resolvedAddress = 0;
+        state = null;
+        var cache = _v1836MutexResolveCache;
+        if (cache is null || observedPointer == 0 || observedPointer == StaticAdaptiveMutexInitializer)
+        {
+            return false;
+        }
+
+        ref var entry = ref cache[GetMutexResolveCacheIndexV1836(mutexAddress)];
+        if (entry.Slot != mutexAddress ||
+            entry.ObservedPointer != observedPointer ||
+            entry.State is not { } cachedState)
+        {
+            return false;
+        }
+
+        resolvedAddress = entry.ResolvedAddress;
+        state = cachedState;
+        if (_v1836MutexResolveCacheTrace && !_v1836MutexResolveCacheHitAnnounced)
+        {
+            _v1836MutexResolveCacheHitAnnounced = true;
+            Console.Error.WriteLine(
+                $"[DBFZ-CPU-1836] mutex_resolve_cache_hit managed={Environment.CurrentManagedThreadId} " +
+                $"slot=0x{mutexAddress:X16} object=0x{observedPointer:X16}");
+        }
+        return true;
+    }
+
+    private static void CacheResolvedMutexStateV1836(
+        ulong mutexAddress,
+        ulong observedPointer,
+        ulong resolvedAddress,
+        PthreadMutexState state)
+    {
+        if (observedPointer == 0 || observedPointer == StaticAdaptiveMutexInitializer)
+        {
+            return;
+        }
+
+        var cache = _v1836MutexResolveCache ??= new MutexResolveCacheEntryV1836[MutexResolveCacheSizeV1836];
+        ref var entry = ref cache[GetMutexResolveCacheIndexV1836(mutexAddress)];
+        entry.Slot = mutexAddress;
+        entry.ObservedPointer = observedPointer;
+        entry.ResolvedAddress = resolvedAddress;
+        entry.State = state;
+    }
+
+    private static void InvalidateMutexResolveCacheV1836(ulong mutexAddress)
+    {
+        var cache = _v1836MutexResolveCache;
+        if (cache is null)
+        {
+            return;
+        }
+
+        ref var entry = ref cache[GetMutexResolveCacheIndexV1836(mutexAddress)];
+        if (entry.Slot == mutexAddress)
+        {
+            entry = default;
+        }
+    }
+
     private static bool TryResolveMutexState(CpuContext ctx, ulong mutexAddress, bool createIfZero, out ulong resolvedAddress, [NotNullWhen(true)] out PthreadMutexState? state)
     {
         resolvedAddress = 0;
@@ -1376,17 +1612,16 @@ public static class KernelPthreadCompatExports
         }
 
         var hasPointedHandle = KernelMemoryCompatExports.TryReadUInt64Compat(ctx, mutexAddress, out var pointedHandle);
+        if (hasPointedHandle &&
+            TryGetCachedMutexStateV1836(mutexAddress, pointedHandle, out resolvedAddress, out state))
+        {
+            return true;
+        }
 
         if (_mutexStates.TryGetValue(mutexAddress, out state))
         {
-            // `mutexAddress` is often the address of the guest's ScePthreadMutex
-            // variable rather than the handle itself, and that storage is
-            // reusable — a stack frame recycles the slot, or the guest assigns a
-            // different mutex to it. The slot therefore outranks anything cached
-            // under its address: keeping the stale entry would resolve a release
-            // onto the wrong mutex, leave the real one owned forever and wedge
-            // every waiter on it (Demon's Souls' Scream audio engine did exactly
-            // this and spun on scePthreadMutexTrylock).
+            // The guest slot remains authoritative. V1.8.36 only reuses a cached state after
+            // re-reading this pointer and proving it is identical to the cached observation.
             if (hasPointedHandle &&
                 pointedHandle != 0 &&
                 pointedHandle != mutexAddress &&
@@ -1396,10 +1631,15 @@ public static class KernelPthreadCompatExports
                 _mutexStates[mutexAddress] = pointedState;
                 resolvedAddress = pointedHandle;
                 state = pointedState;
+                CacheResolvedMutexStateV1836(mutexAddress, pointedHandle, resolvedAddress, state);
                 return true;
             }
 
             resolvedAddress = mutexAddress;
+            if (hasPointedHandle)
+            {
+                CacheResolvedMutexStateV1836(mutexAddress, pointedHandle, resolvedAddress, state);
+            }
             return true;
         }
 
@@ -1419,6 +1659,7 @@ public static class KernelPthreadCompatExports
             {
                 _mutexStates.TryAdd(mutexAddress, state);
                 resolvedAddress = pointedHandle;
+                CacheResolvedMutexStateV1836(mutexAddress, pointedHandle, resolvedAddress, state);
                 return true;
             }
 
@@ -2280,6 +2521,7 @@ public static class KernelPthreadCompatExports
             state = null;
             return false;
         }
+        createdState.OpaqueObjectAddress = handle;
         if (!InitializeMutexObject(ctx, handle, createdState))
         {
             resolvedAddress = 0;
@@ -2317,8 +2559,17 @@ public static class KernelPthreadCompatExports
 
         resolvedAddress = handle;
         state = createdState;
+        CacheResolvedMutexStateV1836(mutexAddress, handle, handle, createdState);
         return true;
     }
+
+    // SHARPEMU_DBFZ_EXTERNAL_PTHREAD_HANDLE_BRIDGE_V1_8_38
+    // The top-level raw guest executor is not a scheduler-owned pthread, but
+    // KernelPthreadState already assigns it a stable synthetic pthread handle.
+    // Expose that existing identity to the import dispatcher without changing
+    // GuestThreadExecution.IsGuestThread or cooperative-wait ownership.
+    public static ulong GetCurrentExternalPthreadHandleFastV1838() =>
+        KernelPthreadState.GetCurrentThreadHandle();
 
     private static void TracePthreadSelf(CpuContext ctx, ulong currentThreadHandle)
     {

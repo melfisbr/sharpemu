@@ -83,6 +83,14 @@ public sealed class GuiSettings
     /// <summary>Internal render resolution scale (1.0 = native, 0.5 = half).</summary>
     public double RenderResolutionScale { get; set; } = 1.0;
 
+    /// <summary>Enable the Vulkan DLSS/FSR upscaler bridge.</summary>
+    public bool UpscalerEnabled { get; set; }
+
+    /// <summary>Vulkan upscaler backend: Auto, DLSS or FSR.</summary>
+    public string UpscalerBackend { get; set; } = "Auto";
+
+    /// <summary>Upscaler preset: NativeAA, Quality, Balanced, Performance or UltraPerformance.</summary>
+    public string UpscalerQuality { get; set; } = "Quality";
     /// <summary>
     /// Discord application ID used for Rich Presence; the default is the
     /// SharpEmu application. Override to rebrand what Discord shows as
@@ -142,7 +150,14 @@ public sealed class GuiSettings
         {
             settings.RenderResolutionScale = 1.0;
         }
-        settings.LibraryLayout = NormalizeChoice(settings.LibraryLayout, "Carousel", "Grid");
+        settings.UpscalerBackend = NormalizeChoice(settings.UpscalerBackend, "Auto", "DLSS", "FSR");
+        settings.UpscalerQuality = NormalizeChoice(
+            settings.UpscalerQuality,
+            "Quality",
+            "NativeAA",
+            "Balanced",
+            "Performance",
+            "UltraPerformance");        settings.LibraryLayout = NormalizeChoice(settings.LibraryLayout, "Carousel", "Grid");
         settings.WindowMode = NormalizeChoice(settings.WindowMode, "Windowed", "Borderless", "Exclusive");
         settings.Resolution = NormalizeResolution(settings.Resolution);
         settings.ScalingMode = NormalizeChoice(settings.ScalingMode, "Fit", "Cover", "Stretch", "Integer");

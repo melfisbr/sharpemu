@@ -182,4 +182,26 @@ SPDX-License-Identifier: GPL-2.0-or-later
       Text="[V61.13.16.6] NIHAV runtime deployed to $(SharpEmuNihavDestV6113166)"
       Condition="Exists('$(SharpEmuNihavToolV6113166)')" />
   </Target>
+
+  <!-- V74.0.67.2.20 DLSS dual-config runtime deployment.
+       The canonical runtime is populated from the already validated local
+       NGX/provider installation. Every Debug/Release build then receives the
+       exact same provider and nvngx runtime automatically. -->
+  <PropertyGroup>
+    <SharpEmuDlssRuntimeRoot>$(MSBuildProjectDirectory)\..\..\runtime\dlss</SharpEmuDlssRuntimeRoot>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(SharpEmuDlssRuntimeRoot)\upscalers\SharpEmu.VulkanUpscaler.Native.dll')">
+    <None Include="$(SharpEmuDlssRuntimeRoot)\upscalers\SharpEmu.VulkanUpscaler.Native.dll"
+          Link="upscalers\SharpEmu.VulkanUpscaler.Native.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(SharpEmuDlssRuntimeRoot)\nvngx_dlss.dll')">
+    <None Include="$(SharpEmuDlssRuntimeRoot)\nvngx_dlss.dll"
+          Link="nvngx_dlss.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -23,10 +23,46 @@ internal static class AmprFileRegistry
     private static string? _indexingApp0Root;
     private static int _preloadStarted;
 
+    // SHARPEMU_V74_0_42_CANONICAL_APR_APP0_INDEX
+    // Demon's Souls precomputed APR ids observed in runtime are FNV-1a hashes
+    // of the canonical "$/<relative>" path. The legacy app0 preload inserted
+    // four namespace aliases for every file into one uint->path dictionary.
+    // With ~223k files that creates ~893k 32-bit keys and lets an alias hash
+    // silently overwrite a canonical "$/" id. Because the index is filled in
+    // parallel, the collision winner can also vary between runs.
+    //
+    // Under this title-scoped A/B, preload/cache restore publishes only the
+    // canonical "$/" id. Explicit non-app0 paths keep their existing behavior.
+    private static readonly bool _canonicalApp0IndexV74042 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_AMPR_CANONICAL_APP0_INDEX"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly ConcurrentDictionary<
+        uint,
+        ConcurrentDictionary<string, byte>> _canonicalCollisionCandidatesV74042 = new();
+    private static long _v74042CanonicalCollisionTraceCount;
+
+    // SHARPEMU_V74_0_42_4_CANONICAL_COLLISION_QUARANTINE
+    // A true canonical FNV32 collision is not safely resolvable from the id
+    // alone. Keep colliding preload entries out of the one-to-one registry
+    // until the guest explicitly resolves one of the colliding paths.
+    private static readonly ConcurrentDictionary<uint, string>
+        _canonicalExplicitPathV740424 = new();
+    private static long _v740424AmbiguousLookupTraceCount;
+    private static long _v740424ExplicitResolveTraceCount;
+    private static long _v740424QuarantineTraceCount;
+
     public static uint Register(string guestPath, string hostPath)
     {
         if (TryGetApp0Relative(guestPath, out var relative) && relative.Length != 0)
         {
+            if (_canonicalApp0IndexV74042)
+            {
+                var canonicalId = ComputeApp0CanonicalId(relative);
+                PublishCanonicalExactV740424(canonicalId, hostPath);
+                return canonicalId;
+            }
+
             RegisterApp0Relative(relative, hostPath);
             return ComputeFileId("$/" + relative);
         }
@@ -38,6 +74,44 @@ internal static class AmprFileRegistry
 
     public static bool TryGetHostPath(uint id, out string hostPath)
     {
+        if (_canonicalApp0IndexV74042 &&
+            _canonicalCollisionCandidatesV74042.TryGetValue(id, out var candidates))
+        {
+            if (_canonicalExplicitPathV740424.TryGetValue(id, out hostPath!))
+            {
+                return true;
+            }
+
+            var traceCount = Interlocked.Increment(
+                ref _v740424AmbiguousLookupTraceCount);
+            if (traceCount <= 64 || (traceCount & (traceCount - 1)) == 0)
+            {
+                string? first = null;
+                string? second = null;
+                foreach (var candidate in candidates.Keys)
+                {
+                    if (first is null)
+                    {
+                        first = candidate;
+                    }
+                    else
+                    {
+                        second = candidate;
+                        break;
+                    }
+                }
+
+                Console.Error.WriteLine(
+                    $"[V74.0.42.4][APR_AMBIGUOUS_LOOKUP] count={traceCount} " +
+                    $"id=0x{id:X8} candidates={candidates.Count} " +
+                    $"a='{first ?? string.Empty}' b='{second ?? string.Empty}'; " +
+                    "refusing arbitrary wrong-file selection");
+            }
+
+            hostPath = string.Empty;
+            return false;
+        }
+
         return _hostPathsById.TryGetValue(id, out hostPath!);
     }
 
@@ -47,9 +121,15 @@ internal static class AmprFileRegistry
         lock (_indexGate)
         {
             _hostPathsById.Clear();
+            _canonicalCollisionCandidatesV74042.Clear();
+            _canonicalExplicitPathV740424.Clear();
             _indexedApp0Root = null;
             _indexingApp0Root = null;
             _preloadStarted = 0;
+            Interlocked.Exchange(ref _v74042CanonicalCollisionTraceCount, 0);
+            Interlocked.Exchange(ref _v740424AmbiguousLookupTraceCount, 0);
+            Interlocked.Exchange(ref _v740424ExplicitResolveTraceCount, 0);
+            Interlocked.Exchange(ref _v740424QuarantineTraceCount, 0);
         }
     }
 
@@ -152,6 +232,8 @@ internal static class AmprFileRegistry
                 Console.Error.WriteLine(
                     $"[LOADER][INFO] ampr.app0_index_cache_hit root={normalizedRoot} " +
                     $"files={cachedFiles} ids={_hostPathsById.Count} " +
+                    $"mode={(_canonicalApp0IndexV74042 ? "canonical-only" : "legacy-four-alias")} " +
+                    $"canonical_collisions={Volatile.Read(ref _v74042CanonicalCollisionTraceCount)} " +
                     $"elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:F1}");
                 return;
             }
@@ -169,6 +251,8 @@ internal static class AmprFileRegistry
                 Console.Error.WriteLine(
                     $"[LOADER][INFO] ampr.app0_index_cache_hit root={normalizedRoot} " +
                     $"files={cachedFiles} ids={_hostPathsById.Count} " +
+                    $"mode={(_canonicalApp0IndexV74042 ? "canonical-only" : "legacy-four-alias")} " +
+                    $"canonical_collisions={Volatile.Read(ref _v74042CanonicalCollisionTraceCount)} " +
                     $"elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:F1} upgraded=v3");
                 return;
             }
@@ -215,7 +299,7 @@ internal static class AmprFileRegistry
                 relative =>
                 {
                     var hostPath = Path.Combine(normalizedRoot, relative.Replace('/', Path.DirectorySeparatorChar));
-                    RegisterApp0Relative(relative, hostPath);
+                    RegisterApp0RelativeForIndexV74042(relative, hostPath);
                 });
 
             lock (_indexGate)
@@ -227,6 +311,8 @@ internal static class AmprFileRegistry
             Console.Error.WriteLine(
                 $"[LOADER][INFO] ampr.app0_indexed root={normalizedRoot} " +
                 $"files={relatives.Count} ids={_hostPathsById.Count} " +
+                $"mode={(_canonicalApp0IndexV74042 ? "canonical-only" : "legacy-four-alias")} " +
+                $"canonical_collisions={Volatile.Read(ref _v74042CanonicalCollisionTraceCount)} " +
                 $"elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:F1}");
         }
         finally
@@ -236,6 +322,134 @@ internal static class AmprFileRegistry
                 _indexingApp0Root = null;
                 Monitor.PulseAll(_indexGate);
             }
+        }
+    }
+
+    private static void RegisterApp0RelativeForIndexV74042(
+        string relative,
+        string hostPath)
+    {
+        if (_canonicalApp0IndexV74042)
+        {
+            PublishCanonicalV74042(
+                ComputeApp0CanonicalId(relative),
+                hostPath);
+            return;
+        }
+
+        RegisterApp0Relative(relative, hostPath);
+    }
+
+    private static uint ComputeApp0CanonicalId(string relative) =>
+        FnvContinueUtf8(
+            FnvContinueAscii(
+                FnvContinueAscii(OffsetBasis, (byte)'$'),
+                (byte)'/'),
+            relative);
+
+    private static void PublishCanonicalExactV740424(uint id, string hostPath)
+    {
+        _canonicalExplicitPathV740424[id] = hostPath;
+        _hostPathsById[id] = hostPath;
+
+        if (_canonicalCollisionCandidatesV74042.TryGetValue(id, out var candidates))
+        {
+            _ = candidates.TryAdd(hostPath, 0);
+            var traceCount = Interlocked.Increment(
+                ref _v740424ExplicitResolveTraceCount);
+            if (traceCount <= 64 || (traceCount & (traceCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.42.4][APR_EXPLICIT_COLLISION_RESOLVE] count={traceCount} " +
+                    $"id=0x{id:X8} candidates={candidates.Count} path='{hostPath}'");
+            }
+        }
+    }
+
+    private static void PublishCanonicalV74042(uint id, string hostPath)
+    {
+        while (true)
+        {
+            if (_canonicalCollisionCandidatesV74042.TryGetValue(
+                    id,
+                    out var knownCandidates))
+            {
+                _ = knownCandidates.TryAdd(hostPath, 0);
+                if (_canonicalExplicitPathV740424.TryGetValue(id, out var exactPath))
+                {
+                    _hostPathsById[id] = exactPath;
+                }
+                else
+                {
+                    _hostPathsById.TryRemove(id, out _);
+                }
+
+                return;
+            }
+
+            if (!_hostPathsById.TryGetValue(id, out var existing))
+            {
+                if (_canonicalExplicitPathV740424.TryGetValue(id, out var exactPath))
+                {
+                    _hostPathsById[id] = exactPath;
+                    return;
+                }
+
+                if (_hostPathsById.TryAdd(id, hostPath))
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (HostFsPath.Comparer.Equals(existing, hostPath))
+            {
+                return;
+            }
+
+            var candidates = _canonicalCollisionCandidatesV74042.GetOrAdd(
+                id,
+                static _ => new ConcurrentDictionary<string, byte>(
+                    HostFsPath.Comparer));
+            _ = candidates.TryAdd(existing, 0);
+            var added = candidates.TryAdd(hostPath, 0);
+            if (added)
+            {
+                var traceCount = Interlocked.Increment(
+                    ref _v74042CanonicalCollisionTraceCount);
+                if (traceCount <= 64 ||
+                    (traceCount & (traceCount - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.42][APR_CANONICAL_COLLISION] count={traceCount} " +
+                        $"id=0x{id:X8} candidates={candidates.Count} " +
+                        $"existing='{existing}' incoming='{hostPath}'");
+                }
+            }
+
+            if (_canonicalExplicitPathV740424.TryGetValue(id, out var exact))
+            {
+                _hostPathsById[id] = exact;
+                return;
+            }
+
+            // Do not choose a deterministic-but-arbitrary file for a true
+            // canonical collision. A wrong successful read is more dangerous
+            // than NOT_FOUND because the guest may parse unrelated bytes as a
+            // mesh/audio/resource structure and corrupt its native heap.
+            _hostPathsById.TryRemove(id, out _);
+            var quarantineCount = Interlocked.Increment(
+                ref _v740424QuarantineTraceCount);
+            if (quarantineCount <= 64 ||
+                (quarantineCount & (quarantineCount - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.42.4][APR_CANONICAL_QUARANTINE] count={quarantineCount} " +
+                    $"id=0x{id:X8} candidates={candidates.Count}; mapping removed");
+            }
+
+            return;
         }
     }
 
@@ -427,10 +641,17 @@ internal static class AmprFileRegistry
                             ? normalizedRoot + entry.Relative.Replace('/', Path.DirectorySeparatorChar)
                             : normalizedRoot + Path.DirectorySeparatorChar +
                               entry.Relative.Replace('/', Path.DirectorySeparatorChar);
-                        _hostPathsById[entry.Id0] = hostPath;
-                        _hostPathsById[entry.Id1] = hostPath;
-                        _hostPathsById[entry.Id2] = hostPath;
-                        _hostPathsById[entry.Id3] = hostPath;
+                        if (_canonicalApp0IndexV74042)
+                        {
+                            PublishCanonicalV74042(entry.Id0, hostPath);
+                        }
+                        else
+                        {
+                            _hostPathsById[entry.Id0] = hostPath;
+                            _hostPathsById[entry.Id1] = hostPath;
+                            _hostPathsById[entry.Id2] = hostPath;
+                            _hostPathsById[entry.Id3] = hostPath;
+                        }
                     });
             }
             else
@@ -458,7 +679,7 @@ internal static class AmprFileRegistry
                         var hostPath = Path.Combine(
                             normalizedRoot,
                             relative.Replace('/', Path.DirectorySeparatorChar));
-                        RegisterApp0Relative(relative, hostPath);
+                        RegisterApp0RelativeForIndexV74042(relative, hostPath);
                     });
             }
 
@@ -468,6 +689,12 @@ internal static class AmprFileRegistry
         catch (Exception exception)
         {
             _hostPathsById.Clear();
+            _canonicalCollisionCandidatesV74042.Clear();
+            _canonicalExplicitPathV740424.Clear();
+            Interlocked.Exchange(ref _v74042CanonicalCollisionTraceCount, 0);
+            Interlocked.Exchange(ref _v740424AmbiguousLookupTraceCount, 0);
+            Interlocked.Exchange(ref _v740424ExplicitResolveTraceCount, 0);
+            Interlocked.Exchange(ref _v740424QuarantineTraceCount, 0);
             Console.Error.WriteLine(
                 $"[LOADER][WARN] ampr.app0_index_cache_load_failed: {exception.Message}");
             return false;
@@ -499,6 +726,27 @@ internal static class AmprFileRegistry
                 }
 
                 relatives.Add(relative);
+            }
+
+            if (_canonicalApp0IndexV74042)
+            {
+                foreach (var candidateSet in _canonicalCollisionCandidatesV74042.Values)
+                {
+                    foreach (var collisionHostPath in candidateSet.Keys)
+                    {
+                        var relative = Path.GetRelativePath(
+                                normalizedRoot,
+                                collisionHostPath)
+                            .Replace('\\', '/');
+                        if (string.IsNullOrEmpty(relative) ||
+                            relative.StartsWith("..", StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        relatives.Add(relative);
+                    }
+                }
             }
 
             var tempPath = cachePath + ".tmp";

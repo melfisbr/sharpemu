@@ -1,0 +1,11 @@
+﻿[V74.0.78.3] Draw Texture Hot Path diagnostic
+ExitCode=0
+pre_snapshot_alias_hits_logged=256
+sampler_alias_lines=256
+sampler_alias_source_kb_0=206
+draw_texture_ms: count=0
+compute_texture_ms: count=0
+slow_wait_ms: count=19 avg_ms=2755,720 max_ms=5865,600
+gate_wait_ms: count=656 avg_ms=51,725 max_ms=1422,014
+backpressure_ms: count=37 avg_ms=14,840 max_ms=260,255
+target_frame_budget_60fps_ms=16.667

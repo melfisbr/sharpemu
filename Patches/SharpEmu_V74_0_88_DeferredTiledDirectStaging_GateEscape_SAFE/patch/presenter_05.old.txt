@@ -1,0 +1,7 @@
+            // buffers + descriptor pool retire with the batch fence. On any failure
+            // fall back to a CPU detile + normal staged upload.
+            var gpuDetiled = false;
+            if (gpuTiledSource is { } detileSource && gpuDetileParams is { } detileParameters)
+            {
+                try
+                {

@@ -1,0 +1,76 @@
+            // SHARPEMU_V74_0_86_DS_CHARACTER_CREATOR_TYPED_DCC
+            // Final validation is intentionally placed after V80 provenance recovery.
+            // The earlier V77.1 guard lived inside Consider(), so a provenance fast
+            // path that directly assigned best could bypass it. If the selected DCC
+            // producer has a different typed Vulkan format, reject it and do one
+            // exact-format rescan. If no exact producer exists, use the normal miss
+            // path instead of interpreting unrelated typed storage.
+            if (best is not null &&
+                _v74086DsDccExactFormat &&
+                SharpEmu.Libs.Kernel.KernelMemoryCompatExports.IsConfiguredApplicationTitle(
+                    "PPSA01341") &&
+                best.Format != viewFormat)
+            {
+                var rejectedV74086 = best;
+                var rejectedScoreV74086 = bestScore;
+                var rejectCountV74086 = Interlocked.Increment(
+                    ref _v74086DsDccTypedRejectCount);
+
+                if (rejectCountV74086 <= 256 ||
+                    (rejectCountV74086 & (rejectCountV74086 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.86][DS_DCC_TYPED_REJECT] " +
+                        $"count={rejectCountV74086} " +
+                        $"sample=0x{texture.Address:X16} " +
+                        $"image=0x{rejectedV74086.Address:X16} " +
+                        $"meta=0x{texture.MetadataAddress:X16} " +
+                        $"sample_size={texture.Width}x{texture.Height} " +
+                        $"image_size={rejectedV74086.LogicalWidth}x{rejectedV74086.LogicalHeight} " +
+                        $"sample_fmt={viewFormat} " +
+                        $"image_fmt={rejectedV74086.Format} " +
+                        $"generation={rejectedV74086.ContentGeneration} " +
+                        $"score={rejectedScoreV74086}");
+                }
+
+                best = null;
+                bestScore = int.MinValue;
+                candidateCount = 0;
+
+                foreach (var exactCandidateV74086 in _guestImages.Values)
+                {
+                    if (exactCandidateV74086.Format == viewFormat)
+                    {
+                        Consider(exactCandidateV74086, isActive: true);
+                    }
+                }
+
+                foreach (var exactCandidateV74086 in _guestImageVariants.Values)
+                {
+                    if (exactCandidateV74086.Format == viewFormat)
+                    {
+                        Consider(exactCandidateV74086, isActive: false);
+                    }
+                }
+
+                if (best is not null)
+                {
+                    var replacementCountV74086 = Interlocked.Increment(
+                        ref _v74086DsDccExactReplacementCount);
+                    if (replacementCountV74086 <= 128 ||
+                        (replacementCountV74086 &
+                         (replacementCountV74086 - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V74.0.86][DS_DCC_EXACT_REPLACEMENT] " +
+                            $"count={replacementCountV74086} " +
+                            $"sample=0x{texture.Address:X16} " +
+                            $"image=0x{best.Address:X16} " +
+                            $"meta=0x{texture.MetadataAddress:X16} " +
+                            $"format={viewFormat} " +
+                            $"generation={best.ContentGeneration} " +
+                            $"candidates={candidateCount}");
+                    }
+                }
+            }
+

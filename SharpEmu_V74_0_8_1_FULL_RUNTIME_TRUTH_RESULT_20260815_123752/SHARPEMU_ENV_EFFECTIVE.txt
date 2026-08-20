@@ -1,3 +1,0 @@
-﻿V74.0.8.2 finalized an existing V74.0.8.1 collection.
-The original run configuration is documented by the package and console output.
-Current process environment is intentionally not substituted for historical run state.

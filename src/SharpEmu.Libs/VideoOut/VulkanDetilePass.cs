@@ -61,6 +61,20 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
 
     private readonly Dictionary<(ulong Bucket, bool HostVisible), Stack<Allocation>> _bufferPool = new();
     private readonly List<Allocation> _allAllocations = new();
+    private ulong _pooledBytes;
+
+    // V74.1.4 / upstream #773 intent:
+    // Loading screens can touch many detile buffer size classes. Without a
+    // bound, every returned size class remains resident until presenter
+    // disposal. Limit only IDLE buffers; active detile allocations are never
+    // denied or truncated by this cache policy.
+    private const int MaxBuffersPerBucket = 4;
+    private static readonly ulong MaxPooledBufferBytes =
+        (ulong.TryParse(
+             Environment.GetEnvironmentVariable("SHARPEMU_VK_DETILE_POOL_MB"),
+             out var detilePoolMb) && detilePoolMb > 0
+            ? detilePoolMb
+            : 128UL) * 1024UL * 1024UL;
 
     private readonly Stack<DescriptorSet> _freeDescriptorSets = new();
     private readonly List<DescriptorPool> _descriptorPools = new();
@@ -171,6 +185,86 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         {
             PrepareResources(tiled, parameters, layers, ref resources);
             RecordCommands(commandBuffer, in resources, image, currentLayout, texelWidth, texelHeight, layers, in parameters);
+        }
+        catch
+        {
+            ReleaseResources(in resources);
+            throw;
+        }
+
+        transients = new Transients
+        {
+            Tiled = resources.Tiled,
+            Output = resources.Output,
+            Set = resources.Set,
+            Rented = true,
+        };
+        return true;
+    }
+
+    // SHARPEMU_V74_0_88_DIRECT_GUEST_DETILE_STAGING
+    // Variant of RecordDetile that fills the mapped host-visible tiled buffer
+    // directly from guest memory. The AGC parser therefore does not need a large
+    // intermediate managed byte[] while it owns the submitted-GPU Gate.
+    public bool RecordDetileGuestMemory(
+        CommandBuffer commandBuffer,
+        Image image,
+        ImageLayout currentLayout,
+        uint texelWidth,
+        uint texelHeight,
+        uint layers,
+        SharpEmu.HLE.ICpuMemory guestMemory,
+        ulong guestBaseAddress,
+        ulong guestSliceStride,
+        ulong guestBaseOffset,
+        int guestSliceBytes,
+        in DetileParams parameters,
+        out Transients transients)
+    {
+        transients = Transients.Empty;
+        if (_disposed ||
+            !Supports(parameters) ||
+            texelWidth == 0 ||
+            texelHeight == 0 ||
+            layers == 0 ||
+            guestMemory is null ||
+            guestBaseAddress == 0 ||
+            guestSliceBytes <= 0 ||
+            guestSliceStride == 0 ||
+            (ulong)guestSliceBytes * layers > int.MaxValue ||
+            guestSliceBytes % parameters.BytesPerElement != 0)
+        {
+            return false;
+        }
+
+        EnsurePipeline();
+
+        var resources = default(DetileResources);
+        try
+        {
+            if (!PrepareResourcesGuestMemoryV74088(
+                    guestMemory,
+                    guestBaseAddress,
+                    guestSliceStride,
+                    guestBaseOffset,
+                    guestSliceBytes,
+                    parameters,
+                    layers,
+                    ref resources))
+            {
+                ReleaseResources(in resources);
+                return false;
+            }
+
+            RecordCommands(
+                commandBuffer,
+                in resources,
+                image,
+                currentLayout,
+                texelWidth,
+                texelHeight,
+                layers,
+                in parameters);
         }
         catch
         {
@@ -309,6 +403,108 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
             (resources.Output.Buffer, resources.OutputBytes));
     }
 
+    // SHARPEMU_V74_0_88_DIRECT_GUEST_STAGING_PREPARE
+    private bool PrepareResourcesGuestMemoryV74088(
+        SharpEmu.HLE.ICpuMemory guestMemory,
+        ulong guestBaseAddress,
+        ulong guestSliceStride,
+        ulong guestBaseOffset,
+        int guestSliceBytes,
+        in DetileParams parameters,
+        uint layers,
+        ref DetileResources resources)
+    {
+        TermBuffer xTerm;
+        TermBuffer yTerm;
+        if (parameters.Equation == DetileEquation.BlockTable)
+        {
+            xTerm = GetTermBuffer(_blockTermBuffers, parameters.BlockTable, shift: 0);
+            yTerm = GetPlaceholderTermBuffer();
+            resources.EquationValue = 1;
+        }
+        else
+        {
+            var shift = BitOperations.TrailingZeroCount((uint)parameters.BytesPerElement);
+            xTerm = GetTermBuffer(_xorTermBuffers, parameters.XByteTerm, shift);
+            yTerm = GetTermBuffer(_xorTermBuffers, parameters.YByteTerm, shift);
+            resources.EquationValue = 0;
+        }
+
+        var bytesPerElement = (uint)parameters.BytesPerElement;
+        var totalTiledBytes = checked((ulong)guestSliceBytes * layers);
+        resources.UintsPerElement = bytesPerElement / sizeof(uint);
+        resources.SrcSliceElements = checked((uint)((ulong)guestSliceBytes / bytesPerElement));
+        resources.OutputBytes =
+            (ulong)parameters.ElementsWide * (ulong)parameters.ElementsHigh * bytesPerElement * layers;
+
+        resources.Tiled = RentBuffer(totalTiledBytes, hostVisible: true);
+        if (!UploadGuestTextureSlicesV74088(
+                resources.Tiled.Memory,
+                guestMemory,
+                guestBaseAddress,
+                guestSliceStride,
+                guestBaseOffset,
+                guestSliceBytes,
+                layers))
+        {
+            return false;
+        }
+
+        resources.Output = RentBuffer(resources.OutputBytes, hostVisible: false);
+        resources.Set = RentDescriptorSet();
+        WriteDescriptors(
+            resources.Set,
+            (resources.Tiled.Buffer, totalTiledBytes),
+            (xTerm.Buffer, xTerm.ByteSize),
+            (yTerm.Buffer, yTerm.ByteSize),
+            (resources.Output.Buffer, resources.OutputBytes));
+        return true;
+    }
+
+    private bool UploadGuestTextureSlicesV74088(
+        DeviceMemory memory,
+        SharpEmu.HLE.ICpuMemory guestMemory,
+        ulong guestBaseAddress,
+        ulong guestSliceStride,
+        ulong guestBaseOffset,
+        int guestSliceBytes,
+        uint layers)
+    {
+        var totalBytes = checked((ulong)guestSliceBytes * layers);
+        void* mapped;
+        Check(_vk.MapMemory(_device, memory, 0, totalBytes, 0, &mapped), "vkMapMemory(detile guest direct)");
+        try
+        {
+            var destination = new Span<byte>(mapped, checked((int)totalBytes));
+            for (var layer = 0u; layer < layers; layer++)
+            {
+                var guestAddress = checked(
+                    guestBaseAddress + (ulong)layer * guestSliceStride + guestBaseOffset);
+                var target = destination.Slice(
+                    checked((int)((ulong)layer * (ulong)guestSliceBytes)),
+                    guestSliceBytes);
+                if (!TryReadGuestTextureBackingV74088(guestMemory, guestAddress, target))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            _vk.UnmapMemory(_device, memory);
+        }
+    }
+
+    private static bool TryReadGuestTextureBackingV74088(
+        SharpEmu.HLE.ICpuMemory memory,
+        ulong address,
+        Span<byte> destination) =>
+        memory.TryRead(address, destination) ||
+        SharpEmu.Libs.Kernel.KernelMemoryCompatExports.TryReadTrackedLibcHeap(address, destination) ||
+        SharpEmu.Libs.Kernel.KernelMemoryCompatExports.TryReadTrackedLibcHeapGpuAlias(address, destination);
+
     private TermBuffer GetTermBuffer(Dictionary<int[], TermBuffer> cache, int[] table, int shift)
     {
         if (cache.TryGetValue(table, out var cached))
@@ -354,7 +550,11 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         var bucket = BucketFor(size);
         if (_bufferPool.TryGetValue((bucket, hostVisible), out var free) && free.Count > 0)
         {
-            return free.Pop();
+            var rented = free.Pop();
+            _pooledBytes = rented.Capacity >= _pooledBytes
+                ? 0
+                : _pooledBytes - rented.Capacity;
+            return rented;
         }
 
         return CreateBuffer(bucket, hostVisible);
@@ -374,7 +574,34 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
             _bufferPool[key] = free;
         }
 
+        var remainingBudget = MaxPooledBufferBytes -
+            Math.Min(_pooledBytes, MaxPooledBufferBytes);
+        if (free.Count >= MaxBuffersPerBucket ||
+            allocation.Capacity > remainingBudget)
+        {
+            DestroyBuffer(allocation.Buffer, allocation.Memory);
+            _allAllocations.Remove(allocation);
+            return;
+        }
+
         free.Push(allocation);
+        _pooledBytes += allocation.Capacity;
+    }
+
+    /// <summary>
+    /// Returns idle detile-pool residency for runtime memory diagnostics.
+    /// Active allocations are intentionally excluded from PooledBytes.
+    /// </summary>
+    public (ulong PooledBytes, int PooledBuffers, ulong BudgetBytes, int Allocations)
+        DiagnosticStats()
+    {
+        var pooledBuffers = 0;
+        foreach (var free in _bufferPool.Values)
+        {
+            pooledBuffers += free.Count;
+        }
+
+        return (_pooledBytes, pooledBuffers, MaxPooledBufferBytes, _allAllocations.Count);
     }
 
     private DescriptorSet RentDescriptorSet()
@@ -861,6 +1088,7 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
 
         _allAllocations.Clear();
         _bufferPool.Clear();
+        _pooledBytes = 0;
         _xorTermBuffers.Clear();
         _blockTermBuffers.Clear();
         _placeholderTermBuffer = default;

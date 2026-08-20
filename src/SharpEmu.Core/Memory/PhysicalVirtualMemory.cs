@@ -1,6 +1,7 @@
 // Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using SharpEmu.Core.Loader;
 using SharpEmu.HLE;
@@ -18,7 +19,7 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
     private readonly object _allocationSearchHintGate = new();
     private readonly List<MemoryRegion> _regions = new();
     private readonly Dictionary<(ulong DesiredAddress, ulong Alignment, bool Executable), ulong> _allocationSearchHints = new();
-    private readonly Dictionary<ulong, ProgramHeaderFlags> _pageProtections = new();
+    private readonly ConcurrentDictionary<ulong, ProgramHeaderFlags> _pageProtections = new();
     private bool _disposed;
 
     [ThreadStatic]
@@ -229,6 +230,65 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
             0x80 => HostPageProtection.ExecuteWriteCopy,
             _ => HostPageProtection.NoAccess,
         };
+    }
+
+    // SHARPEMU_V74_0_56_32_LOADER_SPARSE_RESERVATION
+    //
+    // Reserve the complete ELF image window without committing every page.
+    // PT_LOAD segments are committed on demand by MapLoaderSegment. This avoids
+    // paying commit/zero-fill cost for address-space holes and large BSS ranges
+    // before the guest can possibly touch them.
+    public bool TryReserveLoaderImageAtExact(
+        ulong desiredAddress,
+        ulong size,
+        bool executable,
+        out ulong actualAddress)
+    {
+        actualAddress = 0;
+        if (size == 0)
+        {
+            return false;
+        }
+
+        var alignedSize = AlignUp(size, PageSize);
+        var hostProtection = executable
+            ? HostPageProtection.ReadWriteExecute
+            : HostPageProtection.ReadWrite;
+        var result = _hostMemory.Reserve(desiredAddress, alignedSize, hostProtection);
+        if (result == 0)
+        {
+            return false;
+        }
+
+        if (result != desiredAddress)
+        {
+            _hostMemory.Free(result);
+            return false;
+        }
+
+        _gate.EnterWriteLock();
+        try
+        {
+            InsertRegionSorted(new MemoryRegion
+            {
+                VirtualAddress = result,
+                Size = alignedSize,
+                IsExecutable = executable,
+                IsReservedOnly = true,
+                Protection = executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE
+            });
+        }
+        finally
+        {
+            _gate.ExitWriteLock();
+        }
+
+        Interlocked.Increment(ref _mappingGeneration);
+        actualAddress = result;
+        TraceVmem(
+            $"Reserved sparse loader image: 0x{result:X16} - 0x{result + alignedSize:X16} " +
+            $"({alignedSize} bytes, executable={executable})");
+        return true;
     }
 
     public bool TryAllocateAtExact(ulong desiredAddress, ulong size, bool executable, out ulong actualAddress)
@@ -1157,6 +1217,74 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
 
     public void Map(ulong virtualAddress, ulong memorySize, ulong fileOffset, ReadOnlySpan<byte> fileData, ProgramHeaderFlags protection)
     {
+        MapCore(
+            virtualAddress,
+            memorySize,
+            fileOffset,
+            fileData,
+            protection,
+            deferFinalProtection: false,
+            preserveDemandZeroPages: false);
+    }
+
+    // SHARPEMU_V74_0_56_32_LOADER_STAGED_MAPPING
+    //
+    // ELF/SELF relocations are loader writes. Mapping PT_LOAD with its final
+    // RX/R protections before relocations forces every relocation targeting a
+    // non-writable page through VirtualProtect/restore (and potentially an
+    // instruction-cache flush). Keep loader segments writable until the image
+    // has been fully relocated, then apply the guest-visible final protections
+    // in one pass from SelfLoader.
+    public void MapLoaderSegment(
+        ulong virtualAddress,
+        ulong memorySize,
+        ulong fileOffset,
+        ReadOnlySpan<byte> fileData,
+        ProgramHeaderFlags protection)
+    {
+        MapCore(
+            virtualAddress,
+            memorySize,
+            fileOffset,
+            fileData,
+            protection,
+            deferFinalProtection: true,
+            preserveDemandZeroPages: true);
+    }
+
+    public void FinalizeLoaderSegmentProtection(
+        ulong virtualAddress,
+        ulong memorySize,
+        ProgramHeaderFlags protection)
+    {
+        if (memorySize == 0)
+        {
+            return;
+        }
+
+        var mapStart = AlignDown(virtualAddress, PageSize);
+        var mapEnd = AlignUp(checked(virtualAddress + memorySize), PageSize);
+
+        _gate.EnterWriteLock();
+        try
+        {
+            ApplySegmentProtection(mapStart, mapEnd, protection);
+        }
+        finally
+        {
+            _gate.ExitWriteLock();
+        }
+    }
+
+    private void MapCore(
+        ulong virtualAddress,
+        ulong memorySize,
+        ulong fileOffset,
+        ReadOnlySpan<byte> fileData,
+        ProgramHeaderFlags protection,
+        bool deferFinalProtection,
+        bool preserveDemandZeroPages)
+    {
         if (memorySize == 0)
             throw new ArgumentOutOfRangeException(nameof(memorySize));
 
@@ -1172,10 +1300,29 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
         try
         {
             var existingRegion = FindRegion(mapStart, mapSize);
+            var sparseParent = existingRegion is { IsReservedOnly: true };
+            List<(ulong Start, ulong End)>? committedZeroRanges = null;
+
             if (existingRegion == null)
             {
                 var isExecutable = (protection & ProgramHeaderFlags.Execute) != 0;
                 AllocateAt(mapStart, mapSize, isExecutable, allowAlternative: false);
+                existingRegion = FindRegion(mapStart, mapSize);
+            }
+            else if (sparseParent)
+            {
+                if (preserveDemandZeroPages)
+                {
+                    var zeroStart = checked(virtualAddress + (ulong)fileData.Length);
+                    var zeroSize = memorySize - (ulong)fileData.Length;
+                    committedZeroRanges = CaptureCommittedRanges(zeroStart, zeroSize);
+                }
+
+                if (!EnsureRangeCommitted(mapStart, mapSize, existingRegion))
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to commit loader segment at 0x{mapStart:X16} (size=0x{mapSize:X}).");
+                }
             }
 
             var stageProtection = (protection & ProgramHeaderFlags.Execute) != 0
@@ -1195,16 +1342,96 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
             var zeroFillSize = memorySize - (ulong)fileData.Length;
             if (zeroFillSize != 0)
             {
-                NativeMemory.Clear((void*)(virtualAddress + (ulong)fileData.Length), (nuint)zeroFillSize);
+                var zeroStart = checked(virtualAddress + (ulong)fileData.Length);
+                if (sparseParent && preserveDemandZeroPages)
+                {
+                    // MEM_COMMIT pages are demand-zero. Do not touch every BSS
+                    // page just to write zeros the OS already guarantees. Only
+                    // clear subranges that were committed before this segment
+                    // (typically a shared/overlapping boundary page).
+                    ClearCommittedRanges(
+                        zeroStart,
+                        checked(zeroStart + zeroFillSize),
+                        committedZeroRanges);
+                }
+                else
+                {
+                    NativeMemory.Clear((void*)zeroStart, (nuint)zeroFillSize);
+                }
             }
 
-            ApplySegmentProtection(mapStart, mapEnd, protection);
+            if (!deferFinalProtection)
+            {
+                ApplySegmentProtection(mapStart, mapEnd, protection);
+            }
 
-            TraceVmem($"Mapped segment: 0x{virtualAddress:X16} - 0x{virtualAddress + memorySize:X16} (file: {fileData.Length} bytes, prot: {protection})");
+            TraceVmem(
+                $"Mapped segment: 0x{virtualAddress:X16} - 0x{virtualAddress + memorySize:X16} " +
+                $"(file: {fileData.Length} bytes, prot: {protection}, staged={deferFinalProtection}, sparse={sparseParent})");
         }
         finally
         {
             _gate.ExitWriteLock();
+        }
+    }
+
+    private List<(ulong Start, ulong End)>? CaptureCommittedRanges(ulong address, ulong size)
+    {
+        if (size == 0)
+        {
+            return null;
+        }
+
+        var end = checked(address + size);
+        var cursor = address;
+        List<(ulong Start, ulong End)>? ranges = null;
+
+        while (cursor < end)
+        {
+            if (!_hostMemory.Query(cursor, out var info))
+            {
+                break;
+            }
+
+            var infoEnd = info.RegionSize > ulong.MaxValue - info.BaseAddress
+                ? ulong.MaxValue
+                : info.BaseAddress + info.RegionSize;
+            var rangeEnd = Math.Min(end, infoEnd);
+            if (rangeEnd <= cursor)
+            {
+                break;
+            }
+
+            if (info.State == HostRegionState.Committed)
+            {
+                (ranges ??= new List<(ulong Start, ulong End)>())
+                    .Add((cursor, rangeEnd));
+            }
+
+            cursor = rangeEnd;
+        }
+
+        return ranges;
+    }
+
+    private static void ClearCommittedRanges(
+        ulong zeroStart,
+        ulong zeroEnd,
+        List<(ulong Start, ulong End)>? committedRanges)
+    {
+        if (committedRanges is null)
+        {
+            return;
+        }
+
+        foreach (var range in committedRanges)
+        {
+            var start = Math.Max(zeroStart, range.Start);
+            var end = Math.Min(zeroEnd, range.End);
+            if (end > start)
+            {
+                NativeMemory.Clear((void*)start, (nuint)(end - start));
+            }
         }
     }
 

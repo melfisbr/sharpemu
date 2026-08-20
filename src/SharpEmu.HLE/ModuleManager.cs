@@ -14,6 +14,7 @@ public sealed class ModuleManager : IModuleManager
     private readonly ConcurrentDictionary<string, ExportedFunction> _exportNameTable = new(StringComparer.Ordinal);
     private readonly object _registrationGate = new();
     private readonly HashSet<Assembly> _warmupAssemblies = new();
+    private readonly HashSet<Type> _warmupTypes = new();
     private bool _isFrozen;
 
     public int RegisterExports(IReadOnlyList<ExportedFunction> exports)
@@ -41,6 +42,10 @@ public sealed class ModuleManager : IModuleManager
                 // The warm sweep in Freeze() covers every assembly that contributed a
                 // handler (generated thunks resolve to their home assembly too).
                 _warmupAssemblies.Add(export.Function.Method.Module.Assembly);
+                if (export.Function.Method.DeclaringType is { } declaringType)
+                {
+                    _warmupTypes.Add(declaringType);
+                }
                 registeredCount++;
             }
 
@@ -58,42 +63,54 @@ public sealed class ModuleManager : IModuleManager
         WarmHleTypeInitializers();
     }
 
-    // A .cctor or first JIT running on a guest thread's hijacked stack fail-fasts the CLR.
-    // Run every HLE type's initializer and JIT its methods here first, on a host thread.
+    // A .cctor or first JIT running on a guest thread's hijacked stack can fail-fast the CLR.
+    // SHARPEMU_DEMAND_DRIVEN_HLE_JIT_V1_8_23
+    // Keep class initialization host-side; method JIT is prepared from the exact
+    // import table by DirectExecutionBackend.SetupImportStubs. The previous broad
+    // sweep remains available with SHARPEMU_HLE_FULL_JIT_WARMUP=1.
     private void WarmHleTypeInitializers()
     {
+        var warmupStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var fullMethodWarmup = string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_HLE_FULL_JIT_WARMUP"),
+            "1",
+            StringComparison.Ordinal);
+        var broadTypeWarmup = fullMethodWarmup ||
+            string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_HLE_BROAD_TYPE_WARMUP"),
+                "1",
+                StringComparison.Ordinal);
+
+        Type[] targetedTypes;
         Assembly[] assemblies;
         lock (_registrationGate)
         {
+            targetedTypes = _warmupTypes.ToArray();
             assemblies = new Assembly[_warmupAssemblies.Count];
             _warmupAssemblies.CopyTo(assemblies);
         }
-
-        assemblies = WithGuestReachableDependencies(assemblies);
-        var bclWarmed = WarmFrameworkTypeInitializers();
 
         var warmed = 0;
         var failed = 0;
         var jitted = 0;
         var jitFailed = 0;
-        foreach (var assembly in assemblies)
+        var bclWarmed = 0;
+        var scannedAssemblies = 0;
+        const BindingFlags allMembers = BindingFlags.Public | BindingFlags.NonPublic |
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+        if (!broadTypeWarmup)
         {
-            Type[] types;
-            try
+            // SHARPEMU_V74_0_56_32_HLE_TARGETED_TYPE_WARMUP
+            //
+            // Freeze() used to enumerate every type in every SharpEmu/Silk
+            // assembly and every loaded System.* assembly before the eboot was
+            // even parsed. That startup tax is unrelated to the current title.
+            // Warm only classes that actually declare registered HLE exports;
+            // import-specific method JIT remains in SetupImportStubs.
+            foreach (var type in targetedTypes)
             {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                types = ex.Types.Where(t => t is not null).ToArray()!;
-            }
-
-            const BindingFlags allMembers = BindingFlags.Public | BindingFlags.NonPublic |
-                BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
-
-            foreach (var type in types)
-            {
-                if (type is null || type.ContainsGenericParameters)
+                if (type.ContainsGenericParameters)
                 {
                     continue;
                 }
@@ -105,45 +122,94 @@ public sealed class ModuleManager : IModuleManager
                 }
                 catch
                 {
-                    // A throw here beats a guest-thread fail-fast later; swallow and continue.
                     failed++;
                 }
+            }
+        }
+        else
+        {
+            assemblies = WithGuestReachableDependencies(assemblies);
+            scannedAssemblies = assemblies.Length;
+            bclWarmed = WarmFrameworkTypeInitializers();
 
-                // Force-JIT (not execute) every method so no guest thread compiles one first.
-                MethodBase[] members;
+            foreach (var assembly in assemblies)
+            {
+                Type[] types;
                 try
                 {
-                    members = type.GetConstructors(allMembers)
-                        .Concat<MethodBase>(type.GetMethods(allMembers))
-                        .ToArray();
+                    types = assembly.GetTypes();
                 }
-                catch
+                catch (ReflectionTypeLoadException ex)
                 {
-                    continue;
+                    types = ex.Types.Where(t => t is not null).ToArray()!;
                 }
 
-                foreach (var member in members)
+                foreach (var type in types)
                 {
-                    if (member.ContainsGenericParameters || member.IsAbstract || member.MethodImplementationFlags.HasFlag(MethodImplAttributes.InternalCall))
+                    if (type is null || type.ContainsGenericParameters)
                     {
                         continue;
                     }
 
                     try
                     {
-                        RuntimeHelpers.PrepareMethod(member.MethodHandle);
-                        jitted++;
+                        RuntimeHelpers.RunClassConstructor(type.TypeHandle);
+                        warmed++;
                     }
                     catch
                     {
-                        jitFailed++;
+                        failed++;
+                    }
+
+                    if (!fullMethodWarmup)
+                    {
+                        continue;
+                    }
+
+                    MethodBase[] members;
+                    try
+                    {
+                        members = type.GetConstructors(allMembers)
+                            .Concat<MethodBase>(type.GetMethods(allMembers))
+                            .ToArray();
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    foreach (var member in members)
+                    {
+                        if (member.ContainsGenericParameters || member.IsAbstract ||
+                            member.MethodImplementationFlags.HasFlag(MethodImplAttributes.InternalCall))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            RuntimeHelpers.PrepareMethod(member.MethodHandle);
+                            jitted++;
+                        }
+                        catch
+                        {
+                            jitFailed++;
+                        }
                     }
                 }
             }
         }
 
+        var elapsedMs =
+            System.Diagnostics.Stopwatch.GetElapsedTime(warmupStarted).TotalMilliseconds;
+        var mode = broadTypeWarmup
+            ? (fullMethodWarmup ? "broad-full-jit" : "broad-types")
+            : "registered-export-types";
         Console.Error.WriteLine(
-            $"[HLE] Warmed {warmed} type initializers ({failed} threw) + JIT-compiled {jitted} methods ({jitFailed} skipped) across {assemblies.Length} HLE assemblies, plus {bclWarmed} framework type initializers.");
+            $"[HLE][V74.0.56.32] warmup_mode={mode} elapsed_ms={elapsedMs:F1} " +
+            $"types={warmed} type_failures={failed} full_jit_methods={jitted} " +
+            $"jit_failures={jitFailed} targeted_types={targetedTypes.Length} " +
+            $"assemblies={scannedAssemblies} framework_types={bclWarmed}");
     }
 
     // Framework .cctors too (but not JIT — the BCL is too large).

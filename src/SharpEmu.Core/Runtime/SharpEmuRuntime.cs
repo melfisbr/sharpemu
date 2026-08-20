@@ -133,6 +133,7 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
     {
         var normalizedEbootPath = Path.GetFullPath(ebootPath);
         using var app0Binding = BindApp0Root(normalizedEbootPath);
+        var runtimePerfStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         Console.Error.WriteLine($"[RUNTIME] Loading: {ebootPath}");
         LastExecutionDiagnostics = null;
         LastExecutionTrace = null;
@@ -142,7 +143,9 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
         FiberExports.ResetRuntimeState();
         KernelModuleRegistry.Reset();
         ImportSymbolProvenance.Reset();
+        var mainImageLoadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var image = LoadImage(normalizedEbootPath);
+        var mainImageLoadMs = System.Diagnostics.Stopwatch.GetElapsedTime(mainImageLoadStarted).TotalMilliseconds;
         VideoOutExports.ConfigureApplicationInfo(image.Title, image.TitleId, image.Version);
         KernelMemoryCompatExports.ConfigureApplicationInfo(image.TitleId);
         SaveDataExports.ConfigureApplicationInfo(image.TitleId);
@@ -161,8 +164,15 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
 
         HleDataSymbols.ConfigureProcessImageName(processImageName);
         MergeKnownHleDataSymbols(activeRuntimeSymbols);
+        var moduleLoadStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var loadedModuleImages = LoadAdjacentSceModules(ebootPath, activeImportStubs, activeRuntimeSymbols);
+        var moduleLoadMs = System.Diagnostics.Stopwatch.GetElapsedTime(moduleLoadStarted).TotalMilliseconds;
+
+        var rebindStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         RebindImportedDataSymbols(image, loadedModuleImages, activeRuntimeSymbols);
+        var rebindMs = System.Diagnostics.Stopwatch.GetElapsedTime(rebindStarted).TotalMilliseconds;
+
+        var initializerStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var initializerResult = RunAllInitializers(
             image,
             loadedModuleImages,
@@ -170,6 +180,15 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
             activeImportStubs,
             activeRuntimeSymbols,
             processImageName);
+        var initializerMs = System.Diagnostics.Stopwatch.GetElapsedTime(initializerStarted).TotalMilliseconds;
+        var preDispatchMs = System.Diagnostics.Stopwatch.GetElapsedTime(runtimePerfStarted).TotalMilliseconds;
+        Console.Error.WriteLine(
+            $"[RUNTIME][PERF][V74.0.56.32] main_image_ms={mainImageLoadMs:F1} " +
+            $"modules_ms={moduleLoadMs:F1} rebind_ms={rebindMs:F1} " +
+            $"initializers_ms={initializerMs:F1} pre_dispatch_ms={preDispatchMs:F1} " +
+            $"modules={loadedModuleImages.Count} imports={activeImportStubs.Count} " +
+            $"symbols={activeRuntimeSymbols.Count}");
+
         if (initializerResult is { } failedInitializerResult)
         {
             Console.Error.WriteLine($"[RUNTIME] Initializer dispatch failed: {failedInitializerResult}");

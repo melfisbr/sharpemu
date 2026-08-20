@@ -1,0 +1,13 @@
+V74.0.88.6.1
+- Fixed precheck PowerShell booleans: True -> $true.
+- Fixed diagnostic parser failure by evaluating IndexOf positions in variables.
+- RUN_1 now explicitly blocks both V88.6 regressions.
+- Structural source target remains DirectExecutionBackend*.cs.
+- Current observed target file: DirectExecutionBackend.Exceptions.cs.
+- Current observed pre-apply SHA256:
+  F4C12523911BD7779258E2723B465AD69CC00DC061B70CAA25FA740C72CFBC5F
+- Host qword read requires MEM_COMMIT, readable page protection, no
+  PAGE_NOACCESS/PAGE_GUARD, and complete 8-byte region bounds.
+- Does not skip guest RIP=0.
+- Does not change VectoredHandler policy.
+- SAFE backup/rollback preserved.

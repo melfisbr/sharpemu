@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System;
@@ -9,12 +9,14 @@ using System.Threading;
 using System.Runtime.InteropServices;
 using System.Text;
 
+using SharpEmu.Libs.VideoOut;
+
 namespace SharpEmu.Libs.Media;
 
 /// <summary>
 /// Host-facing API for RAD playback presentation.
 ///
-/// V72.4.3.2.31.7.7 keeps the proven PID/HWND embedding, hard-gate-compatible transition, and adds a shared RAD playback-anchor callback.  The callback runs while the child HWND is still hidden and immediately before the first visible RAD frame.  This lets an external sidecar audio stream start from the same host media-clock anchor instead of being started after ShowWindow.  It is a bridge for host-injected boot movies; final guest-driven timing should be sourced from the title's own movie/audio calls. the RAD child remains hidden through initialization, is revealed at the playback anchor, is hidden shortly before the nominal BK2 boundary, and the renderer is killed exactly at the nominal boundary.  This prevents the BinkPlay post-roll logo from ever becoming a SharpEmu frame while preserving all but the last few fade frames.
+/// V72.4.3.2.31.7.10 keeps the proven PID/HWND embedding, hard-gate-compatible transition and shared playback-anchor callback, and adds a host-side player interaction lock. The embedded RAD renderer is shown without activation, its HWND/input descendants are disabled, standard seek/control child HWNDs are hidden, and a small configurable bottom strip is clipped outside the SharpEmu client area so the RAD player cannot pause, seek, or alter movie sequencing from mouse/keyboard interaction.  The callback runs while the child HWND is still hidden and immediately before the first visible RAD frame.  This lets an external sidecar audio stream start from the same host media-clock anchor instead of being started after ShowWindow.  It is a bridge for host-injected boot movies; final guest-driven timing should be sourced from the title's own movie/audio calls. the RAD child remains hidden through initialization, is revealed at the playback anchor, is hidden shortly before the nominal BK2 boundary, and the renderer is killed exactly at the nominal boundary.  This prevents the BinkPlay post-roll logo from ever becoming a SharpEmu frame while preserving all but the last few fade frames.
 ///
 /// The attach path still removes every GetWindowText/GetWindowTextLength call from
 /// the attach path.  The V31.7.3 result stopped immediately after
@@ -42,7 +44,9 @@ internal interface IRadBinkHostApi : IDisposable
 
 internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
 {
+    // V31.7.10_RAD_PLAYER_LOCK
     private const int GwlStyle = -16;
+    private const int GwlExStyle = -20;
     private const long WsChild = 0x40000000L;
     private const long WsVisible = 0x10000000L;
     private const long WsPopup = unchecked((long)0x80000000L);
@@ -51,11 +55,12 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
     private const long WsSysMenu = 0x00080000L;
     private const long WsMinimizeBox = 0x00020000L;
     private const long WsMaximizeBox = 0x00010000L;
+    private const long WsExNoActivate = 0x08000000L;
 
     private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
     private const int SwHide = 0;
-    private const int SwShow = 5;
+    private const int SwShowNoActivate = 4;
 
     private static readonly nint HwndTop = 0;
 
@@ -65,6 +70,13 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
     private readonly Timer _resizeTimer;
     private readonly Timer _visualCutoffTimer;
     private readonly Timer _nominalEndTimer;
+    // SHARPEMU_RAD_ATTRACT_POSTROLL_FENCE_V1_1_12
+    private readonly Timer _v1112PostrollFenceTimer;
+    private readonly string _v1112MoviePath;
+    private readonly bool _v1112IsAttractMovie;
+    private readonly int _v1112PostrollFenceDurationMilliseconds;
+    private long _v1112PostrollFenceUntilTick;
+    private int _v1112PostrollFenceActive;
     private readonly Stopwatch _lifetime = Stopwatch.StartNew();
     private readonly double _nominalDurationMilliseconds;
     private readonly double _preRevealElapsedMilliseconds;
@@ -83,6 +95,7 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         nint playerWindow,
         double windowReadyMilliseconds,
         double playbackAnchorMilliseconds,
+        string moviePath,
         double nominalDurationMilliseconds)
     {
         _launcherProcess = launcherProcess;
@@ -94,6 +107,12 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         WindowReadyMilliseconds = windowReadyMilliseconds;
         PlaybackAnchorMilliseconds = playbackAnchorMilliseconds;
         _nominalDurationMilliseconds = nominalDurationMilliseconds;
+        _v1112MoviePath = moviePath;
+        _v1112IsAttractMovie =
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase);
         // V31.7.4 started the nominal timer only after the playback anchor, even
         // though BinkPlay had already been alive/rendering while its child HWND
         // was hidden.  Subtract that pre-reveal interval so the boundary follows
@@ -101,11 +120,23 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         _preRevealElapsedMilliseconds = Math.Max(
             0.0,
             playbackAnchorMilliseconds - windowReadyMilliseconds);
-        _visualCutoffLeadMilliseconds = ResolveIntEnvironment(
-            "SHARPEMU_RAD_VISUAL_CUTOFF_LEAD_MS",
-            defaultValue: 120,
-            minimum: 0,
-            maximum: 750);
+        _visualCutoffLeadMilliseconds = _v1112IsAttractMovie
+            ? ResolveIntEnvironment(
+                "SHARPEMU_RAD_ATTRACT_POSTROLL_FENCE_LEAD_MS",
+                defaultValue: 350,
+                minimum: 120,
+                maximum: 1_500)
+            : ResolveIntEnvironment(
+                "SHARPEMU_RAD_VISUAL_CUTOFF_LEAD_MS",
+                defaultValue: 120,
+                minimum: 0,
+                maximum: 750);
+        _v1112PostrollFenceDurationMilliseconds =
+            ResolveIntEnvironment(
+                "SHARPEMU_RAD_ATTRACT_POSTROLL_FENCE_MS",
+                defaultValue: 1_200,
+                minimum: 250,
+                maximum: 3_000);
         _nominalEndGraceMilliseconds = ResolveIntEnvironment(
             "SHARPEMU_RAD_NOMINAL_END_GRACE_MS",
             defaultValue: 0,
@@ -125,6 +156,17 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
             dueTime: 250,
             period: 250);
 
+        _v1112PostrollFenceTimer = new Timer(
+            static state =>
+            {
+                if (state is RadBinkEmbeddedHostApiV724323171 host)
+                {
+                    host.EnforceAttractPostrollHiddenV1112();
+                }
+            },
+            this,
+            dueTime: Timeout.Infinite,
+            period: Timeout.Infinite);
         var visualCutoffDue = nominalDurationMilliseconds > 0
             ? (int)Math.Clamp(
                 Math.Ceiling(Math.Max(1.0,
@@ -320,6 +362,36 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         Process? rendererProcess = null;
         nint playerWindow = 0;
         var lastProgressLog = -500L;
+        // V31.7.17_RENDERER_TIMELINE_ZERO_AUDIO_SYNC
+        // The nominal-end code already models BK2 timeline zero as the instant
+        // the renderer HWND exists: it subtracts (playbackAnchor-windowReady).
+        // Start the external Demon's Souls sidecar from that same clock.
+        var beforeRevealInvokedAtRendererTimelineZero = false;
+        // V31.7.20.7_PLAYBACK_ANCHOR_IMMEDIATE
+        // The previous sidecar callback was still executed only after RAD
+        // attach/reparent work. Keep a separate latch so the exact WaveOut
+        // callback can run immediately after WaitForPlaybackAnchor().
+        var beforeRevealInvokedAtPlaybackAnchorImmediate = false;
+        var rendererTimelineZeroMs = double.NaN;
+        // SHARPEMU_DEMONS_ATTRACT_AUDIO_REVEAL_SYNC_V1_1_6
+        // The observed build starts external attract audio while the RAD child
+        // is still hidden. Keep the prepared callback, but make every legacy
+        // pre-reveal branch see null. The callback is invoked only after
+        // ShowWindow below.
+        var v116AttractAudioRevealCallback = beforeReveal;
+        var v116DeferAttractAudioToReveal =
+            beforeReveal is not null &&
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase) &&
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_RAD_ATTRACT_AUDIO_REVEAL_SYNC") != "0";
+
+        if (v116DeferAttractAudioToReveal)
+        {
+            beforeReveal = null;
+        }
 
         while (stopwatch.ElapsedMilliseconds < timeoutMs)
         {
@@ -348,6 +420,16 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
                 {
                     rendererProcess = foundProcess;
                     playerWindow = foundWindow;
+                    // V31.7.20_PREPARENT_HIDE
+                    // Belt-and-suspenders: startup creation is hidden, and the
+                    // first discovered HWND is hidden again before any style or
+                    // SetParent operation. It is only shown after parent verify.
+                    _ = ShowWindow(playerWindow, SwHide);
+                    Console.Error.WriteLine(
+                        "[LOADER][INFO] bink2.rad_preparent_hidden " +
+                        $"file='{Path.GetFileName(moviePath)}' " +
+                        $"player_hwnd=0x{playerWindow.ToInt64():X} " +
+                        "visible_before_parent=False");
 
                     Console.Error.WriteLine(
                         "[LOADER][INFO] bink2.rad_renderer_window_ready " +
@@ -355,6 +437,47 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
                         $"renderer_pid={rendererProcess.Id} " +
                         $"player_hwnd=0x{playerWindow.ToInt64():X} " +
                         $"elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:F1}");
+                    // V31.7.17: EBOOT StartIntro and the host's own nominal
+                    // timer both use the movie timeline, not the later
+                    // CPU-activity probe.  For attract only, fire the already
+                    // prepared sample-exact WAV as soon as the RAD renderer
+                    // HWND proves the movie timeline exists.
+                    if (beforeReveal is not null &&
+                        string.Equals(
+                            Path.GetFileName(moviePath),
+                            "attract_movie.bk2",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(
+                            Environment.GetEnvironmentVariable(
+                                "SHARPEMU_RAD_ATTRACT_AUDIO_RENDERER_TIMELINE_ZERO_LEGACY"),
+                            "1",
+                            StringComparison.Ordinal) /* V31.7.20.5_PLAYBACK_ANCHOR_SIDECAR_OPTIN_EARLY */)
+                    {
+                        rendererTimelineZeroMs =
+                            stopwatch.Elapsed.TotalMilliseconds;
+
+                        try
+                        {
+                            beforeReveal(rendererTimelineZeroMs);
+                            beforeRevealInvokedAtRendererTimelineZero = true;
+
+                            Console.Error.WriteLine(
+                                "[LOADER][INFO] bink2.rad_attract_audio_renderer_timeline_zero " +
+                                $"file='attract_movie.bk2' " +
+                                $"timeline_zero_ms={rendererTimelineZeroMs:F1} " +
+                                "source=rad-renderer-window-ready " +
+                                "eboot_state=StartIntro/MusicSkipIntro " +
+                                "wav=sample-exact");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine(
+                                "[LOADER][ERROR] bink2.rad_attract_audio_renderer_timeline_zero_failed " +
+                                $"file='attract_movie.bk2' type={ex.GetType().Name} " +
+                                $"message='{Sanitize(ex.Message)}'");
+                            return false;
+                        }
+                    }
                 }
             }
 
@@ -415,7 +538,9 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
                    WsSysMenu |
                    WsMinimizeBox |
                    WsMaximizeBox);
-        style |= WsChild | WsVisible;
+        // V31.7.20_HIDDEN_UNTIL_PARENTED
+        style |= WsChild;
+        style &= ~WsVisible;
 
         Marshal.SetLastPInvokeError(0);
         _ = SetWindowLongPtr(
@@ -467,35 +592,297 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         // the playback anchor and hide again at the nominal BK2 boundary.
         var windowReadyMs = stopwatch.Elapsed.TotalMilliseconds;
         var anchorMs = WaitForPlaybackAnchor(rendererProcess, stopwatch);
+        // V31.7.20.9_DYNAMIC_VIDEO_TIMELINE_CURSOR
+        // V20.8 proved sub-millisecond event -> WaveOut restart latency, but
+        // starting local audio cursor 0 still mismatched. Publish anchorMs
+        // through a named memory map before releasing the helper so it can
+        // begin at the same inferred hidden-video cursor.
+        var prearmedAudioEventName =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_PREARMED_AUDIO_EVENT");
+        var prearmedAudioTimelineMapName =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_PREARMED_AUDIO_TIMELINE_MAP");
+        if (v116DeferAttractAudioToReveal)
+        {
+            prearmedAudioEventName = null;
+            prearmedAudioTimelineMapName = null;
+
+            Console.Error.WriteLine(
+                "[BINK-ATTRACT-SYNC][V1.1.6] pre_reveal_audio_paths_disabled " +
+                "renderer_timeline_zero=True playback_anchor=True " +
+                "prearmed_event=True preroll=True " +
+                "target=renderer-show");
+        }
+
+        if (!string.IsNullOrWhiteSpace(prearmedAudioEventName) &&
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var signalTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            var mapWritten = false;
+            var signaled = false;
+            var signalError = string.Empty;
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(prearmedAudioTimelineMapName))
+                {
+                    using var timelineMap =
+                        System.IO.MemoryMappedFiles.MemoryMappedFile.OpenExisting(
+                            prearmedAudioTimelineMapName);
+                    using var timelineView =
+                        timelineMap.CreateViewAccessor(0, 64);
+
+                    timelineView.Write(0, anchorMs);
+                    timelineView.Write(8, signalTicks);
+                    timelineView.Write(
+                        16,
+                        System.Diagnostics.Stopwatch.Frequency);
+                    timelineView.Flush();
+                    mapWritten = true;
+                }
+
+                using var prearmedAudioEvent =
+                    System.Threading.EventWaitHandle.OpenExisting(
+                        prearmedAudioEventName);
+                signaled = prearmedAudioEvent.Set();
+            }
+            catch (Exception ex)
+            {
+                signalError =
+                    ex.GetType().Name + ":" + Sanitize(ex.Message);
+            }
+
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.v317209_dynamic_timeline_signal " +
+                $"file='attract_movie.bk2' " +
+                $"anchor_ms={anchorMs:F3} mono_ticks={signalTicks} " +
+                $"freq={System.Diagnostics.Stopwatch.Frequency} " +
+                $"event='{Sanitize(prearmedAudioEventName)}' " +
+                $"timeline_map='{Sanitize(prearmedAudioTimelineMapName ?? string.Empty)}' " +
+                $"map_written={mapWritten} signaled={signaled} " +
+                $"cursor_policy=anchor-ms-as-hidden-video-position " +
+                $"error='{signalError}'");
+
+            if (!signaled ||
+                (!string.IsNullOrWhiteSpace(prearmedAudioTimelineMapName) &&
+                 !mapWritten))
+            {
+                return false;
+            }
+        }
+        // V31.7.20.7: start the already-prepared V20.4 WaveOut program at
+        // the first measured RAD playback anchor. Do this BEFORE the child
+        // window is resized/reparented/locked/revealed so hidden RAD video
+        // time and audio time advance together.
+        if (beforeReveal is not null &&
+            !beforeRevealInvokedAtRendererTimelineZero &&
+            string.IsNullOrWhiteSpace(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_PREARMED_AUDIO_EVENT")) &&
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase) &&
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_RAD_ATTRACT_AUDIO_PLAYBACK_ANCHOR_IMMEDIATE") != "0")
+        {
+            var immediateInvokeMs = stopwatch.Elapsed.TotalMilliseconds;
+            try
+            {
+                beforeReveal(anchorMs);
+                beforeRevealInvokedAtPlaybackAnchorImmediate = true;
+                var immediateDoneMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.v317207_audio_anchor_immediate " +
+                    $"file='attract_movie.bk2' " +
+                    $"anchor_ms={anchorMs:F1} " +
+                    $"callback_invoke_ms={immediateInvokeMs:F1} " +
+                    $"invoke_delay_ms={Math.Max(0.0, immediateInvokeMs - anchorMs):F1} " +
+                    $"callback_done_ms={immediateDoneMs:F1} " +
+                    $"callback_cost_ms={Math.Max(0.0, immediateDoneMs - immediateInvokeMs):F1} " +
+                    "clock=rad-playback-anchor");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    "[LOADER][ERROR] bink2.v317207_audio_anchor_immediate_failed " +
+                    $"file='attract_movie.bk2' type={ex.GetType().Name} " +
+                    $"message='{Sanitize(ex.Message)}'");
+                return false;
+            }
+        }
+        if (beforeRevealInvokedAtRendererTimelineZero)
+        {
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.rad_attract_audio_old_anchor_delta " +
+                $"file='attract_movie.bk2' " +
+                $"renderer_timeline_zero_ms={rendererTimelineZeroMs:F1} " +
+                $"old_playback_anchor_ms={anchorMs:F1} " +
+                $"audio_advanced_vs_old_anchor_ms={Math.Max(0.0, anchorMs - rendererTimelineZeroMs):F1} " +
+                "old_anchor=renderer-cpu-delta-8ms " +
+                "new_anchor=renderer-window-ready");
+        }
 
         // V31.7.7: synchronize sidecar audio to the same RAD playback anchor
         // while the child HWND is still hidden.  Starting audio after ShowWindow
         // added an avoidable host-side lag even when both streams ran at 1.0000x.
-        if (beforeReveal is not null)
+        if (beforeReveal is not null &&
+            !beforeRevealInvokedAtRendererTimelineZero &&
+            !beforeRevealInvokedAtPlaybackAnchorImmediate)
         {
             try
             {
                 beforeReveal(anchorMs);
                 Console.Error.WriteLine(
-                    "[LOADER][INFO] bink2.rad_before_reveal_callback " +
+                    "[LOADER][INFO] bink2.rad_before_reveal_audio_arm " +
                     $"file='{Path.GetFileName(moviePath)}' anchor_ms={anchorMs:F1} success=True");
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine(
-                    "[LOADER][ERROR] bink2.rad_before_reveal_callback_failed " +
+                    "[LOADER][ERROR] bink2.rad_before_reveal_audio_arm_failed " +
                     $"file='{Path.GetFileName(moviePath)}' type={ex.GetType().Name} " +
                     $"message='{Sanitize(ex.Message)}'");
                 return false;
             }
         }
 
-        _ = ShowWindow(playerWindow, SwShow);
+        // V31.7.25_VISIBLE_FRAME_AUDIO_LATCH_STRUCTURAL_ADAPT
+        // WaveOut is fully prepared but paused while the embedded RAD child is
+        // hidden. The playback cursor remains exactly at zero until ShowWindow.
+        if (beforeReveal is not null &&
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.rad_attract_audio_preroll " +
+                "file='attract_movie.bk2' audio_head_start_ms=0 " +
+                "audio_cursor_reached=True audio_progress_ms=0.0 " +
+                $"audio_cursor_wall_wait_ms=0.0 anchor_ms={anchorMs:F1} " +
+                $"reveal_elapsed_ms={stopwatch.Elapsed.TotalMilliseconds:F1} " +
+                "tempo=1.0000 offset_s=12.000 strategy=visible-frame-audio-latch");
+        }
+        if (!ApplyPlayerInteractionLock(playerWindow, moviePath))
+        {
+            return false;
+        }
+
+        var revealCallMs = stopwatch.Elapsed.TotalMilliseconds;
+        _ = ShowWindow(playerWindow, SwShowNoActivate);
+        if (v116DeferAttractAudioToReveal &&
+            v116AttractAudioRevealCallback is not null)
+        {
+            var v116RevealAudioInvokeMs =
+                stopwatch.Elapsed.TotalMilliseconds;
+
+            try
+            {
+                v116AttractAudioRevealCallback(
+                    v116RevealAudioInvokeMs);
+                // SHARPEMU_DEMONS_ATTRACT_DIRECT_RAD_WAVEOUT_RELEASE_V1_1_9
+                // At this exact point V31.7.21 has already logged
+                // state=paused-prepared.  Release the WinMM device here rather
+                // than waiting for a Vulkan-visible-frame path that a RAD child
+                // window never enters.
+                var v119Released =
+                    BinkDeterministicWavePlayerV317152.
+                        TryReleasePreparedAfterRadCallbackV119(
+                            out var v119ReleaseDetail);
+
+                Console.Error.WriteLine(
+                    "[BINK-ATTRACT-SYNC][V1.1.9] direct_rad_waveout_release " +
+                    "file='attract_movie.bk2' " +
+                    $"released={v119Released} " +
+                    $"detail='{v119ReleaseDetail}' " +
+                    "source=v116-post-showwindow-callback");
+
+                if (v119Released)
+                {
+                    _ = System.Threading.Tasks.Task.Run(
+                        async () =>
+                        {
+                            await System.Threading.Tasks.Task.Delay(120).
+                                ConfigureAwait(false);
+
+                            var v119CursorOk =
+                                BinkDeterministicWavePlayerV317152.
+                                    TryGetProgressMilliseconds(
+                                        out var v119CursorMs);
+
+                            Console.Error.WriteLine(
+                                "[BINK-ATTRACT-SYNC][V1.1.9] waveout_cursor_probe " +
+                                "file='attract_movie.bk2' " +
+                                $"ok={v119CursorOk} " +
+                                $"cursor_ms={v119CursorMs:F3} " +
+                                "probe_delay_ms=120");
+                        });
+                }
+
+                var v116RevealAudioDoneMs =
+                    stopwatch.Elapsed.TotalMilliseconds;
+
+                Console.Error.WriteLine(
+                    "[BINK-ATTRACT-SYNC][V1.1.6] audio_started_at_renderer_reveal " +
+                    $"file='attract_movie.bk2' " +
+                    $"show_ms={v116RevealAudioInvokeMs:F1} " +
+                    $"old_hidden_anchor_ms={anchorMs:F1} " +
+                    $"hidden_lead_removed_ms={Math.Max(0.0, v116RevealAudioInvokeMs - anchorMs):F1} " +
+                    $"callback_cost_ms={Math.Max(0.0, v116RevealAudioDoneMs - v116RevealAudioInvokeMs):F1} " +
+                    "sync_source=renderer-show audio_preroll_ms=0");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    "[BINK-ATTRACT-SYNC][V1.1.6] audio_start_at_reveal_failed " +
+                    $"type={ex.GetType().Name} " +
+                    $"message='{Sanitize(ex.Message)}'");
+                return false;
+            }
+        }
+
+        if (beforeReveal is not null &&
+            string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var releaseBeginMs = stopwatch.Elapsed.TotalMilliseconds;
+            var released = BinkDemonSoulsIntroAudioV7243227
+                .NotifyPresentationStarted(moviePath);
+            var releaseDoneMs = stopwatch.Elapsed.TotalMilliseconds;
+
+            Console.Error.WriteLine(
+                "[LOADER][INFO] bink2.rad_attract_audio_visible_frame_release " +
+                "file='attract_movie.bk2' " +
+                $"showwindow_ms={revealCallMs:F1} " +
+                $"release_begin_ms={releaseBeginMs:F1} " +
+                $"release_done_ms={releaseDoneMs:F1} " +
+                $"release_cost_ms={Math.Max(0.0, releaseDoneMs - releaseBeginMs):F3} " +
+                $"released={released} sync_source=post-showwindow-visible-frame");
+        }
+        // SHARPEMU_DEMONS_POST_STUDIOS_COVER_RELEASE_V1_1_4
+        // Release only after the attract HWND is visible. Releasing before
+        // ShowWindow would expose the stale guest Sony frame during RAD attach.
+        if (string.Equals(
+                Path.GetFileName(moviePath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            VulkanVideoPresenter.EndDemonSoulsPostStudiosBlackCoverV114(
+                "attract-renderer-visible");
+        }
 
         Console.Error.WriteLine(
             "[LOADER][INFO] bink2.rad_renderer_revealed " +
             $"file='{Path.GetFileName(moviePath)}' " +
-            $"anchor_ms={anchorMs:F1} initial_logo_suppressed=True");
+            $"anchor_ms={anchorMs:F1} initial_logo_suppressed=True no_activate=True input_locked=True");
 
         hostApi = new RadBinkEmbeddedHostApiV724323171(
             launcherProcess,
@@ -504,6 +891,7 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
             playerWindow,
             windowReadyMs,
             anchorMs,
+            moviePath,
             nominalDurationMilliseconds);
 
         Console.Error.WriteLine(
@@ -575,7 +963,10 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
 
         // First use the exact process that Process.Start returned.  Refresh is
         // required because MainWindowHandle is cached by System.Diagnostics.
-        if (TryGetMainWindow(launcherProcess, out var launcherWindow))
+        if (TryGetMainWindow(launcherProcess, out var launcherWindow) ||
+            TryFindTopLevelWindowByPidV31720(
+                launcherProcess.Id,
+                out launcherWindow))
         {
             rendererProcess = launcherProcess;
             playerWindow = launcherWindow;
@@ -612,8 +1003,10 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         _ = EnumWindows(
             (window, ignored) =>
             {
-                if (windowsBeforeLaunch.Contains(window) ||
-                    !IsWindowVisible(window))
+                // V31.7.20_HIDDEN_WINDOW_DISCOVERY
+                // Startup-hidden RAD windows are intentionally not visible.
+                // PID/executable provenance, not visibility, is the safety gate.
+                if (windowsBeforeLaunch.Contains(window))
                 {
                     return true;
                 }
@@ -667,6 +1060,55 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         }
     }
 
+    // V31.7.20_HIDDEN_WINDOW_DISCOVERY
+    private static bool TryFindTopLevelWindowByPidV31720(
+        int processId,
+        out nint playerWindow)
+    {
+        playerWindow = 0;
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        nint bestWindow = 0;
+        long bestArea = -1;
+
+        _ = EnumWindows(
+            (window, ignored) =>
+            {
+                if (!IsWindow(window))
+                {
+                    return true;
+                }
+
+                _ = GetWindowThreadProcessId(window, out var pid);
+                if (pid != processId)
+                {
+                    return true;
+                }
+
+                long area = 0;
+                if (GetWindowRect(window, out var rect))
+                {
+                    var width = Math.Max(0, rect.Right - rect.Left);
+                    var height = Math.Max(0, rect.Bottom - rect.Top);
+                    area = (long)width * height;
+                }
+
+                if (bestWindow == 0 || area > bestArea)
+                {
+                    bestWindow = window;
+                    bestArea = area;
+                }
+
+                return true;
+            },
+            0);
+
+        playerWindow = bestWindow;
+        return playerWindow != 0;
+    }
     private static bool TryFindNamedRenderer(
         string processName,
         IReadOnlySet<int> radProcessesBeforeLaunch,
@@ -715,7 +1157,10 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
                     continue;
                 }
 
-                if (!TryGetMainWindow(process, out var window))
+                if (!TryGetMainWindow(process, out var window) &&
+                    !TryFindTopLevelWindowByPidV31720(
+                        process.Id,
+                        out window))
                 {
                     continue;
                 }
@@ -936,6 +1381,12 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
 
     private void SyncBounds()
     {
+        if (Volatile.Read(
+                ref _v1112PostrollFenceActive) != 0)
+        {
+            EnforceAttractPostrollHiddenV1112();
+            return;
+        }
         if (_disposed ||
             SafeHasExited(_rendererProcess) ||
             HostWindow == 0 ||
@@ -978,15 +1429,121 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         return ResizeChild(playerWindow, width, height);
     }
 
-    private static bool ResizeChild(nint playerWindow, int width, int height) =>
-        SetWindowPos(
+    private static bool ResizeChild(nint playerWindow, int width, int height)
+    {
+        var clipPixels = ResolveIntEnvironment(
+            "SHARPEMU_RAD_CONTROL_STRIP_CLIP_PX",
+            defaultValue: 24,
+            minimum: 0,
+            maximum: 96);
+
+        // Keep the player's bottom seek/control strip below the SharpEmu child
+        // clipping rectangle.  This is presentation-only; the movie timeline is
+        // still owned by RAD and continues advancing normally.
+        return SetWindowPos(
             playerWindow,
             HwndTop,
             0,
             0,
             width,
-            height,
+            checked(height + clipPixels),
             SwpNoActivate | SwpNoZOrder);
+    }
+
+    private static bool ApplyPlayerInteractionLock(
+        nint playerWindow,
+        string moviePath)
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_RAD_PLAYER_INPUT_LOCK"),
+                "0",
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                "[LOADER][WARN] bink2.rad_player_interaction_lock_disabled " +
+                $"file='{Path.GetFileName(moviePath)}' explicit_override=True");
+            return true;
+        }
+
+        Marshal.SetLastPInvokeError(0);
+        var exStylePtr = GetWindowLongPtr(playerWindow, GwlExStyle);
+        var exStyleError = Marshal.GetLastPInvokeError();
+        if (exStylePtr == 0 && exStyleError != 0)
+        {
+            Console.Error.WriteLine(
+                "[LOADER][ERROR] bink2.rad_player_interaction_lock_failed " +
+                $"file='{Path.GetFileName(moviePath)}' stage=read-exstyle win32={exStyleError}");
+            return false;
+        }
+
+        var exStyle = exStylePtr.ToInt64() | WsExNoActivate;
+        Marshal.SetLastPInvokeError(0);
+        _ = SetWindowLongPtr(playerWindow, GwlExStyle, new IntPtr(exStyle));
+        var setExStyleError = Marshal.GetLastPInvokeError();
+        if (setExStyleError != 0)
+        {
+            Console.Error.WriteLine(
+                "[LOADER][ERROR] bink2.rad_player_interaction_lock_failed " +
+                $"file='{Path.GetFileName(moviePath)}' stage=write-exstyle win32={setExStyleError}");
+            return false;
+        }
+
+        _ = EnableWindow(playerWindow, false);
+
+        var descendantsDisabled = 0;
+        var controlsHidden = 0;
+        _ = EnumChildWindows(
+            playerWindow,
+            (child, ignored) =>
+            {
+                _ = EnableWindow(child, false);
+                descendantsDisabled++;
+
+                var className = GetWindowClass(child);
+                if (IsInteractiveControlClass(className))
+                {
+                    _ = ShowWindow(child, SwHide);
+                    controlsHidden++;
+                }
+
+                return true;
+            },
+            0);
+
+        var inputLocked = !IsWindowEnabled(playerWindow);
+        var clipPixels = ResolveIntEnvironment(
+            "SHARPEMU_RAD_CONTROL_STRIP_CLIP_PX",
+            defaultValue: 24,
+            minimum: 0,
+            maximum: 96);
+
+        Console.Error.WriteLine(
+            "[LOADER][INFO] bink2.rad_player_interaction_locked " +
+            $"file='{Path.GetFileName(moviePath)}' root_enabled={!inputLocked} " +
+            $"descendants_disabled={descendantsDisabled} controls_hidden={controlsHidden} " +
+            $"no_activate=True control_strip_clip_px={clipPixels} " +
+            "mouse_keyboard_player_control=False");
+
+        if (!inputLocked)
+        {
+            Console.Error.WriteLine(
+                "[LOADER][ERROR] bink2.rad_player_interaction_lock_failed " +
+                $"file='{Path.GetFileName(moviePath)}' stage=verify-root-disabled");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsInteractiveControlClass(string className)
+    {
+        return className.Equals("msctls_trackbar32", StringComparison.OrdinalIgnoreCase) ||
+               className.Equals("ScrollBar", StringComparison.OrdinalIgnoreCase) ||
+               className.Equals("ToolbarWindow32", StringComparison.OrdinalIgnoreCase) ||
+               className.Equals("ReBarWindow32", StringComparison.OrdinalIgnoreCase) ||
+               className.Equals("msctls_statusbar32", StringComparison.OrdinalIgnoreCase) ||
+               className.Equals("Button", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void TryPromoteRendererPriority(
         Process rendererProcess,
@@ -1017,6 +1574,111 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         }
     }
 
+    private void ArmAttractPostrollFenceV1112()
+    {
+        if (!_v1112IsAttractMovie ||
+            _disposed ||
+            SafeHasExited(_rendererProcess))
+        {
+            return;
+        }
+
+        var untilTick =
+            checked(
+                Environment.TickCount64 +
+                _v1112PostrollFenceDurationMilliseconds);
+
+        Volatile.Write(
+            ref _v1112PostrollFenceUntilTick,
+            untilTick);
+
+        Interlocked.Exchange(
+            ref _v1112PostrollFenceActive,
+            1);
+
+        EnforceAttractPostrollHiddenV1112();
+
+        try
+        {
+            _ = _v1112PostrollFenceTimer.Change(
+                dueTime: 0,
+                period: 10);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        Console.Error.WriteLine(
+            "[BINK-POSTROLL][V1.1.12] fence_armed " +
+            "file='attract_movie.bk2' " +
+            $"renderer_pid={RendererProcessId} " +
+            $"lead_ms={_visualCutoffLeadMilliseconds} " +
+            $"fence_ms={_v1112PostrollFenceDurationMilliseconds} " +
+            $"until_tick={untilTick} rehide_period_ms=10");
+    }
+
+    private void EnforceAttractPostrollHiddenV1112()
+    {
+        if (_disposed ||
+            Volatile.Read(
+                ref _v1112PostrollFenceActive) == 0)
+        {
+            return;
+        }
+
+        var untilTick =
+            Volatile.Read(
+                ref _v1112PostrollFenceUntilTick);
+
+        if (untilTick > 0 &&
+            Environment.TickCount64 > untilTick)
+        {
+            Interlocked.Exchange(
+                ref _v1112PostrollFenceActive,
+                0);
+
+            try
+            {
+                _ = _v1112PostrollFenceTimer.Change(
+                    Timeout.Infinite,
+                    Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            return;
+        }
+
+        if (PlayerWindow != 0 &&
+            IsWindow(PlayerWindow))
+        {
+            _ = ShowWindow(
+                PlayerWindow,
+                SwHide);
+        }
+
+        // RAD/BinkPlay may create or re-show a top-level post-roll HWND after
+        // the embedded child was hidden. Hide every window still owned by this
+        // renderer PID. Never inspect titles and never touch SharpEmu's HWND.
+        _ = EnumWindows(
+            (window, ignored) =>
+            {
+                _ = GetWindowThreadProcessId(
+                    window,
+                    out var pid);
+
+                if (pid == RendererProcessId)
+                {
+                    _ = ShowWindow(
+                        window,
+                        SwHide);
+                }
+
+                return true;
+            },
+            0);
+    }
     private void CutVisualBeforePostroll()
     {
         if (_disposed ||
@@ -1026,10 +1688,36 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
             return;
         }
 
-        if (PlayerWindow != 0 && IsWindow(PlayerWindow))
+        // SHARPEMU_RAD_POSTROLL_HARD_CUTOFF_V1_1
+        // Paint the SharpEmu swapchain black BEFORE the RAD child disappears.
+        if (HostWindow != 0 &&
+            IsWindow(HostWindow) &&
+            GetClientRect(HostWindow, out var handoffRect))
         {
-            _ = ShowWindow(PlayerWindow, SwHide);
+            var handoffWidth = Math.Max(1, handoffRect.Right - handoffRect.Left);
+            var handoffHeight = Math.Max(1, handoffRect.Bottom - handoffRect.Top);
+            VulkanVideoPresenter.SubmitHostMovieHandoffBlackV11(
+                (uint)handoffWidth,
+                (uint)handoffHeight,
+                $"rad-pid-{RendererProcessId}");
         }
+        if (_v1112IsAttractMovie)
+        {
+            ArmAttractPostrollFenceV1112();
+        }
+        else if (PlayerWindow != 0 &&
+                 IsWindow(PlayerWindow))
+        {
+            _ = ShowWindow(
+                PlayerWindow,
+                SwHide);
+        }
+        // Hiding alone is insufficient: BinkPlay can expose its post-roll/icon
+        // during the final window/process transition.  Terminate the renderer
+        // at the already-established visual cutoff boundary (120 ms default).
+        TryKillProcess(_rendererProcess);
+        Interlocked.Exchange(ref _nominalEndTriggered, 1);
+
 
         Console.Error.WriteLine(
             "[LOADER][INFO] bink2.rad_visual_cutoff " +
@@ -1037,7 +1725,7 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
             $"duration_ms={_nominalDurationMilliseconds:F1} " +
             $"lead_ms={_visualCutoffLeadMilliseconds} " +
             $"timeline_correction_ms={_preRevealElapsedMilliseconds:F1} " +
-            "transition=black postroll_logo_visible=False");
+            "transition=black postroll_logo_visible=False renderer_terminated_at_cutoff=True");
     }
 
     private void EndAtNominalMovieBoundary()
@@ -1049,9 +1737,46 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
             return;
         }
 
-        if (PlayerWindow != 0 && IsWindow(PlayerWindow))
+        if (_v1112IsAttractMovie)
         {
-            _ = ShowWindow(PlayerWindow, SwHide);
+            Interlocked.Exchange(
+                ref _v1112PostrollFenceActive,
+                1);
+
+            Volatile.Write(
+                ref _v1112PostrollFenceUntilTick,
+                checked(
+                    Environment.TickCount64 +
+                    _v1112PostrollFenceDurationMilliseconds));
+
+            EnforceAttractPostrollHiddenV1112();
+
+            BinkDemonSoulsIntroAudioV7243227.StopForMovie(
+                _v1112MoviePath);
+
+            try
+            {
+                _ = _v1112PostrollFenceTimer.Change(
+                    Timeout.Infinite,
+                    Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            Console.Error.WriteLine(
+                "[BINK-POSTROLL][V1.1.12] attract_nominal_end " +
+                "file='attract_movie.bk2' " +
+                $"renderer_pid={RendererProcessId} " +
+                "audio_stopped=True postroll_hidden=True " +
+                "guest_drain_armed=True");
+        }
+        else if (PlayerWindow != 0 &&
+                 IsWindow(PlayerWindow))
+        {
+            _ = ShowWindow(
+                PlayerWindow,
+                SwHide);
         }
 
         Console.Error.WriteLine(
@@ -1118,6 +1843,7 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         _resizeTimer.Dispose();
         _visualCutoffTimer.Dispose();
         _nominalEndTimer.Dispose();
+        _v1112PostrollFenceTimer.Dispose();
         _lifetime.Stop();
 
         if (PlayerWindow != 0 && IsWindow(PlayerWindow))
@@ -1180,6 +1906,23 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
     private static extern bool EnumWindows(
         EnumWindowsProc lpEnumFunc,
         nint lParam);
+
+    [DllImport("user32.dll", SetLastError = false)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumChildWindows(
+        nint hWndParent,
+        EnumWindowsProc lpEnumFunc,
+        nint lParam);
+
+    [DllImport("user32.dll", SetLastError = false)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnableWindow(
+        nint hWnd,
+        [MarshalAs(UnmanagedType.Bool)] bool bEnable);
+
+    [DllImport("user32.dll", SetLastError = false)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowEnabled(nint hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint GetWindowThreadProcessId(
@@ -1257,3 +2000,8 @@ internal sealed class RadBinkEmbeddedHostApiV724323171 : IRadBinkHostApi
         StringBuilder lpClassName,
         int nMaxCount);
 }
+
+
+
+
+

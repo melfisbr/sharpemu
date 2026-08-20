@@ -1,0 +1,2 @@
+V74.0.84.2 targets temporal corruption of main_menu.bk2 after V84.1 made the correct internal composition path active.
+It does not modify the eboot, game files, RAD attract path, chroma order, shader translator, DCC, upscaler, or global texture cache policy.

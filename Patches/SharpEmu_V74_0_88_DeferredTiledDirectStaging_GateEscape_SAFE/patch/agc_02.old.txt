@@ -1,0 +1,6 @@
+                {
+                    var sliceBytes = checked((int)physicalSourceByteCount);
+                    var totalTiledArrayBytes = checked((long)sliceBytes * arrayLayers);
+                    byte[] tiledLayers;
+                    var readAllLayers = true;
+

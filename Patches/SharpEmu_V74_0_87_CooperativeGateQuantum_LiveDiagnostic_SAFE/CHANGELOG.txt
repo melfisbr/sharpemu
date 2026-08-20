@@ -1,0 +1,7 @@
+V74.0.87
+- Add cooperative Gate quantum at the method containing V72 GATE_OWNER_WAIT_DRAIN.
+- Dynamic structural classification of the containing method and its SubmittedGpuState parameter; no rigid SHA.
+- Default 16 packet-boundary hooks / 1 ms quantum; env 0/0 restores legacy.
+- Never yields inside a PM4 packet or ordered side effect.
+- Fix RUN_4 live logging: native stderr merged by cmd.exe, UTF-8 append, valid summary parsing.
+- Preserve V81.2/V82/V84/V85/V86.4 accumulated behavior.

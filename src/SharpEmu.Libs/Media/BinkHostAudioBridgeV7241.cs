@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0
 
 using System.Diagnostics;
@@ -189,6 +189,30 @@ internal static class BinkHostAudioBridgeV7241
         }
     }
 
+    // SHARPEMU_BINK_OPTIONS_SKIP_AUDIO_STOP_V1_0
+    // Options/Start skip must stop the current host audio at the same boundary
+    // as video teardown. Advancing the generation also prevents a late NIHAV/
+    // FFmpeg extraction from starting after the movie was skipped.
+    public static void StopForOptionsSkip(string hostPath)
+    {
+        lock (Gate)
+        {
+            _generation++;
+            _presentationRequestedGeneration = 0;
+            _presentationRequestedMovie = null;
+
+            if (OperatingSystem.IsWindows())
+            {
+                _ = PlaySound(null, IntPtr.Zero, 0);
+            }
+        }
+
+        BinkDemonSoulsIntroAudioV7243227.StopForMovie(hostPath);
+
+        Console.Error.WriteLine(
+            "[OPTIONS-SKIP][V1.0] audio_stopped " +
+            $"file='{Path.GetFileName(hostPath)}'");
+    }
     public static void NotifyPresentationStarted(string moviePath)
     {
         // V72.4.3.2.27 DEMONS_SOULS_EXTERNAL_INTRO_AUDIO_PRESENT
@@ -665,3 +689,4 @@ internal static class BinkHostAudioBridgeV7241
         IntPtr hmod,
         uint fdwSound);
 }
+

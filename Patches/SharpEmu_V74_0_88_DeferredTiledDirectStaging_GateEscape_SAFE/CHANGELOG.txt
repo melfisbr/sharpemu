@@ -1,0 +1,8 @@
+V74.0.88
+- Deferred large tiled Vulkan GPU-detile sources (array + single-layer, default >=8 MiB).
+- Added GuestDrawTexture lazy guest source metadata.
+- Added direct guest-memory -> mapped Vulkan detile staging path.
+- Added render-thread managed fallback and zero-shape fallback on read failure.
+- Added live UTF-8 diagnostics focused on deferred/direct staging and Gate intervals.
+- Four-file read-only structural dry-run + idempotence in RUN_1.
+- No rigid SHA gate; build failure restores all four source files.

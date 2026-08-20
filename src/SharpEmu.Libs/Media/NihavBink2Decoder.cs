@@ -680,7 +680,24 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
             return WaitForStreamingProducerCompletion();
         }
 
-        var target = ResolveStreamingStartupPrefetchFrames();
+        // SHARPEMU_V74_0_83_TITLE_LOOP_FAST_RESTART
+        // Do not rebuild the global 60-frame reservoir every time the
+        // persistent title loop wraps.
+        var titleLoopFastStartV74083 =
+            string.Equals(
+                Path.GetFileName(_moviePath),
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase);
+        var target = titleLoopFastStartV74083
+            ? 1
+            : ResolveStreamingStartupPrefetchFrames();
+
+        if (titleLoopFastStartV74083)
+        {
+            Console.Error.WriteLine(
+                "[V74.0.83][TITLE_LOOP_PREFETCH] " +
+                "file='logo_intro_loop.bk2' target=1 mode=fast-restart");
+        }
         var deadline = Stopwatch.GetTimestamp() +
             (long)(Stopwatch.Frequency * ResolveStreamingStartupPrefetchSeconds());
         var bestReady = 0;

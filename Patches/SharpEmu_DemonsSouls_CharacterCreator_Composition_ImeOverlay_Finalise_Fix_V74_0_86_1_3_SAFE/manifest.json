@@ -1,0 +1,16 @@
+{
+  "name": "SharpEmu_DemonsSouls_CharacterCreator_Composition_ImeOverlay_Finalise_Fix_V74_0_86_1_3_SAFE",
+  "version": "74.0.86.1.3",
+  "titleId": "PPSA01341",
+  "safe": true,
+  "writes": [
+    "src/SharpEmu.Libs/Ime/ImeDialogExports.cs",
+    "src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs"
+  ],
+  "strategy": "method-span + final-return structural insertion",
+  "preserves": [
+    "V74.0.84.2.1 frame ownership",
+    "V74.0.84.2.1 sticky planes",
+    "V74.0.86 typed DCC"
+  ]
+}

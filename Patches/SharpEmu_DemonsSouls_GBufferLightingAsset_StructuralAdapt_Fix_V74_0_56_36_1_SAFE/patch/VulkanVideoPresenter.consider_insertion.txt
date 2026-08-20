@@ -1,0 +1,10 @@
+                // SHARPEMU_V74_0_56_36_1_DCC_INITIALIZED_ADDRESS_GUARD
+                // GpuReferenceOnly means the sampler depends on GPU-produced
+                // image content. Never bind an address-compatible host image
+                // before its first GPU write has initialized it.
+                if (texture.GpuReferenceOnly &&
+                    !candidate.Initialized)
+                {
+                    return;
+                }
+

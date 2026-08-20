@@ -1,0 +1,6 @@
+V74.0.87.2
+- Fixes V87.1 ambiguity when both ParseSubmittedDcbCore and TryDrainPendingWaitersOnGateOwnerV74072 contain GATE_OWNER_WAIT_DRAIN.
+- Selects exact dedicated V72 helper first; semantic GateOwner+Drain fallback second.
+- RUN_1 regression now reproduces 4 markers / 2 raw method candidates and requires selection of the dedicated helper.
+- Current-checkout dry-run requires Method=TryDrainPendingWaitersOnGateOwnerV74072 before RUN_2/RUN_3 can proceed.
+- Preserves lexical C# brace scanner, transform/idempotence test, UTF-8 live diagnostic, automatic rollback, V81.2/V82/V84/V85/V86.4.

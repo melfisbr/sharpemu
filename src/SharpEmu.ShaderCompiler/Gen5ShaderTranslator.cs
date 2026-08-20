@@ -1229,6 +1229,8 @@ public static class Gen5ShaderTranslator
             0x368 => "VCvtPknormI16F32",
             0x369 => "VCvtPknormU16F32",
             0x36A => "VCvtPkU16U32",
+            // [V74.0.56.9][RDNA2_POST_PS_STUDIOS_SHADER_FIX]
+            0x36B => "VCvtPkI16I32",
             0x373 => "VMadU32U16",
             0x346 => "VLshlAddU32",
             0x347 => "VAddLshlU32",
@@ -1340,6 +1342,10 @@ public static class Gen5ShaderTranslator
             0x37 => "DsRead2B32",
             0x38 => "DsRead2St64B32",
             0x4D => "DsWriteB64",
+            // [V74.0.56.9][RDNA2_POST_PS_STUDIOS_SHADER_FIX]
+            // GFX10/RDNA2 DS opcodes 0x4E/0x4F.
+            0x4E => "DsWrite2B64",
+            0x4F => "DsWrite2St64B64",
             // GFX10/RDNA2 64-bit LDS read family.
             0x76 => "DsReadB64",
             0x77 => "DsRead2B64",
@@ -1711,10 +1717,30 @@ public static class Gen5ShaderTranslator
             binding.ResourceDescriptor.SequenceEqual(candidate.ResourceDescriptor));
     }
 
-    public static bool IsArrayedImageBinding(Gen5ImageBinding binding) =>
-        binding.Control.IsArray &&
-        (binding.Opcode.StartsWith("ImageSample", StringComparison.Ordinal) ||
-         binding.Opcode.StartsWith("ImageGather4", StringComparison.Ordinal));
+    // SHARPEMU_V74_0_56_30_MIMG_ARRAY_IDENTITY
+    // Array/view dimensionality must follow the MIMG instruction contract,
+    // never descriptor TYPE alone. This is deliberately narrower than V56.27:
+    // TYPE=13 with shader DIM=2 remains a plain 2D binding.
+    //
+    // Read-only IMAGE_LOAD uses OpImageFetch and must retain its layer
+    // coordinate for DIM 4/5/7. Cube DIM=3 supplies x/y/face_id in the guest
+    // instruction; represent that as a layered 2D binding so face_id is not
+    // discarded.
+    public static bool IsArrayedImageBinding(Gen5ImageBinding binding)
+    {
+        var readable =
+            binding.Opcode.StartsWith("ImageSample", StringComparison.Ordinal) ||
+            binding.Opcode.StartsWith("ImageGather4", StringComparison.Ordinal) ||
+            IsImageLoadOperation(binding.Opcode);
+
+        if (!readable)
+        {
+            return false;
+        }
+
+        return binding.Control.IsArray ||
+               binding.Control.Dimension == 3;
+    }
 
     public static bool IsDataShareAtomic(string name) => name switch
     {
@@ -2149,6 +2175,13 @@ public static class Gen5ShaderTranslator
                         Gen5Operand.Vector(vectorAddress),
                         Gen5Operand.Vector(vectorData0),
                         Gen5Operand.Vector(vectorData0 + 1),
+                    ],
+                    "DsWrite2B64" or "DsWrite2St64B64" => [
+                        Gen5Operand.Vector(vectorAddress),
+                        Gen5Operand.Vector(vectorData0),
+                        Gen5Operand.Vector(vectorData0 + 1),
+                        Gen5Operand.Vector(vectorData1),
+                        Gen5Operand.Vector(vectorData1 + 1),
                     ],
                     "DsWriteB96" => [
                         Gen5Operand.Vector(vectorAddress),

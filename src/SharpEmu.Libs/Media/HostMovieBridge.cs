@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Runtime.InteropServices;
@@ -13,7 +13,7 @@ namespace SharpEmu.Libs.Media;
 ///
 /// Such a game never imports libSceVideodec or sceAvPlayer, so no HLE export
 /// can see its movie frames. Kernel file opens identify the active movie and
-/// the presenter requests BGRA frames from <see cref="FfmpegVideoDecoder"/> —
+/// the presenter requests BGRA frames from <see cref="FfmpegVideoDecoder"/> â€”
 /// the same decoder sceAvPlayer uses, so every format is handled in one place.
 /// </summary>
 internal static class HostMovieBridge
@@ -100,6 +100,8 @@ internal static class HostMovieBridge
     private static bool _frameBufferPresented;
     private static MediaFramePlayback? _playback;
     private static long _frameSerial;
+    // SHARPEMU_BINK_OPTIONS_START_SKIP_V1_0
+    private static long _optionsStartMovieSkipCount;
     private static uint _presentationWidth = MaxHostVideoWidth;
     private static uint _presentationHeight = MaxHostVideoHeight;
 
@@ -113,6 +115,133 @@ internal static class HostMovieBridge
                        _frameBuffer is not null ||
                        _radPlayback is not null;
             }
+        }
+    }
+
+
+    // SHARPEMU_V74_0_83_ACTIVE_MOVIE_PATH
+    internal static string ActiveMoviePathV74083
+    {
+        get
+        {
+            lock (Gate)
+            {
+                return _activePath ?? string.Empty;
+            }
+        }
+    }
+
+
+    // SHARPEMU_V74_0_84_1_DEMONS_UI_BINK_INTERNAL_COMPOSITOR
+    // These Binks are not fullscreen owner movies. The guest continuously
+    // renders text/menus/animation over them and samples their Y/UV surfaces.
+    // Keep the decoder in-process so the movie clock is pumped from the same
+    // guest graphics timeline instead of freezing the guest behind RAD.
+    private static long _v740841UiBinkInternalCount;
+
+    internal static bool IsDemonSoulsUiBinkCompositePathV740841(
+        string? hostPath)
+    {
+        if (string.IsNullOrWhiteSpace(hostPath))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(hostPath);
+        var isUiMovie =
+            string.Equals(
+                fileName,
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "main_menu.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "main_menu_ngp.bk2",
+                StringComparison.OrdinalIgnoreCase);
+        if (!isUiMovie)
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullMovie = Path.GetFullPath(hostPath);
+            var app0 = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR");
+            if (!string.IsNullOrWhiteSpace(app0))
+            {
+                var root = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(app0));
+                if (string.Equals(
+                        Path.GetFileName(root),
+                        "PPSA01341",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    fullMovie.StartsWith(
+                        root + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return hostPath.Contains(
+            $"{Path.DirectorySeparatorChar}PPSA01341{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    // SHARPEMU_V74_0_81_TITLE_LOOP_COMPOSITE_STATE
+    // The presenter needs a semantic signal, not a hard-coded shader address,
+    // to synchronize the guest title/UI draw with the internal Bink loop.
+    internal static bool IsTitleLoopCompositeActiveV74081
+    {
+        get
+        {
+            lock (Gate)
+            {
+                return IsDemonSoulsUiBinkCompositePathV740841(_activePath) &&
+                       (_playback is not null ||
+                        _frameBuffer is not null);
+            }
+        }
+    }
+
+    private static bool IsTitleLoopPathV74081(string? hostPath) =>
+        !string.IsNullOrWhiteSpace(hostPath) &&
+        string.Equals(
+            Path.GetFileName(hostPath),
+            "logo_intro_loop.bk2",
+            StringComparison.OrdinalIgnoreCase);
+
+    // Called only by the Vulkan title compositor after the guest stops binding
+    // the movie's Y/UV surfaces for a sustained period. This ends the persistent
+    // loop when PRESS ANY BUTTON transitions into a menu without inventing an
+    // input hook or consuming the guest's real button event.
+    internal static bool StopTitleLoopCompositeV74081(string reason)
+    {
+        lock (Gate)
+        {
+            if (!IsTitleLoopPathV74081(_activePath))
+            {
+                return false;
+            }
+
+            var stoppedPath = _activePath ?? string.Empty;
+            CloseActiveLocked();
+            AttachNextQueuedMovieLocked();
+
+            Console.Error.WriteLine(
+                "[V74.0.81][TITLE_LOOP_COMPOSITE_STOP] " +
+                $"file='{Path.GetFileName(stoppedPath)}' " +
+                $"reason='{reason}' " +
+                $"next='{Path.GetFileName(_activePath ?? string.Empty)}'");
+
+            return true;
         }
     }
 
@@ -137,6 +266,69 @@ internal static class HostMovieBridge
     /// a host adapter the guest must be allowed to run the Bink implementation
     /// statically linked into its executable.
     /// </summary>
+    // SHARPEMU_DEMONS_BINK_COMPLETION_SHIM_ADVANCE_V1_1_3
+    // Preserve the working host-owned visual playback, but complete the guest
+    // startup movie through the existing one-frame BinkGuestCompletionShim.
+    // Returning ENOENT here is incorrect: Demon's Souls retries the same movie
+    // forever and never advances to attract/menu state.
+    private static int _v113CompletionShimAdvanceCount;
+
+    private static bool IsV113DemonSoulsStartupMovie(string hostPath)
+    {
+        var name = Path.GetFileName(hostPath);
+        if (!string.Equals(
+                name,
+                "ps_studios_logo.bk2",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                name,
+                "logo_intro.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            var app0 = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR");
+            if (!string.IsNullOrWhiteSpace(app0))
+            {
+                var root = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(app0));
+                var movie = Path.GetFullPath(hostPath);
+
+                if (!movie.StartsWith(
+                        root + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var rootName = Path.GetFileName(root);
+                return
+                    string.Equals(
+                        rootName,
+                        "PPSA01341",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    rootName.StartsWith(
+                        "PPSA25646",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    File.Exists(Path.Combine(
+                        root,
+                        "DemonsSoul_PROSPERO_Release.elf"));
+            }
+        }
+        catch
+        {
+        }
+
+        return hostPath.Contains(
+                   $"{Path.DirectorySeparatorChar}PPSA01341{Path.DirectorySeparatorChar}",
+                   StringComparison.OrdinalIgnoreCase) ||
+               hostPath.Contains(
+                   $"{Path.DirectorySeparatorChar}PPSA25646",
+                   StringComparison.OrdinalIgnoreCase);
+    }
     internal static bool ShouldSkipGuestMovie(string hostPath) =>
         IsSelfDecodedMovie(hostPath) &&
         ResolveMode() == MovieMode.Skip;
@@ -148,8 +340,568 @@ internal static class HostMovieBridge
     // V61.13.4_BINK2_NATURAL_FALLBACK
     private static int _naturalGuestMovieObservations;
 
+    // V31.7.9_GUEST_REPLAY_DEDUPE
+    // The host may show the canonical startup logos before the guest reaches its
+    // native Bink state machine. When that state machine later asks for the same
+    // startup asset, acknowledge the already-presented movie instead of launching
+    // a second RAD process. The reconciliation window closes on the first natural
+    // non-bootstrap movie so legitimate later replays are not globally suppressed.
+    private static readonly System.Collections.Generic.HashSet<string> V3179HostBootPresented =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Generic.HashSet<string> V3179GuestBootReplaySuppressed =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static bool V3179GuestBootReconciliationOpen = true;
+
+    // V31.7.11_GUEST_CLOCK_SESSION_PROBE
+    // Mirrors only sparse guest-media state transitions into the existing Bink
+    // session file so the diagnostic runner can wait for the real EBOOT state
+    // machine without enabling broad/high-volume tracing.
+    private static void WriteV31711GuestClockSessionMarker(
+        string kind,
+        string fileName,
+        string detail = "")
+    {
+        var sessionPath = Environment.GetEnvironmentVariable("SHARPEMU_GUEST_CLOCK_LOG");
+        if (string.IsNullOrWhiteSpace(sessionPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var line =
+                $"{DateTime.UtcNow:O} pid={Environment.ProcessId} " +
+                $"tid={Environment.CurrentManagedThreadId} [{kind}] " +
+                $"file='{fileName}'{detail}{Environment.NewLine}";
+            File.AppendAllText(
+                sessionPath,
+                line,
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch
+        {
+            // Diagnostic-only marker: never perturb guest execution.
+        }
+    }
+
+    private static bool IsV3179CanonicalBootstrapMovie(string fileName) =>
+        fileName.Equals("ps_studios_logo.bk2", StringComparison.OrdinalIgnoreCase) ||
+        fileName.Equals("logo_intro.bk2", StringComparison.OrdinalIgnoreCase) ||
+        fileName.Equals("logo_intro_loop.bk2", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TrySuppressV3179GuestBootReplay(
+        string fileName,
+        out bool firstSuppression)
+    {
+        firstSuppression = false;
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_DEDUPE_HOST_BOOT_REPLAY"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        lock (Gate)
+        {
+            if (!V3179GuestBootReconciliationOpen ||
+                _directPresentationActive ||
+                Volatile.Read(ref _configuredBootSequenceStarted) == 0)
+            {
+                return false;
+            }
+
+            if (!IsV3179CanonicalBootstrapMovie(fileName))
+            {
+                V3179GuestBootReconciliationOpen = false;
+                Console.Error.WriteLine(
+                    $"[LOADER][INFO] bink2.guest_boot_reconciliation_completed " +
+                    $"next='{fileName}' deduped={V3179GuestBootReplaySuppressed.Count}");
+                WriteV31711GuestClockSessionMarker(
+                    "GUEST_BOOT_RECONCILIATION_COMPLETED",
+                    fileName,
+                    $" deduped={V3179GuestBootReplaySuppressed.Count}");
+                return false;
+            }
+
+            if (!V3179HostBootPresented.Contains(fileName))
+            {
+                return false;
+            }
+
+            firstSuppression = V3179GuestBootReplaySuppressed.Add(fileName);
+            return true;
+        }
+    }
+
+    // V31.7.14_GUEST_FRAME_ATTRACT_HANDOFF
+
+    // V31.7.14.2_STRUCTURAL_BOOT_REWRITE keeps this handoff independent of
+
+    // exact source formatting in TryStartConfiguredBootSequence().
+
+    private static int V31714AttractHandoffQueued;
+
+    private static int V31714AttractHandoffStarted;
+
+
+
+    internal static void NotifyV31714GuestFirstFrameAttractHandoff()
+
+    {
+
+        if (!string.Equals(
+
+                Environment.GetEnvironmentVariable("SHARPEMU_DEMONS_ATTRACT_GUEST_FRAME_HANDOFF"),
+
+                "1",
+
+                StringComparison.Ordinal))
+
+        {
+
+            return;
+
+        }
+
+
+
+        if (Volatile.Read(ref _configuredBootSequenceStarted) == 0)
+
+        {
+
+            return;
+
+        }
+
+
+
+        if (Interlocked.CompareExchange(ref V31714AttractHandoffQueued, 1, 0) != 0)
+
+        {
+
+            return;
+
+        }
+
+
+
+        Console.Error.WriteLine(
+
+            "[LOADER][INFO] bink2.v31714_guest_frame_attract_handoff_queued " +
+
+            "trigger=first-guest-frame");
+
+        WriteV31711GuestClockSessionMarker(
+
+            "GUEST_FRAME_ATTRACT_HANDOFF_QUEUED",
+
+            "attract_movie.bk2",
+
+            " trigger=first-guest-frame");
+
+        System.Threading.ThreadPool.QueueUserWorkItem(
+
+            static _ => TryStartV31714AttractFromGuestBoundary());
+
+    }
+
+
+
+    private static void TryStartV31714AttractFromGuestBoundary()
+
+    {
+
+        var app0 = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR");
+
+        if (string.IsNullOrWhiteSpace(app0) || !Directory.Exists(app0))
+
+        {
+
+            Console.Error.WriteLine(
+
+                "[LOADER][WARN] bink2.v31714_guest_frame_attract_handoff_failed reason=app0-missing");
+
+            return;
+
+        }
+
+
+
+        var attractPath = Path.Combine(app0, "movies", "attract_movie.bk2");
+
+        if (!File.Exists(attractPath) || !TryReadBinkInfo(attractPath, out _))
+
+        {
+
+            Console.Error.WriteLine(
+
+                "[LOADER][WARN] bink2.v31714_guest_frame_attract_handoff_failed " +
+
+                "reason=attract-missing-or-invalid");
+
+            return;
+
+        }
+
+
+
+        // FIRST_GUEST_FRAME is normally after direct_boot_completed. Keep this
+
+        // state-based wait only as a race guard; it is not a presentation delay.
+
+        var deadline = Environment.TickCount64 + 10_000;
+
+        while (true)
+
+        {
+
+            var hostBusy = false;
+
+            lock (Gate)
+
+            {
+
+                hostBusy = _directPresentationActive ||
+
+                           _playback is not null ||
+
+                           _frameBuffer is not null ||
+
+                           _radPlayback is not null ||
+
+                           PendingMoviePaths.Count != 0;
+
+            }
+
+
+
+            if (!hostBusy)
+
+            {
+
+                break;
+
+            }
+
+
+
+            if (Environment.TickCount64 >= deadline)
+
+            {
+
+                Console.Error.WriteLine(
+
+                    "[LOADER][WARN] bink2.v31714_guest_frame_attract_handoff_failed " +
+
+                    "reason=host-still-busy-after-guest-frame");
+
+                return;
+
+            }
+
+
+
+            Thread.Sleep(10);
+
+        }
+
+
+
+        if (Interlocked.CompareExchange(ref V31714AttractHandoffStarted, 1, 0) != 0)
+
+        {
+
+            return;
+
+        }
+
+
+
+        lock (Gate)
+
+        {
+
+            if (V3179GuestBootReconciliationOpen)
+
+            {
+
+                V3179GuestBootReconciliationOpen = false;
+
+                Console.Error.WriteLine(
+
+                    $"[LOADER][INFO] bink2.guest_boot_reconciliation_completed " +
+
+                    $"next='attract_movie.bk2' deduped={V3179GuestBootReplaySuppressed.Count} " +
+
+                    "source=guest-first-frame-handoff");
+
+            }
+
+        }
+
+
+
+        Console.Error.WriteLine(
+
+            "[LOADER][INFO] bink2.v31714_guest_frame_attract_handoff_started " +
+
+            "file='attract_movie.bk2' trigger=first-guest-frame natural_guest_request=False");
+
+        WriteV31711GuestClockSessionMarker(
+
+            "GUEST_FRAME_ATTRACT_HANDOFF_STARTED",
+
+            "attract_movie.bk2",
+
+            " trigger=first-guest-frame natural_guest_request=False");
+
+
+
+        var attached = ObserveMovie(attractPath, naturalGuestRequest: false);
+
+        // V31.7.15_POST_ATTRACT_LOGO_LOOP
+
+        // At this point attract_movie is already the active host movie.
+
+        // ObserveMovie therefore places logo_intro_loop in the existing FIFO.
+
+        // AttachNextQueuedMovieLocked starts it only after attract completes.
+
+        if (attached)
+
+        {
+
+            var postAttractLoopPath =
+
+                Path.Combine(app0, "movies", "logo_intro_loop.bk2");
+
+
+
+            if (File.Exists(postAttractLoopPath) &&
+
+                TryReadBinkInfo(postAttractLoopPath, out _))
+
+            {
+
+                var loopQueued =
+
+                    ObserveMovie(
+
+                        postAttractLoopPath,
+
+                        naturalGuestRequest: false);
+
+
+
+                Console.Error.WriteLine(
+
+                    "[LOADER][INFO] bink2.v31715_post_attract_loop_queued " +
+
+                    $"file='logo_intro_loop.bk2' after='attract_movie.bk2' " +
+
+                    $"queued={loopQueued} source=existing-host-movie-fifo");
+
+                WriteV31711GuestClockSessionMarker(
+
+                    "POST_ATTRACT_LOGO_LOOP_QUEUED",
+
+                    "logo_intro_loop.bk2",
+
+                    $" after=attract_movie.bk2 queued={loopQueued}");
+
+            }
+
+            else
+
+            {
+
+                Console.Error.WriteLine(
+
+                    "[LOADER][WARN] bink2.v31715_post_attract_loop_missing " +
+
+                    "file='logo_intro_loop.bk2'");
+
+            }
+
+        }
+
+        Console.Error.WriteLine(
+
+            $"[LOADER][INFO] bink2.v31714_guest_frame_attract_handoff_result " +
+
+            $"file='attract_movie.bk2' attached={attached}");
+
+        if (!attached)
+
+        {
+
+            WriteV31711GuestClockSessionMarker(
+
+                "GUEST_FRAME_ATTRACT_HANDOFF_FAILED",
+
+                "attract_movie.bk2",
+
+                " reason=observe-movie-returned-false");
+
+        }
+
+    }
+
     internal static bool ObserveGuestMovie(string hostPath) =>
         ObserveMovie(hostPath, naturalGuestRequest: true);
+
+    // SHARPEMU_V74_0_78_NATURAL_ATTRACT_TITLE_LOOP
+    // V31.7.15 already queues logo_intro_loop.bk2 after attract_movie.bk2,
+    // but only inside the legacy FIRST_GUEST_FRAME host-injected attract path.
+    // V31.7.21 later disabled that path and made the guest's own attract request
+    // authoritative. Preserve the same post-attract title-loop contract for the
+    // natural guest path as well.
+    // SHARPEMU_V74_0_79_GUEST_TITLE_STATE_OWNS_SEQUENCE
+    // SHARPEMU_V74_0_81_TITLE_LOOP_PRESS_ANY_BUTTON_LINK
+    // V79 made the natural post-attract loop opt-in. The V80/current runtime
+    // disproves that policy for the Press-Start state: after attract completes,
+    // the guest UI keeps rendering but no logo_intro_loop movie is observed or
+    // queued. The result is the UI/shader layer without its animated Bink
+    // background. Restore the V78 linkage by default while preserving an
+    // explicit diagnostic opt-out.
+    //
+    // V74.0.77 already guarantees that logo_intro_loop is pass-through:
+    // guest CPU/GPU/input remain live while the host supplies the movie planes.
+    private static readonly bool _naturalAttractTitleLoopV74078 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_NATURAL_POST_ATTRACT_TITLE_LOOP"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static bool TryQueueNaturalPostAttractTitleLoopLockedV74078(
+        string attractPath)
+    {
+        if (!_naturalAttractTitleLoopV74078 ||
+            !string.Equals(
+                Path.GetFileName(attractPath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var movieDirectory = Path.GetDirectoryName(attractPath);
+        if (string.IsNullOrWhiteSpace(movieDirectory))
+        {
+            return false;
+        }
+
+        var loopPath = Path.Combine(
+            movieDirectory,
+            "logo_intro_loop.bk2");
+
+        if (!File.Exists(loopPath) ||
+            !TryReadBinkInfo(loopPath, out _))
+        {
+            Console.Error.WriteLine(
+                "[V74.0.78][NATURAL_TITLE_LOOP_QUEUE] " +
+                "action=missing file='logo_intro_loop.bk2' " +
+                "after='attract_movie.bk2'");
+            return false;
+        }
+
+        if (string.Equals(
+                _activePath,
+                loopPath,
+                StringComparison.OrdinalIgnoreCase) ||
+            PendingMoviePathSet.Contains(loopPath))
+        {
+            Console.Error.WriteLine(
+                "[V74.0.78][NATURAL_TITLE_LOOP_QUEUE] " +
+                "action=already-tracked file='logo_intro_loop.bk2' " +
+                "after='attract_movie.bk2'");
+            return true;
+        }
+
+        PendingMoviePathSet.Add(loopPath);
+        PendingMoviePaths.Enqueue(loopPath);
+
+        Console.Error.WriteLine(
+            "[V74.0.78][NATURAL_TITLE_LOOP_QUEUE] " +
+            "action=queued file='logo_intro_loop.bk2' " +
+            "after='attract_movie.bk2' source=natural-guest-attract");
+
+        WriteV31711GuestClockSessionMarker(
+            "NATURAL_POST_ATTRACT_TITLE_LOOP_QUEUED",
+            "logo_intro_loop.bk2",
+            " after=attract_movie.bk2 source=natural-guest-attract");
+
+        return true;
+    }
+
+
+    // SHARPEMU_V74_0_83_NATURAL_INTRO_TITLE_CHAIN
+    // Runtime proves the guest's natural title order is:
+    //   attract -> logo_intro -> logo_intro_loop + title UI.
+    // Queue the loop behind the guest's own logo_intro request instead of
+    // inserting it immediately after attract.
+    private static long _v74083NaturalIntroLoopQueueCount;
+    private static long _v74083TitleLoopOptionsSkipBlockedCount;
+
+    private static bool TryQueueNaturalPostIntroTitleLoopLockedV74083(
+        string introPath)
+    {
+        if (!string.Equals(
+                Path.GetFileName(introPath),
+                "logo_intro.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var directory = Path.GetDirectoryName(introPath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return false;
+        }
+
+        var loopPath = Path.Combine(directory, "logo_intro_loop.bk2");
+        if (!File.Exists(loopPath) ||
+            !TryReadBinkInfo(loopPath, out _))
+        {
+            Console.Error.WriteLine(
+                "[V74.0.83][TITLE_CHAIN] " +
+                "action=missing-loop after='logo_intro.bk2' " +
+                "file='logo_intro_loop.bk2'");
+            return false;
+        }
+
+        if (string.Equals(
+                _activePath,
+                loopPath,
+                StringComparison.OrdinalIgnoreCase) ||
+            PendingMoviePathSet.Contains(loopPath))
+        {
+            Console.Error.WriteLine(
+                "[V74.0.83][TITLE_CHAIN] " +
+                "action=loop-already-tracked after='logo_intro.bk2'");
+            return true;
+        }
+
+        PendingMoviePathSet.Add(loopPath);
+        PendingMoviePaths.Enqueue(loopPath);
+
+        var count = Interlocked.Increment(
+            ref _v74083NaturalIntroLoopQueueCount);
+        Console.Error.WriteLine(
+            "[V74.0.83][TITLE_CHAIN] " +
+            $"count={count} action=queue-loop-after-natural-intro " +
+            "intro='logo_intro.bk2' next='logo_intro_loop.bk2'");
+
+        WriteV31711GuestClockSessionMarker(
+            "NATURAL_POST_INTRO_TITLE_LOOP_QUEUED",
+            "logo_intro_loop.bk2",
+            " after=logo_intro.bk2 source=natural-guest-intro");
+
+        return true;
+    }
 
     private static bool ObserveMovie(string hostPath, bool naturalGuestRequest)
     {
@@ -158,8 +910,46 @@ internal static class HostMovieBridge
             return false;
         }
 
+        var v3179FileName = Path.GetFileName(hostPath);
+        if (!naturalGuestRequest && IsV3179CanonicalBootstrapMovie(v3179FileName))
+        {
+            lock (Gate)
+            {
+                if (_directPresentationActive)
+                {
+                    V3179HostBootPresented.Add(v3179FileName);
+                }
+            }
+        }
+
         if (naturalGuestRequest)
         {
+            if (TrySuppressV3179GuestBootReplay(v3179FileName, out var firstSuppression))
+            {
+                var dedupeObserved = Interlocked.Increment(ref _naturalGuestMovieObservations);
+                if (dedupeObserved <= 8)
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][INFO] bink2.natural_guest_movie_observed n={dedupeObserved} " +
+                        $"file='{v3179FileName}'");
+                }
+                WriteV31711GuestClockSessionMarker(
+                    "NATURAL_GUEST_MOVIE_OBSERVED",
+                    v3179FileName,
+                    $" n={dedupeObserved}");
+                if (firstSuppression)
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][INFO] bink2.guest_replay_deduped file='{v3179FileName}' " +
+                        "reason=already-shown-by-host-direct-boot completion=existing-startup-completion-shim");
+                    WriteV31711GuestClockSessionMarker(
+                        "GUEST_REPLAY_DEDUPED",
+                        v3179FileName,
+                        " reason=already-shown-by-host-direct-boot");
+                }
+                return true;
+            }
+
             var observed = Interlocked.Increment(ref _naturalGuestMovieObservations);
             if (observed <= 4)
             {
@@ -167,6 +957,10 @@ internal static class HostMovieBridge
                     $"[LOADER][INFO] bink2.natural_guest_movie_observed n={observed} " +
                     $"file='{Path.GetFileName(hostPath)}'");
             }
+            WriteV31711GuestClockSessionMarker(
+                "NATURAL_GUEST_MOVIE_OBSERVED",
+                v3179FileName,
+                $" n={observed}");
         }
 
         lock (Gate)
@@ -195,17 +989,106 @@ internal static class HostMovieBridge
                         "[LOADER][INFO] Bink2 bridge queued: " +
                         Path.GetFileName(hostPath));
                 }
-                return PendingMoviePathSet.Contains(hostPath);
+
+                var trackedV74078 =
+                    PendingMoviePathSet.Contains(hostPath);
+
+                if (naturalGuestRequest &&
+                    trackedV74078)
+                {
+                    TryQueueNaturalPostAttractTitleLoopLockedV74078(
+                        hostPath);
+                    TryQueueNaturalPostIntroTitleLoopLockedV74083(
+                        hostPath);
+                }
+
+                return trackedV74078;
             }
 
             AttachMovieLocked(hostPath, mode);
-            return string.Equals(_activePath, hostPath, StringComparison.OrdinalIgnoreCase) &&
-                   (_playback is not null ||
-                    _frameBuffer is not null ||
-                    _radPlayback is not null);
+            var attachedV74078 =
+                string.Equals(
+                    _activePath,
+                    hostPath,
+                    StringComparison.OrdinalIgnoreCase) &&
+                (_playback is not null ||
+                 _frameBuffer is not null ||
+                 _radPlayback is not null);
+
+            if (naturalGuestRequest &&
+                attachedV74078)
+            {
+                TryQueueNaturalPostAttractTitleLoopLockedV74078(
+                    hostPath);
+                TryQueueNaturalPostIntroTitleLoopLockedV74083(
+                    hostPath);
+            }
+
+            return attachedV74078;
         }
     }
 
+    // SHARPEMU_V74_0_88_UI_BINK_GUEST_OWNED_LOOP
+    // main_menu*.bk2 and logo_intro_loop.bk2 are persistent UI texture
+    // producers. Rewind the host decoder at EOF without closing the logical
+    // guest movie or pulsing the guest completion wait.
+    private static bool TryRestartDemonSoulsUiBinkLoopV74088(
+        string? hostPath)
+    {
+        if (string.IsNullOrWhiteSpace(hostPath) ||
+                        // SHARPEMU_V74_0_88_3_MAIN_MENU_ONLY_LOOP_SCOPE
+            // Only persistent NEW GAME / menu textures may rewind at EOF.
+            // logo_intro_loop.bk2 participates in the boot/title handoff and
+            // must retain its normal completion semantics.
+            (!string.Equals(
+                 Path.GetFileName(hostPath),
+                 "main_menu.bk2",
+                 StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(
+                 Path.GetFileName(hostPath),
+                 "main_menu_ngp.bk2",
+                 StringComparison.OrdinalIgnoreCase)) ||
+            string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_DS_UI_BINK_LOOP"),
+                "0",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!NihavBink2Decoder.TryOpen(
+                hostPath,
+                _presentationWidth,
+                _presentationHeight,
+                out var source) ||
+            source is null)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.88.3][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' result=open-failed");
+            return false;
+        }
+
+        var info = new Bink2MovieInfo(
+            source.Width,
+            source.Height,
+            source.FramesPerSecondNumerator,
+            source.FramesPerSecondDenominator);
+        if (!IsValid(info))
+        {
+            source.Dispose();
+            return false;
+        }
+
+        _playback?.Dispose();
+        _playback = new MediaFramePlayback(source);
+        _activePath = hostPath;
+        _activeInfo = info;
+
+        Console.Error.WriteLine(
+            $"[V74.0.88.3][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' " +
+            $"result=rewound size={info.Width}x{info.Height} guest_movie_remains_open=True");
+        return true;
+    }
     internal static bool TryDecodeNextFrame(
         bool advanceClock,
         out byte[] pixels,
@@ -223,6 +1106,20 @@ internal static class HostMovieBridge
             advanced = false;
             frameSerial = _frameSerial;
             hostPath = _activePath ?? string.Empty;
+            if (HostOptionsSkipBridgeV6113262.ConsumeRequest())
+            {
+                var skipped = SkipActiveMovieForOptionsLocked("frame-pump");
+                hostPath = _activePath ?? string.Empty;
+                frameSerial = _frameSerial;
+
+                if (skipped)
+                {
+                    // Return a decode miss for this pump. The presenter already
+                    // releases a completed host fallback when no host movie
+                    // remains, and the next queued movie starts on the next pump.
+                    return false;
+                }
+            }
 
             if (_radPlayback is not null)
             {
@@ -254,7 +1151,40 @@ internal static class HostMovieBridge
                     {
                         var completedPath = _activePath;
                         var progress = _playback.PlaybackProgress;
+
+                        // SHARPEMU_V74_0_81_PERSISTENT_TITLE_LOOP
+                        // logo_intro_loop.bk2 is an actual title loop, not an
+                        // eight-second one-shot. Keep it alive while the guest
+                        // still binds its movie surfaces. If another movie is
+                        // pending, normal FIFO ownership wins and the loop exits.
+                        var restartTitleLoopV74081 =
+                            IsTitleLoopPathV74081(completedPath) &&
+                            PendingMoviePaths.Count == 0;
+
+                        if (TryRestartDemonSoulsUiBinkLoopV74088(completedPath))
+                        {
+                            return false;
+                        }
                         CloseActiveLocked();
+
+                        if (restartTitleLoopV74081 &&
+                            !string.IsNullOrWhiteSpace(completedPath) &&
+                            File.Exists(completedPath))
+                        {
+                            AttachMovieLocked(
+                                completedPath,
+                                MovieMode.Nihav);
+
+                            Console.Error.WriteLine(
+                                "[V74.0.81][TITLE_LOOP_RESTART] " +
+                                $"file='{Path.GetFileName(completedPath)}' " +
+                                $"previous_seconds={progress.Seconds:F2} " +
+                                $"previous_frame={progress.FrameIndex} " +
+                                "guest_ui_continues=True");
+
+                            return false;
+                        }
+
                         Console.Error.WriteLine(
                             "[LOADER][INFO] Bink2 bridge completed: " +
                             $"{Path.GetFileName(completedPath)} after " +
@@ -301,9 +1231,76 @@ internal static class HostMovieBridge
 
     private static void AttachMovieLocked(string hostPath, MovieMode mode)
     {
-        if (mode != MovieMode.Rad)
+        // SHARPEMU_DEMONS_TITLE_CHAIN_AUDIO_LIFECYCLE_HOOK_V1_1_13
+        // Execute before mode rewriting and before any host-audio probe.
+        // This covers UI_BINK_INTERNAL where host_audio_probe=False.
+        BinkDemonSoulsIntroAudioV7243227.NotifyMovieAttachV1113(
+            hostPath);
+        // SHARPEMU_V74_0_84_1_UI_BINK_INTERNAL_ROUTING
+        // RAD remains the owner for fullscreen PS Studios/attract. UI Binks are
+        // texture producers and therefore remain internal with the guest alive.
+        if (mode == MovieMode.Rad &&
+            IsDemonSoulsUiBinkCompositePathV740841(hostPath) &&
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_UI_BINK_INTERNAL"),
+                "0",
+                StringComparison.Ordinal))
         {
-            BinkHostAudioBridgeV7241.TryStart(hostPath);
+            mode = MovieMode.Nihav;
+            var n = Interlocked.Increment(
+                ref _v740841UiBinkInternalCount);
+            Console.Error.WriteLine(
+                "[V74.0.84.1][UI_BINK_INTERNAL] " +
+                $"count={n} file='{Path.GetFileName(hostPath)}' " +
+                "mode=nihav guest_hle_gate=False guest_gpu_live=True " +
+                "clock=guest-composite-pump");
+        }
+        // V31.7.20.7_POST_ATTRACT_LOOP_INTERNAL
+        // SHARPEMU_V74_0_79_INTERNAL_TITLE_MENU_LOOP
+        // The natural guest sequence proved that logo_intro_loop.bk2 is the
+        // repeating post-logo visual used while guest UI continues. Never put
+        // this 240-frame loop in a separate RAD child process:
+        //   * the child occludes guest UI composition;
+        //   * repeated guest loop requests relaunch RAD;
+        //   * the supplied V78 runtime hit Windows pagefile exhaustion and then
+        //     Vulkan OutOfDeviceMemory on that relaunch.
+        //
+        // Keep attract_movie.bk2 and logo_intro.bk2 on the configured backend;
+        // force only logo_intro_loop.bk2 through the existing internal NIHAV
+        // lane so guest title/menu UI can remain resident and interactive.
+        if (mode == MovieMode.Rad &&
+            string.Equals(
+                Path.GetFileName(hostPath),
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            mode = MovieMode.Nihav;
+            Console.Error.WriteLine(
+                "[V74.0.79][INTERNAL_TITLE_MENU_LOOP] " +
+                "file='logo_intro_loop.bk2' mode=nihav " +
+                "reason=guest-ui-composition-and-no-rad-relaunch");
+        }
+        // SHARPEMU_V74_0_82_TITLE_LOOP_NO_HOST_AUDIO_PROBE
+        // logo_intro_loop.bk2 has no audio stream in the observed title asset.
+        // Do not launch NIHAV/FFmpeg audio probes every time the persistent loop
+        // restarts; title/menu audio remains guest AudioOut-owned.
+        if (mode != MovieMode.Rad &&
+            !IsTitleLoopPathV74081(hostPath))
+        {
+            // V75.0.0 native SDK owns embedded Bink audio.
+            if (mode != MovieMode.NativeRad)
+            {
+                BinkHostAudioBridgeV7241.TryStart(hostPath);
+            }
+        }
+        else if (mode != MovieMode.Rad &&
+                 IsTitleLoopPathV74081(hostPath))
+        {
+            Console.Error.WriteLine(
+                "[V74.0.82.2][TITLE_LOOP_AUDIO] " +
+                "file='logo_intro_loop.bk2' " +
+                "host_audio_probe=False guest_audio_owner=True");
         }
 
         switch (mode)
@@ -317,6 +1314,29 @@ internal static class HostMovieBridge
             case MovieMode.Ffmpeg:
                 AttachFfmpegMovieLocked(hostPath);
                 return;
+            // SHARPEMU_BINK_NATIVE_RAD_MODE_V75_0_0
+            case MovieMode.NativeRad:
+                if (AttachRadNativeMovieLocked(hostPath))
+                {
+                    return;
+                }
+
+                if (Environment.GetEnvironmentVariable(
+                        "SHARPEMU_BINK_NATIVE_FALLBACK") != "0" &&
+                    AttachRadMovieLocked(hostPath))
+                {
+                    Console.Error.WriteLine(
+                        "[BINK-NATIVE][V75.0.0] fallback_external_rad " +
+                        $"file='{Path.GetFileName(hostPath)}'");
+                    return;
+                }
+
+                Console.Error.WriteLine(
+                    "[BINK-NATIVE][V75.0.0] attach_failed " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    "fallback_external_rad=False");
+                return;
+
             case MovieMode.Rad:
                 // V72.4.3.2.31.4 RAD_REQUIRED_NO_FALLBACK
                 // Never hide RAD discovery/start failures by silently switching
@@ -342,6 +1362,57 @@ internal static class HostMovieBridge
         }
     }
 
+private static bool AttachRadNativeMovieLocked(
+    string hostPath)
+{
+    if (!RadBinkNativeSdkDecoderV7500.TryOpen(
+            hostPath,
+            out var source) ||
+        source is null)
+    {
+        return false;
+    }
+
+    var info = new Bink2MovieInfo(
+        source.Width,
+        source.Height,
+        source.FramesPerSecondNumerator,
+        source.FramesPerSecondDenominator);
+
+    if (!IsValid(info))
+    {
+        source.Dispose();
+        return false;
+    }
+
+    // Demon's Souls attract_movie is video-only in Bink. Its AT9 stems
+    // remain SharpEmu-owned and become MediaFramePlayback's master clock.
+    if (string.Equals(
+            Path.GetFileName(hostPath),
+            "attract_movie.bk2",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        BinkHostAudioBridgeV7241.TryStart(
+            hostPath);
+    }
+
+    AttachPlaybackLocked(
+        hostPath,
+        info,
+        source);
+
+    Console.Error.WriteLine(
+        "[BINK-NATIVE][V75.0.0] bridge_attached " +
+        $"file='{Path.GetFileName(hostPath)}' " +
+        $"size={info.Width}x{info.Height} " +
+        $"fps={info.FramesPerSecondNumerator}/" +
+        $"{info.FramesPerSecondDenominator} " +
+        $"tracks={source.AudioTrackCount} " +
+        $"embedded_audio_active={source.EmbeddedAudioActive} " +
+        $"decoder=in-process-sdk " +
+        $"dll='{RadBinkNativeSdkDecoderV7500.RuntimeLibraryPath}'");
+    return true;
+}
     private static bool AttachRadMovieLocked(string hostPath)
     {
         if (!TryReadBinkInfo(hostPath, out var info) ||
@@ -444,6 +1515,56 @@ internal static class HostMovieBridge
 
     private static MovieMode ResolveMode()
     {
+        var v7500Configured =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_MODE");
+
+        if (string.Equals(
+                v7500Configured,
+                "native-rad",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v7500Configured,
+                "rad-native",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v7500Configured,
+                "sdk-rad",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return MovieMode.NativeRad;
+        }
+
+        if (string.Equals(
+                v7500Configured,
+                "external-rad",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return MovieMode.Rad;
+        }
+
+        if ((string.Equals(
+                 v7500Configured,
+                 "rad",
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 v7500Configured,
+                 "binkplay",
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 v7500Configured,
+                 "radvideo",
+                 StringComparison.OrdinalIgnoreCase)) &&
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_NATIVE_PREFER") != "0" &&
+            RadBinkNativeSdkDecoderV7500.IsRuntimeAvailable)
+        {
+            Console.Error.WriteLine(
+                "[BINK-NATIVE][V75.0.0] auto_selected " +
+                "requested=rad resolved=native-rad " +
+                $"dll='{RadBinkNativeSdkDecoderV7500.RuntimeLibraryPath}'");
+            return MovieMode.NativeRad;
+        }
         var configured = Environment.GetEnvironmentVariable("SHARPEMU_BINK_MODE");
 
         if (string.Equals(configured, "rad", StringComparison.OrdinalIgnoreCase) ||
@@ -633,10 +1754,15 @@ internal static class HostMovieBridge
             return;
         }
 
-        if (string.Equals(
-                Environment.GetEnvironmentVariable("SHARPEMU_BINK_AUTO_BOOT"),
-                "0",
-                StringComparison.Ordinal))
+        // [V74.0.39][GUEST_EBOOT_BOOT_ORDER]
+        // Normal execution is guest-owned. The eboot/frontend decides when each
+        // movie opens and when the MainMenu -> TimeToAttractMovie transition fires.
+        // Host automatic boot remains available only as an explicit diagnostic opt-in.
+        var automaticBootEnabled = string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_BINK_AUTO_BOOT"),
+            "1",
+            StringComparison.Ordinal);
+        if (!automaticBootEnabled)
         {
             return;
         }
@@ -658,12 +1784,14 @@ internal static class HostMovieBridge
         }
 
         var movieRoot = Path.Combine(app0, "movies");
+        // V31.7.14.2_STRUCTURAL_BOOT_REWRITE
+        // Host auto boot owns only the two one-shot logos; attract_movie is
+        // scheduled from the first real guest-frame compatibility boundary.
         var orderedBootMovieNames = new[]
         {
             "ps_studios_logo.bk2",
             "logo_intro.bk2",
-            "logo_intro_loop.bk2",
-        };
+};
 
         var autoPaths = orderedBootMovieNames
             .Select(name => Path.Combine(movieRoot, name))
@@ -813,14 +1941,21 @@ internal static class HostMovieBridge
                 // into termination of host-owned direct boot, then restore guest video.
                 if (HostOptionsSkipBridgeV6113262.ConsumeRequest())
                 {
+                    var skipped = false;
                     lock (Gate)
                     {
-                        PendingMoviePaths.Clear();
-                        CloseActiveLocked();
+                        skipped = SkipActiveMovieForOptionsLocked("direct-boot");
                     }
-                    Console.Error.WriteLine(
-                        "[LOADER][INFO] options_direct_boot_skip source=TAB action=restore_guest");
-                    break;
+
+                    if (skipped)
+                    {
+                        // The next queued movie, when any, was attached by the
+                        // common skip helper. Force its audio/presentation seam
+                        // to be treated as a new movie.
+                        audioPresentationPath = null;
+                        Thread.Sleep(1);
+                        continue;
+                    }
                 }
                 if (TryDecodeNextFrame(
                         advanceClock: true,
@@ -913,11 +2048,74 @@ internal static class HostMovieBridge
     }
 
 
+    private static bool SkipActiveMovieForOptionsLocked(string owner)
+    {
+        // SHARPEMU_V74_0_83_TITLE_LOOP_OPTIONS_SKIP_GUARD
+        // TAB is also the guest Options key. Do not let the host movie-skip
+        // bridge destroy the persistent Press-Start loop.
+        if (IsTitleLoopPathV74081(_activePath))
+        {
+            var blocked = Interlocked.Increment(
+                ref _v74083TitleLoopOptionsSkipBlockedCount);
+            if (blocked <= 8 ||
+                (blocked & (blocked - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V74.0.83][TITLE_LOOP_SKIP_GUARD] " +
+                    $"count={blocked} action=host-skip-blocked " +
+                    "file='logo_intro_loop.bk2' guest_options_input_preserved=True");
+            }
+
+            return false;
+        }
+        if (_playback is null &&
+            _frameBuffer is null &&
+            _radPlayback is null)
+        {
+            return false;
+        }
+
+        var skippedPath = _activePath ?? string.Empty;
+        var backend =
+            _radPlayback is not null ? "rad" :
+            _playback is not null ? "decoded" :
+            "frame-buffer";
+        var queuedBefore = PendingMoviePaths.Count;
+
+        if (!string.IsNullOrWhiteSpace(skippedPath))
+        {
+            BinkHostAudioBridgeV7241.StopForOptionsSkip(skippedPath);
+        }
+
+        CloseActiveLocked();
+        AttachNextQueuedMovieLocked();
+
+        var nextPath = _activePath;
+        var skipNumber = Interlocked.Increment(
+            ref _optionsStartMovieSkipCount);
+
+        Console.Error.WriteLine(
+            "[OPTIONS-SKIP][V1.0] movie_skipped " +
+            $"n={skipNumber} owner={owner} backend={backend} " +
+            $"file='{Path.GetFileName(skippedPath)}' " +
+            $"queued_before={queuedBefore} " +
+            $"next='{Path.GetFileName(nextPath ?? string.Empty)}' " +
+            $"host_active_after={(IsHostPlaybackActive ? 1 : 0)}");
+
+        return true;
+    }
     private static void CloseActiveLocked()
     {
         _playback?.Dispose();
         _playback = null;
 
+        if (_radPlayback is not null)
+        {
+            VulkanVideoPresenter.SubmitHostMovieHandoffBlackV11(
+                _presentationWidth,
+                _presentationHeight,
+                Path.GetFileName(_activePath ?? string.Empty));
+        }
         _radPlayback?.Dispose();
         _radPlayback = null;
 
@@ -958,6 +2156,7 @@ internal static class HostMovieBridge
         Skip,
         Dummy,
         Native,
+        NativeRad,
         Rad,
         Nihav,
         Ffmpeg,
@@ -993,7 +2192,7 @@ internal static class HostMovieBridge
     private const long MaxCompletionWaitMilliseconds = 5 * 60 * 1000;
     /// <summary>
     /// Blocks the calling (guest I/O) thread until the host has actually
-    /// finished presenting <paramref name="hostPath"/> — either because it
+    /// finished presenting <paramref name="hostPath"/> â€” either because it
     /// played through, or because something else took over the timeline.
     ///
     /// The completion shim tells the guest's own Bink header parse "this
@@ -1172,6 +2371,218 @@ internal static class HostMovieBridge
 
 
 
+    // [V74.0.56.10][RAD_GUEST_COMPLETION_HANDOFF]
+    // V56.9 proved that RAD can finish the natural PlayStation Studios request
+    // while the guest still owns the original 255-frame Bink file. Once the
+    // RAD hard gate is released, letting the guest decode that same one-shot
+    // movie again creates a second post-movie path. Keep the broad historical
+    // startup-completion shim disabled; this is a narrow RAD-only reconciliation
+    // for the natural ps_studios_logo request.
+    private static bool ShouldUseRadGuestCompletionHandoffV7405610(string hostPath)
+    {
+        if (!string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_BINK_STARTUP_COMPLETION_SHIM"),
+                "0",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_BINK_RAD_GUEST_COMPLETION_HANDOFF"),
+                "0",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (ResolveMode() != MovieMode.Rad)
+        {
+            return false;
+        }
+
+        return string.Equals(
+            Path.GetFileName(hostPath),
+            "ps_studios_logo.bk2",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    // SHARPEMU_DEMONS_POST_STUDIOS_SCOPE_V1_1_4_1
+    private static bool IsV114DemonSoulsPostStudiosCoverMovie(
+        string hostPath)
+    {
+        var name = Path.GetFileName(hostPath);
+        if (!string.Equals(
+                name,
+                "ps_studios_logo.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            var app0 = Environment.GetEnvironmentVariable(
+                "SHARPEMU_APP0_DIR");
+
+            if (!string.IsNullOrWhiteSpace(app0))
+            {
+                var root = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(app0));
+                var movie = Path.GetFullPath(hostPath);
+
+                if (!movie.StartsWith(
+                        root + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var rootName = Path.GetFileName(root);
+                return
+                    string.Equals(
+                        rootName,
+                        "PPSA01341",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    rootName.StartsWith(
+                        "PPSA25646",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    File.Exists(Path.Combine(
+                        root,
+                        "DemonsSoul_PROSPERO_Release.elf"));
+            }
+        }
+        catch
+        {
+        }
+
+        return hostPath.Contains(
+                   $"{Path.DirectorySeparatorChar}PPSA01341{Path.DirectorySeparatorChar}",
+                   StringComparison.OrdinalIgnoreCase) ||
+               hostPath.Contains(
+                   $"{Path.DirectorySeparatorChar}PPSA25646",
+                   StringComparison.OrdinalIgnoreCase);
+    }
+    // SHARPEMU_V74_0_77_2_DEMONS_ATTRACT_GUEST_COMPLETION
+
+    // The host RAD player owns attract_movie visually, but the guest still owns
+
+    // the Bink object/state machine. Reconcile the guest header to one frame and
+
+    // gate that completion on the real host end/Options skip. This lets the
+
+    // game's own MusicSkipIntro/StartIntro/SceneAboutToBeUncovered path advance.
+
+    private static int _v740772AttractGuestCompletionCount;
+
+
+
+    private static bool ShouldUseDemonSoulsAttractGuestCompletionV740772(string hostPath)
+
+    {
+
+        if (string.Equals(
+
+                Environment.GetEnvironmentVariable(
+
+                    "SHARPEMU_BINK_ATTRACT_GUEST_COMPLETION"),
+
+                "0",
+
+                StringComparison.Ordinal))
+
+        {
+
+            return false;
+
+        }
+
+
+
+        if (ResolveMode() != MovieMode.Rad ||
+
+            !string.Equals(
+
+                Path.GetFileName(hostPath),
+
+                "attract_movie.bk2",
+
+                StringComparison.OrdinalIgnoreCase))
+
+        {
+
+            return false;
+
+        }
+
+
+
+        try
+
+        {
+
+            var app0 = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR");
+
+            if (!string.IsNullOrWhiteSpace(app0))
+
+            {
+
+                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(app0));
+
+                var movie = Path.GetFullPath(hostPath);
+
+                if (!movie.StartsWith(
+
+                        root + Path.DirectorySeparatorChar,
+
+                        StringComparison.OrdinalIgnoreCase))
+
+                {
+
+                    return false;
+
+                }
+
+
+
+                var rootName = Path.GetFileName(root);
+
+                return
+
+                    string.Equals(rootName, "PPSA01341", StringComparison.OrdinalIgnoreCase) ||
+
+                    rootName.StartsWith("PPSA25646", StringComparison.OrdinalIgnoreCase) ||
+
+                    File.Exists(Path.Combine(root, "DemonsSoul_PROSPERO_Release.elf"));
+
+            }
+
+        }
+
+        catch
+
+        {
+
+        }
+
+
+
+        return hostPath.Contains(
+
+                   $"{Path.DirectorySeparatorChar}PPSA01341{Path.DirectorySeparatorChar}",
+
+                   StringComparison.OrdinalIgnoreCase) ||
+
+               hostPath.Contains(
+
+                   $"{Path.DirectorySeparatorChar}PPSA25646",
+
+                   StringComparison.OrdinalIgnoreCase);
+
+    }
+
     internal static bool TryTakeOverGuestMovie(
 
         string hostPath,
@@ -1188,7 +2599,20 @@ internal static class HostMovieBridge
 
 
 
-        if (!observed || !IsOneShotStartupBinkV74013(hostPath))
+        var v7405610RadGuestCompletionHandoff =
+            ShouldUseRadGuestCompletionHandoffV7405610(hostPath);
+        var v7405610LegacyStartupCompletionShim =
+            IsOneShotStartupBinkV74013(hostPath);
+        var v740772AttractGuestCompletionHandoff =
+            ShouldUseDemonSoulsAttractGuestCompletionV740772(hostPath);
+
+        if (!observed ||
+
+            (!v7405610RadGuestCompletionHandoff &&
+
+             !v7405610LegacyStartupCompletionShim &&
+
+             !v740772AttractGuestCompletionHandoff))
 
         {
 
@@ -1232,18 +2656,77 @@ internal static class HostMovieBridge
 
 
 
-        Console.Error.WriteLine(
+        if (v740772AttractGuestCompletionHandoff)
 
-            precise
+        {
 
-                ? "[V74.0.13.2][BINK] bink2.startup_completion_shim mode=precise file='" +
+            var n = Interlocked.Increment(
 
-                    Path.GetFileName(hostPath) + "'"
+                ref _v740772AttractGuestCompletionCount);
 
-                : "[V74.0.13.2][BINK] bink2.startup_completion_shim_header_fallback file='" +
+            Console.Error.WriteLine(
 
-                    Path.GetFileName(hostPath) + "'");
+                precise
 
+                    ? "[V74.0.77.2][ATTRACT_GUEST_COMPLETION] armed mode=precise n=" + n +
+
+                        " file='" + Path.GetFileName(hostPath) +
+
+                        "' guest_open=success num_frames=1 wait_on_header_read=True release=host-end-or-options-skip guest_state_machine_owner=True"
+
+                    : "[V74.0.77.2][ATTRACT_GUEST_COMPLETION] armed mode=header-fallback n=" + n +
+
+                        " file='" + Path.GetFileName(hostPath) +
+
+                        "' guest_open=success num_frames=1 wait_on_header_read=True release=host-end-or-options-skip guest_state_machine_owner=True");
+
+        }
+
+        else if (v7405610RadGuestCompletionHandoff)
+        {
+            Console.Error.WriteLine(
+                precise
+                    ? "[V74.0.56.10][BINK] rad_guest_completion_handoff mode=precise file='" +
+                        Path.GetFileName(hostPath) + "' startup_completion_shim=off"
+                    : "[V74.0.56.10][BINK] rad_guest_completion_handoff mode=header-fallback file='" +
+                        Path.GetFileName(hostPath) + "' startup_completion_shim=off");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                precise
+                    ? "[V74.0.13.2][BINK] bink2.startup_completion_shim mode=precise file='" +
+                        Path.GetFileName(hostPath) + "'"
+                    : "[V74.0.13.2][BINK] bink2.startup_completion_shim_header_fallback file='" +
+                        Path.GetFileName(hostPath) + "'");
+        }
+
+        if (IsV113DemonSoulsStartupMovie(hostPath))
+        {
+            // The gate reads this dynamically at the playback tail boundary.
+            // Keep the proven zero-tail behavior without converting the guest
+            // open into ENOENT.
+            Environment.SetEnvironmentVariable(
+                "SHARPEMU_BINK_HOST_TAIL_HOLD_MS",
+                "0");
+
+            var n = Interlocked.Increment(
+                ref _v113CompletionShimAdvanceCount);
+            Console.Error.WriteLine(
+                "[BINK-COMPLETION-SHIM][V1.1.3] ready " +
+                $"n={n} file='{Path.GetFileName(hostPath)}' " +
+                "guest_open=success num_frames=1 " +
+                "wait_on_header_read=True tail_hold_ms=0");
+        }
+        // SHARPEMU_DEMONS_POST_STUDIOS_COVER_ARM_V1_1_4
+        // Arm while the RAD child still owns the visible window.
+        if (IsV114DemonSoulsPostStudiosCoverMovie(hostPath))
+        {
+            VulkanVideoPresenter.BeginDemonSoulsPostStudiosBlackCoverV114(
+                _presentationWidth,
+                _presentationHeight,
+                Path.GetFileName(hostPath));
+        }
         return true;
 
     }
@@ -1383,3 +2866,9 @@ internal static class HostMovieBridge
         }
     }
 }
+
+
+
+
+
+

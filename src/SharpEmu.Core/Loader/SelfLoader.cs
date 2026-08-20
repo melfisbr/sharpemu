@@ -166,6 +166,12 @@ public sealed class SelfLoader : ISelfLoader
     {
         ArgumentNullException.ThrowIfNull(virtualMemory);
 
+        var loaderPerfStarted = Stopwatch.GetTimestamp();
+        var mapElapsedMs = 0.0;
+        var relocationElapsedMs = 0.0;
+        var symbolElapsedMs = 0.0;
+        var metadataElapsedMs = 0.0;
+
         if (imageData.IsEmpty)
         {
             throw new InvalidDataException("Input image is empty.");
@@ -214,7 +220,12 @@ public sealed class SelfLoader : ISelfLoader
         {
             if (clearVirtualMemory)
             {
-                if (!physicalVm.TryAllocateAtExact(imageBase, totalImageSize, executable: true, out var allocatedBase))
+                if (!TryAllocateLoaderImageAtExact(
+                        physicalVm,
+                        imageBase,
+                        totalImageSize,
+                        executable: true,
+                        out var allocatedBase))
                 {
                     // Exact allocation failed — the host may have already claimed
                     // part of this range (ASLR, Rosetta 2, or another process).
@@ -246,26 +257,41 @@ public sealed class SelfLoader : ISelfLoader
 
                 imageBase = allocatedBase;
             }
-            else if (!TryAllocateAdditionalImageAtExact(
-                         physicalVm,
-                         imageBase,
-                         totalImageSize,
-                         requiredLoadAlignment,
-                         isNextGen,
-                         out imageBase))
+            else
             {
-                var allocatedBase = physicalVm.AllocateAt(imageBase, totalImageSize, executable: true);
-                if (allocatedBase != imageBase)
+                // Preserve the preferred guest base across the exact-allocation attempt.
+                // TryAllocateAdditionalImageAtExact returns allocatedBase=0 on failure;
+                // passing imageBase itself as the out parameter would clobber the preferred
+                // base and make AllocateAt(0, ...) skip its fixed-address retry.
+                var preferredImageBase = imageBase;
+                if (!TryAllocateAdditionalImageAtExact(
+                        physicalVm,
+                        preferredImageBase,
+                        totalImageSize,
+                        requiredLoadAlignment,
+                        isNextGen,
+                        out var exactImageBase))
                 {
-                    Console.WriteLine($"[LOADER] Could not allocate module at preferred base 0x{imageBase:X16}");
-                    Console.WriteLine($"[LOADER] Allocated module at 0x{allocatedBase:X16} instead.");
-                }
+                    var allocatedBase = physicalVm.AllocateAt(preferredImageBase, totalImageSize, executable: true);
+                    if (allocatedBase != preferredImageBase)
+                    {
+                        Console.WriteLine($"[LOADER] Could not allocate module at preferred base 0x{preferredImageBase:X16}");
+                        Console.WriteLine($"[LOADER] Allocated module at 0x{allocatedBase:X16} instead.");
+                    }
 
-                imageBase = allocatedBase;
+                    imageBase = allocatedBase;
+                }
+                else
+                {
+                    imageBase = exactImageBase;
+                }
             }
         }
 
+        var mapStarted = Stopwatch.GetTimestamp();
         MapLoadSegments(imageData, loadContext, programHeaders, virtualMemory, imageBase);
+        mapElapsedMs = Stopwatch.GetElapsedTime(mapStarted).TotalMilliseconds;
+
         // Register every module before relocations so DTPMOD/DTPOFF/TPOFF use
         // the module's real PT_TLS identity and Variant II static offset.
         var tlsInfo = RegisterModuleTlsTemplate(
@@ -273,6 +299,7 @@ public sealed class SelfLoader : ISelfLoader
             virtualMemory,
             imageBase,
             tlsModuleId);
+        var relocationStarted = Stopwatch.GetTimestamp();
         var importStubs = ResolveAndPatchImportStubs(
             imageData,
             loadContext,
@@ -283,10 +310,13 @@ public sealed class SelfLoader : ISelfLoader
             _moduleManager,
             tlsModuleId,
             out var importedRelocations);
+        relocationElapsedMs = Stopwatch.GetElapsedTime(relocationStarted).TotalMilliseconds;
+
         var effectiveImportStubs = importStubs.Count == 0
             ? new Dictionary<ulong, string>()
             : new Dictionary<ulong, string>(importStubs);
         var runtimeSymbols = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        var symbolStarted = Stopwatch.GetTimestamp();
         RegisterRuntimeSymbolsAndHooks(
             imageData,
             loadContext,
@@ -296,12 +326,15 @@ public sealed class SelfLoader : ISelfLoader
             imageBase,
             effectiveImportStubs,
             runtimeSymbols);
+        symbolElapsedMs = Stopwatch.GetElapsedTime(symbolStarted).TotalMilliseconds;
+
         var finalizedImportStubs = effectiveImportStubs.Count == 0
             ? EmptyImportStubs
             : effectiveImportStubs;
         var finalizedRuntimeSymbols = runtimeSymbols.Count == 0
             ? EmptyRuntimeSymbols
             : runtimeSymbols;
+        var metadataStarted = Stopwatch.GetTimestamp();
         CollectInitializerFunctions(
             imageData,
             loadContext,
@@ -319,6 +352,9 @@ public sealed class SelfLoader : ISelfLoader
             imageBase);
         var procParamAddress = ResolveProcParamAddress(programHeaders, imageBase);
         var moduleParamAddress = ResolveModuleParamAddress(programHeaders, imageBase);
+        metadataElapsedMs = Stopwatch.GetElapsedTime(metadataStarted).TotalMilliseconds;
+
+        FinalizeLoadSegmentProtections(programHeaders, virtualMemory, imageBase);
 
         Console.WriteLine($"[LOADER] ELF type: 0x{elfHeader.Type:X4} ({elfHeader.ImageType})");
         Console.WriteLine($"[LOADER] ELF e_entry: 0x{elfHeader.EntryPoint:X16}");
@@ -348,6 +384,13 @@ public sealed class SelfLoader : ISelfLoader
             _nextTlsModuleId++;
         }
         Console.Error.WriteLine($"[LOADER][TLS] load_done assigned={tlsModuleId} next={_nextTlsModuleId}");
+        var totalElapsedMs = Stopwatch.GetElapsedTime(loaderPerfStarted).TotalMilliseconds;
+        Console.Error.WriteLine(
+            $"[LOADER][PERF][V74.0.56.32] map_ms={mapElapsedMs:F1} " +
+            $"reloc_ms={relocationElapsedMs:F1} symbols_ms={symbolElapsedMs:F1} " +
+            $"metadata_ms={metadataElapsedMs:F1} total_ms={totalElapsedMs:F1} " +
+            $"import_relocations={importedRelocations.Count} imports={finalizedImportStubs.Count} " +
+            $"symbols={finalizedRuntimeSymbols.Count}");
 
         return new SelfImage(
             loadContext.IsSelf,
@@ -564,11 +607,48 @@ public sealed class SelfLoader : ISelfLoader
                 fileData = imageData.Slice((int)sourceOffset, (int)header.FileSize);
             }
 
-            virtualMemory.Map(
-                virtualAddress,
+            if (virtualMemory is PhysicalVirtualMemory physicalVm)
+            {
+                physicalVm.MapLoaderSegment(
+                    virtualAddress,
+                    header.MemorySize,
+                    sourceOffset,
+                    fileData,
+                    header.Flags);
+            }
+            else
+            {
+                virtualMemory.Map(
+                    virtualAddress,
+                    header.MemorySize,
+                    sourceOffset,
+                    fileData,
+                    header.Flags);
+            }
+        }
+    }
+
+    private static void FinalizeLoadSegmentProtections(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        IVirtualMemory virtualMemory,
+        ulong imageBase)
+    {
+        if (virtualMemory is not PhysicalVirtualMemory physicalVm)
+        {
+            return;
+        }
+
+        for (var index = 0; index < programHeaders.Count; index++)
+        {
+            var header = programHeaders[index];
+            if (header.HeaderType != ProgramHeaderType.Load || header.MemorySize == 0)
+            {
+                continue;
+            }
+
+            physicalVm.FinalizeLoaderSegmentProtection(
+                checked(imageBase + header.VirtualAddress),
                 header.MemorySize,
-                sourceOffset,
-                fileData,
                 header.Flags);
         }
     }
@@ -789,6 +869,7 @@ public sealed class SelfLoader : ISelfLoader
             relocations,
             symbolTable,
             stringTable,
+            programHeaders,
             virtualMemory,
             imageBase,
             tlsModuleId,
@@ -803,6 +884,7 @@ public sealed class SelfLoader : ISelfLoader
                 imageData,
                 loadContext,
                 elfHeader,
+                programHeaders,
                 virtualMemory,
                 imageBase,
                 tlsModuleId,
@@ -833,15 +915,6 @@ public sealed class SelfLoader : ISelfLoader
             .ToArray();
         var stubsByAddress = CreateImportStubMapping(virtualMemory, stubImportNids);
         Console.WriteLine($"[LOADER] Created {stubsByAddress.Count} import stubs");
-
-        int printCount = Math.Min(10, stubImportNids.Length);
-        for (int i = 0; i < printCount; i++)
-        {
-            var nid = stubImportNids[i];
-            var addr = stubsByAddress.First(x => x.Value == nid).Key;
-        }
-
-        var nidNames = Aerolib.Instance.GetAllNidNames();
 
         var nidCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var descriptor in descriptors)
@@ -930,6 +1003,7 @@ public sealed class SelfLoader : ISelfLoader
         ReadOnlySpan<byte> imageData,
         LoadContext loadContext,
         ElfHeader elfHeader,
+        IReadOnlyList<ProgramHeader> programHeaders,
         IVirtualMemory virtualMemory,
         ulong imageBase,
         uint tlsModuleId,
@@ -986,6 +1060,7 @@ public sealed class SelfLoader : ISelfLoader
                 relocations,
                 symbolTable,
                 stringTable,
+                programHeaders,
                 virtualMemory,
                 imageBase,
                 tlsModuleId,
@@ -1003,6 +1078,7 @@ public sealed class SelfLoader : ISelfLoader
         IReadOnlyList<ElfRelocation> relocations,
         ReadOnlySpan<byte> symbolTable,
         ReadOnlySpan<byte> stringTable,
+        IReadOnlyList<ProgramHeader> programHeaders,
         IVirtualMemory virtualMemory,
         ulong imageBase,
         uint tlsModuleId,
@@ -1035,7 +1111,12 @@ public sealed class SelfLoader : ISelfLoader
             }
 
             var relocationWriteSize = GetRelocationWriteSize(relocation.Type);
-            if (!TryResolveMappedAddress(virtualMemory, relocation.Offset, imageBase, relocationWriteSize, out var targetAddress))
+            if (!TryResolveLoadSegmentAddress(
+                    programHeaders,
+                    relocation.Offset,
+                    imageBase,
+                    relocationWriteSize,
+                    out var targetAddress))
             {
                 if (IsFocusRelocationOffset(relocation.Offset, imageBase))
                 {
@@ -1133,7 +1214,10 @@ public sealed class SelfLoader : ISelfLoader
             {
                 var symbolAddress = relocation.Type is RelocationTypeSize32 or RelocationTypeSize64
                     ? 0
-                    : ResolveMappedAddressOrFallback(virtualMemory, symbol.Value, imageBase);
+                    : ResolveLoadSegmentAddressOrFallback(
+                        programHeaders,
+                        symbol.Value,
+                        imageBase);
                 if (symbolAddress == 0)
                 {
                     if (relocation.Type is not (RelocationTypeSize32 or RelocationTypeSize64))
@@ -1159,7 +1243,10 @@ public sealed class SelfLoader : ISelfLoader
             {
                 var symbolAddress = relocation.Type is RelocationTypeSize32 or RelocationTypeSize64
                     ? 0
-                    : ResolveMappedAddressOrFallback(virtualMemory, symbol.Value, imageBase);
+                    : ResolveLoadSegmentAddressOrFallback(
+                        programHeaders,
+                        symbol.Value,
+                        imageBase);
                 if (symbolAddress == 0)
                 {
                     if (relocation.Type is not (RelocationTypeSize32 or RelocationTypeSize64))
@@ -2488,6 +2575,41 @@ public sealed class SelfLoader : ISelfLoader
             $"(first at off=0x{offset:X16}); COPY requires dependency symbol storage and IRELATIVE requires resolver execution.");
     }
 
+    private static bool TryAllocateLoaderImageAtExact(
+        PhysicalVirtualMemory physicalVm,
+        ulong desiredAddress,
+        ulong size,
+        bool executable,
+        out ulong actualAddress)
+    {
+        // Windows loader images benefit from a sparse reservation because the
+        // ELF image span can contain large holes/BSS. PT_LOAD pages are committed
+        // by MapLoaderSegment and remain writable until relocations complete.
+        var sparseDisabled = string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_DISABLE_LOADER_SPARSE_RESERVATION"),
+            "1",
+            StringComparison.Ordinal);
+        if (OperatingSystem.IsWindows() &&
+            !sparseDisabled &&
+            physicalVm.TryReserveLoaderImageAtExact(
+                desiredAddress,
+                size,
+                executable,
+                out actualAddress))
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][PERF][V74.0.56.32] sparse_reservation=1 " +
+                $"base=0x{actualAddress:X16} size=0x{size:X}");
+            return true;
+        }
+
+        return physicalVm.TryAllocateAtExact(
+            desiredAddress,
+            size,
+            executable,
+            out actualAddress);
+    }
+
     private static ulong DetermineRequestedImageBase(
         IVirtualMemory virtualMemory,
         ulong totalImageSize,
@@ -2570,7 +2692,12 @@ public sealed class SelfLoader : ISelfLoader
                 break;
             }
 
-            if (physicalVm.TryAllocateAtExact(candidate, alignedSize, executable: true, out allocatedBase))
+            if (TryAllocateLoaderImageAtExact(
+                    physicalVm,
+                    candidate,
+                    alignedSize,
+                    executable: true,
+                    out allocatedBase))
             {
                 return true;
             }
@@ -2841,6 +2968,104 @@ public sealed class SelfLoader : ISelfLoader
 
         Console.Error.WriteLine($"[LOADER][TEST] -> fallback raw 0x{address:X}");
         return address;
+    }
+
+    // SHARPEMU_V74_0_56_32_RELOCATION_RANGE_FASTPATH
+    //
+    // Relocation targets are defined against PT_LOAD ranges. Resolve them from
+    // the already parsed program headers instead of probing guest memory for
+    // every relocation. The previous TryRead-based check could perform hundreds
+    // of thousands of VM lookups/commits during a large PS5 image load.
+    private static ulong ResolveLoadSegmentAddressOrFallback(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        ulong address,
+        ulong imageBase)
+    {
+        if (address == 0)
+        {
+            return 0;
+        }
+
+        if (TryResolveLoadSegmentAddress(programHeaders, address, imageBase, 1, out var resolved))
+        {
+            return resolved;
+        }
+
+        // Preserve the old fallback for absolute symbols that legitimately
+        // reference an address outside this image. Local/defined ELF symbols
+        // normally resolve above through PT_LOAD without touching guest memory.
+        return address < 0x10000 ? 0 : address;
+    }
+
+    private static bool TryResolveLoadSegmentAddress(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        ulong address,
+        ulong imageBase,
+        int requiredBytes,
+        out ulong resolvedAddress)
+    {
+        if (requiredBytes <= 0)
+        {
+            resolvedAddress = address;
+            return true;
+        }
+
+        if (IsRangeInLoadSegment(programHeaders, imageBase, address, (ulong)requiredBytes))
+        {
+            resolvedAddress = address;
+            return true;
+        }
+
+        if (address <= ulong.MaxValue - imageBase)
+        {
+            var rebased = address + imageBase;
+            if (IsRangeInLoadSegment(programHeaders, imageBase, rebased, (ulong)requiredBytes))
+            {
+                resolvedAddress = rebased;
+                return true;
+            }
+        }
+
+        resolvedAddress = 0;
+        return false;
+    }
+
+    private static bool IsRangeInLoadSegment(
+        IReadOnlyList<ProgramHeader> programHeaders,
+        ulong imageBase,
+        ulong address,
+        ulong size)
+    {
+        if (size == 0 || address > ulong.MaxValue - size)
+        {
+            return false;
+        }
+
+        var end = address + size;
+        for (var i = 0; i < programHeaders.Count; i++)
+        {
+            var header = programHeaders[i];
+            if (header.HeaderType != ProgramHeaderType.Load ||
+                header.MemorySize == 0 ||
+                header.VirtualAddress > ulong.MaxValue - imageBase)
+            {
+                continue;
+            }
+
+            var start = imageBase + header.VirtualAddress;
+            if (header.MemorySize > ulong.MaxValue - start)
+            {
+                continue;
+            }
+
+            var segmentEnd = start + header.MemorySize;
+            if (address >= start && end <= segmentEnd)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryResolveMappedAddress(

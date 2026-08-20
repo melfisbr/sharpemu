@@ -1,0 +1,25 @@
+V74.0.67.2.14
+
+Observed runtime chain:
+  provider init success
+  caps=0x9
+  immediately Fatal 0xC0000005
+  Vk.CmdPipelineBarrier
+  TryPrepareUpscalerPreCompositeForConsumer
+  ExecuteOffscreenDrawCore
+
+Source ordering:
+  TryPrepareUpscalerPreCompositeForConsumer
+  -> CreateTranslatedDrawResources
+  -> BeginBatchedGuestCommands / _commandBuffer assignment
+
+The pre-composite path therefore used _commandBuffer before the normal owner
+assignment.
+
+Fix:
+  BeginBatchedGuestCommands()
+  _commandBuffer = returned batch
+  CloseOpenTranslatedRenderPass()
+  then RecordGuestImageForSampling / barriers / NGX dispatch.
+
+No guest address is hardcoded.

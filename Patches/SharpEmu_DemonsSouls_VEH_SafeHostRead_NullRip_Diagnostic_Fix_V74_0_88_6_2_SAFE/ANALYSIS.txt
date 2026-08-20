@@ -1,0 +1,36 @@
+SharpEmu Demon's Souls V74.0.88.6.2 SAFE
+
+The V74.0.88.6.1 package successfully reached source modification and proved the
+structural target was correct, but the C# build failed with exactly four errors:
+
+CS0214 at the VirtualQuery `(void*)address` call,
+CS0214 at the pointer expression,
+CS0233 at `sizeof(MEMORY_BASIC_INFORMATION64)`,
+CS0214 for the unsafe operation context.
+
+The patched file was:
+src\SharpEmu.Core\Cpu\Native\DirectExecutionBackend.Exceptions.cs
+
+V88.6.1 then performed SAFE rollback, so the current checkout is still the
+pre-apply baseline.
+
+Root cause of the build failure:
+The V88.6.1 transform replaced only the body of TryReadHostQword. The new body
+correctly uses the existing DirectExecutionBackend `VirtualQuery(void*, ...)`
+wrapper and `sizeof(MEMORY_BASIC_INFORMATION64)`, but the original
+TryReadHostQword declaration is not an unsafe method.
+
+The source itself already defines DirectExecutionBackend methods such as
+`private unsafe static nuint VirtualQuery(void* ...)`, so this is a local
+compile-context issue, not a project configuration problem.
+
+V74.0.88.6.2:
+- retains the safe VirtualQuery/readable-page/qword-boundary body;
+- structurally changes only the TryReadHostQword declaration to:
+    private unsafe static bool TryReadHostQword(...)
+- asserts after apply that the method declaration is unsafe;
+- keeps VectoredHandler unchanged;
+- does not skip the guest RIP=0;
+- preserves SAFE backup/rollback;
+- keeps the live runtime diagnostic focused on the original
+  Core.Res.Decompressor null-RIP event after the host diagnostic read is fixed.

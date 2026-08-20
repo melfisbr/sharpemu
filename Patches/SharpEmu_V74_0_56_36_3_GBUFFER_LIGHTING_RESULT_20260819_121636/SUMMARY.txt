@@ -1,0 +1,21 @@
+﻿SharpEmu V74.0.56.36.3 GBUFFER/LIGHTING STRUCTURAL-ADAPT RESULT
+wall_seconds=357,183
+exit_code=
+gbuffer_contract_counter=0
+gbuffer_slot1_added_hits=0
+gbuffer_slot1_present_hits=0
+gbuffer_metadata_repair_hits=0
+dcc_fastclear_materialize_counter=256
+dcc_fastclear_45d55_hits=256
+dcc_deferred_46089_hits=34
+dcc_metadata_alias_hit_counter=2
+dcc_metadata_alias_46089_hits=2
+dcc_metadata_alias_miss_counter=1024
+dedicated_wait_drain_logs=0
+gate_owner_wait_drain_logs=0
+native_exception_hits=0
+device_lost_hits=0
+timeline_completed=62508
+timeline_submitted=62508
+render_fps_last=0,6
+render_fps_peak=1,9

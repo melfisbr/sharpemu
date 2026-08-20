@@ -1,9 +1,0 @@
-{
-  "revision": "V72.4.3.2.27.0.2",
-  "script_only": true,
-  "source_change": false,
-  "build": false,
-  "precondition": "V27.0.1 SUCCESS already completed",
-  "fix": "replace ProcessStartInfo.ArgumentList with PowerShell 5.1-compatible ProcessStartInfo.Arguments",
-  "expected_nihav_sha256": "cc911d477e772598f7a5995b6738265fb77bda0061f7a0b8ba79711acf263a18"
-}

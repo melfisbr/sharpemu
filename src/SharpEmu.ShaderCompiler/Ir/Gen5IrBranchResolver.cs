@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 
@@ -39,7 +39,11 @@ public sealed class Gen5IrBranchResolver : IIrBranchResolver
             "SCbranchVccz" or
             "SCbranchVccnz" or
             "SCbranchExecz" or
-            "SCbranchExecnz"
+            "SCbranchExecnz" or
+            "SCbranchCdbgsys" or
+            "SCbranchCdbguser" or
+            "SCbranchCdbgsysOrUser" or
+            "SCbranchCdbgsysAndUser"
                 => true,
 
 
@@ -55,56 +59,35 @@ public sealed class Gen5IrBranchResolver : IIrBranchResolver
         Gen5ShaderInstruction instruction,
         out uint targetPc)
     {
-
         targetPc = 0;
 
-
-        if(!IsBranch(instruction))
+        // Upstream 0.0.3: END_PGM is a terminator, not a PC-relative branch.
+        if (IsTerminator(instruction))
+        {
             return false;
+        }
 
-
-
-        if(instruction.Words.Count == 0)
+        if (!IsUnconditionalBranch(instruction) && !IsConditional(instruction))
+        {
             return false;
+        }
 
-
-
-        short offset =
-            unchecked(
-                (short)(instruction.Words[0] & 0xffff));
-
-
-
-        long next =
-            instruction.Pc +
-            instruction.Words.Count *
-            sizeof(uint);
-
-
-
-        long target =
-            next +
-            offset *
-            sizeof(uint);
-
-
-
-        if(target < 0 ||
-           target > uint.MaxValue)
+        if (instruction.Encoding != Gen5ShaderEncoding.Sopp || instruction.Words.Count == 0)
+        {
             return false;
+        }
 
+        var offset = unchecked((short)(instruction.Words[0] & 0xFFFF));
+        var nextPc = (long)instruction.Pc + instruction.Words.Count * sizeof(uint);
+        var target = nextPc + offset * sizeof(uint);
+        if (target < 0 || target > uint.MaxValue)
+        {
+            return false;
+        }
 
-
-        targetPc =
-            (uint)target;
-
-
+        targetPc = (uint)target;
         return true;
-
     }
-
-
-
 
     public bool Resolve(
         IRInstruction instruction)

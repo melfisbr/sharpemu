@@ -1,0 +1,6 @@
+            (yTerm.Buffer, yTerm.ByteSize),
+            (resources.Output.Buffer, resources.OutputBytes));
+    }
+
+    private TermBuffer GetTermBuffer(Dictionary<int[], TermBuffer> cache, int[] table, int shift)
+    {

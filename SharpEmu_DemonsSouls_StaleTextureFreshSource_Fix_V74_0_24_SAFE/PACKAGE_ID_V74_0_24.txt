@@ -1,1 +1,0 @@
-SharpEmu V74.0.24 SAFE - stale texture fresh guest-source coherency repair

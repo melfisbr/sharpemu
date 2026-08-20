@@ -1,0 +1,24 @@
+            string.Equals(
+                fileName,
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            // SHARPEMU_V74_0_83_LOGO_INTRO_TITLE_PASSTHROUGH
+            string.Equals(
+                fileName,
+                "logo_intro.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            // SHARPEMU_V74_0_84_1_UI_BINK_GUEST_LIVE_PASSTHROUGH
+            // main_menu*.bk2 is a texture source behind live guest UI. It must
+            // never take the boot/fullscreen decoder execution gate.
+            string.Equals(
+                fileName,
+                "main_menu.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "main_menu_ngp.bk2",
+                StringComparison.OrdinalIgnoreCase);

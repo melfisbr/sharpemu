@@ -1,9 +1,0 @@
-V74.0.16.1 safety properties
-- no whole-file source payload
-- no fake texture data
-- no DCC CPU snapshot re-enabled
-- history seeded only after normal metadata/shape/format + live-GPU-image resolution
-- history hit accepted only while TTL-valid and GPU image remains available
-- default DCC history disabled outside explicit test profile
-- snapshot cache key retains guest write generation; default TTL remains 2s
-- AGC source restored on apply/build failure

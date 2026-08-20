@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
@@ -8,6 +8,8 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading;
+
+using SharpEmu.Libs.Media;
 
 namespace SharpEmu.Libs.Audio;
 
@@ -22,7 +24,7 @@ public static class AudioOut2Exports
     // align at [rbp-0x30] (observed canary=0x100). Size-only (8 bytes) on stack.
     private const int AudioOut2ContextMemorySize = 0x4000;
     private const int AudioOut2ContextMemoryAlignment = 0x100;
-    // Exact object body size. Do not page-align to 64K — the RAGE Main Thread
+    // Exact object body size. Do not page-align to 64K â€” the RAGE Main Thread
     // stack-allocates this and a 64K VLA is what planted 0x10000 on the canary.
     private const int SpeakerArrayHeaderSize = 0x40;
     private const int SpeakerArrayEntrySize = 0x100;
@@ -35,7 +37,7 @@ public static class AudioOut2Exports
     private const int SpeakerArrayResultFieldOffset = 0x3C;
     private const uint SpeakerArrayDefaultDivisor = 1;
     private const int SpeakerArrayCoefficientBytes = 0x400;
-    // OrbisAudioOutPortState is 0x20 bytes. Never grow this from r8/r9 — those
+    // OrbisAudioOutPortState is 0x20 bytes. Never grow this from r8/r9 â€” those
     // regs arrive polluted with GetSize leftovers (0x840/0x10C/0x180) and caused
     // PortGetState/GetSpeakerInfo to overwrite the speaker-array param block
     // (param+0x18 == first PortGetState out) and smash the Main Thread canary
@@ -139,7 +141,7 @@ public static class AudioOut2Exports
 
         public ulong Handle { get; }
         public ulong ContextHandle { get; }
-        /// <summary>Full Prospero port type (low byte = MAIN/BGM/…, 0x0100 = object).</summary>
+        /// <summary>Full Prospero port type (low byte = MAIN/BGM/â€¦, 0x0100 = object).</summary>
         public ushort PortType { get; }
         public uint DataFormat { get; }
         public uint SamplingFrequency { get; }
@@ -153,6 +155,8 @@ public static class AudioOut2Exports
     // Two host streams: primary FMOD context (menus) and everything else
     // (Bink/intro). Mixing those into one waveOut re-crunched audio; the OS
     // mixer keeps separate devices clean.
+    // SHARPEMU_DEMONS_STARTUP_AUDIOOUT2_MUTE_V1_1_6
+    private static long _v116StartupMutedContextSubmitCount;
     private static readonly object HostBackendGate = new();
     private static IHostAudioStream? PrimaryBackend;
     private static IHostAudioStream? SecondaryBackend;
@@ -170,6 +174,33 @@ public static class AudioOut2Exports
     {
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    // Ghost of Yotei calls this with flags=0 during Scream startup and never
+    // checks the result before continuing into its mastering path; the actual
+    // mastering chain lives in the host mixer, so accepting the request is
+    // sufficient.
+    [SysAbiExport(
+        Nid = "XHl38ZNknbs",
+        ExportName = "sceAudioOut2MasteringInit",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAudioOut2")]
+    public static int AudioOut2MasteringInit(CpuContext ctx)
+    {
+        return SetReturn(ctx, 0);
+    }
+
+    // 3D-audio object latency hint; the host mixer has no object pipeline to
+    // tune, but failure here makes Yotei tear down its whole ACM context and
+    // abort audio arena bring-up.
+    [SysAbiExport(
+        Nid = "TViD1EZXkNI",
+        ExportName = "sceAudioOut2Set3DLatency",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAudioOut2")]
+    public static int AudioOut2Set3DLatency(CpuContext ctx)
+    {
+        return SetReturn(ctx, 0);
     }
 
     [SysAbiExport(
@@ -231,7 +262,7 @@ public static class AudioOut2Exports
 
         // Heap: {size, alignment} (16 bytes), matching sceAudioPropagationSystemQueryMemory.
         // Stack: SIZE ONLY as a full ulong (8 bytes). Writing alignment at +8 is how
-        // [rbp-0x30] became 0x100 on GTA V Enhanced. Do NOT shrink this to uint32 —
+        // [rbp-0x30] became 0x100 on GTA V Enhanced. Do NOT shrink this to uint32 â€”
         // Main reads the out as a 64-bit size; a 4-byte write leaves a garbage high
         // dword (observed 0x7<<32|0x4000) and the allocator aborts with int 0x41.
         if (IsGuestStackAddress(memoryInfoAddress))
@@ -604,7 +635,7 @@ public static class AudioOut2Exports
         // Stack out-buffers with garbage handles were writing 0x20 bytes over
         // caller frames / canaries (state=0x7FFFDE1FF688 right before fail).
         // Heap outs still get a real state blob even when the handle wasn't
-        // minted by PortCreate — this title synthesizes port ids itself.
+        // minted by PortCreate â€” this title synthesizes port ids itself.
         if (IsGuestStackAddress(stateAddress) &&
             !(AllowStackOut("portstate") && Ports.ContainsKey(portHandle)))
         {
@@ -734,7 +765,7 @@ public static class AudioOut2Exports
     }
 
     // Matches sceAudio3dGetSpeakerArrayMemorySize(uiNumSpeakers, bIs3d): size is
-    // returned directly in rax. Exact channel-scaled body — never a 64K slab.
+    // returned directly in rax. Exact channel-scaled body â€” never a 64K slab.
     [SysAbiExport(
         Nid = "G1YOKDJYX2Y",
         ExportName = "sceAudioOut2GetSpeakerArrayMemorySize",
@@ -772,7 +803,7 @@ public static class AudioOut2Exports
     public static int AudioOut2GetSpeakerArrayAmbisonicsCoefficients(CpuContext ctx) =>
         WriteZeroSpeakerArrayCoefficients(ctx, "ambisonics-coefficients");
 
-    // rdi = param (may share a heap slab with PortGetState/GetSpeakerInfo outs —
+    // rdi = param (may share a heap slab with PortGetState/GetSpeakerInfo outs â€”
     // do NOT read buffer*/size* from it). rsi = &outHandle, rdx = reserved/size
     // slot (leave alone), rcx = channels. Always heap-allocate a fresh object.
     [SysAbiExport(
@@ -808,7 +839,7 @@ public static class AudioOut2Exports
 
         SpeakerArrays[memory] = 0;
         // Publish ONLY the out-handle slot. rdx is an adjacent size/reserved
-        // local on GTA's stack — writing it previously fed canary corruption.
+        // local on GTA's stack â€” writing it previously fed canary corruption.
         if (!TryWriteUInt64(ctx, outHandleAddress, memory))
         {
             return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
@@ -1083,7 +1114,27 @@ public static class AudioOut2Exports
                         FloatToPcm16(right));
                 }
 
-                // V61.20.0_AUDIO_SILENCE_FASTPATH
+                                if (BinkDemonSoulsIntroAudioV7243227.IsStartupGuestAudioMuteActiveV116())
+                {
+                    var muted = Interlocked.Increment(
+                        ref _v116StartupMutedContextSubmitCount);
+
+                    if (muted <= 8 || muted % 200 == 0)
+                    {
+                        Console.Error.WriteLine(
+                            "[BINK-AUDIO-OWNER][V1.1.6] audioout2_silenced " +
+                            $"n={muted} handle=0x{context.Handle:X} " +
+                            $"frames={frames} ports={mixedPorts} peak={peak:F4} " +
+                            "reason=startup-host-audio-owner " +
+                            "host_submit=False guest_pacing_preserved=True");
+                    }
+
+                    // Returning false preserves the established
+                    // ContextPush/Advance PaceAdvance() path while preventing
+                    // transitional Bink PCM from reaching the host backend.
+                    return false;
+                }
+// V61.20.0_AUDIO_SILENCE_FASTPATH
                 // The current Demon's Souls boot path repeatedly submits fully
                 // silent buffers. Do not fill SDL's queue with zeros; returning
                 // false makes ContextPush/Advance use the existing grain pacing.
@@ -1247,7 +1298,7 @@ public static class AudioOut2Exports
 
     private static bool InitializeSpeakerArrayObject(CpuContext ctx, ulong memory, uint channels)
     {
-        // Header only — never wipe the full GetSize slab (and never touch stack).
+        // Header only â€” never wipe the full GetSize slab (and never touch stack).
         Span<byte> body = stackalloc byte[SpeakerArrayHeaderSize];
         body.Clear();
         BinaryPrimitives.WriteUInt32LittleEndian(body[0x00..], (uint)SpeakerArrayHeaderSize);
@@ -1261,7 +1312,7 @@ public static class AudioOut2Exports
     // _nextVirtualAddress into the title's direct-memory window (~0x1559_xxxx);
     // publishing an object there made sceKernelBatchMap(fixed, 0x1559C80000,
     // 0x20000) return NOT_FOUND and abort RenderThread with int 0x41.
-    // Never mint the old 0x1559C0xxxx "cookie" pointers — they are unmapped and
+    // Never mint the old 0x1559C0xxxx "cookie" pointers â€” they are unmapped and
     // collide with dmem VAs.
     private static bool TryAllocateSpeakerArrayMemory(CpuContext ctx, ulong bytes, out ulong memory)
     {
@@ -1347,7 +1398,7 @@ public static class AudioOut2Exports
             destination = ctx[CpuRegister.Rdx];
         }
 
-        // Coefficients are large — only wipe real heap objects, never stack.
+        // Coefficients are large â€” only wipe real heap objects, never stack.
         if (destination != 0 &&
             IsPlausibleGuestObjectPointer(destination) &&
             !IsGuestStackAddress(destination))
@@ -1386,3 +1437,4 @@ public static class AudioOut2Exports
         }
     }
 }
+

@@ -401,6 +401,11 @@ internal sealed class MetalGuestGpuBackend : IGuestGpuBackend
     public void SubmitGuestImageWrite(ulong address, byte[] pixels, uint rowOffset = 0) =>
         MetalVideoPresenter.SubmitGuestImageWrite(address, pixels);
 
+    // Metal does not yet expose a safe live-image DMA copy path. Returning
+    // false keeps the existing guest-RAM mirror fallback intact.
+    public bool TrySubmitGuestImageCopy(ulong sourceAddress, ulong destinationAddress) =>
+        false;
+
     public void RequestCpuWrittenGuestImageSync(ulong scopeAddress = 0, ulong scopeByteCount = ulong.MaxValue) =>
         MetalVideoPresenter.RequestCpuWrittenGuestImageSync(scopeAddress, scopeByteCount);
 

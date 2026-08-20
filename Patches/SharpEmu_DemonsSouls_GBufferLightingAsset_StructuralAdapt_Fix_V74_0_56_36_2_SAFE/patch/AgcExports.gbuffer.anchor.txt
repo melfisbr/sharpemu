@@ -1,0 +1,2 @@
+        selectedTargets.Sort(static (left, right) => left.Slot.CompareTo(right.Slot));
+        var renderTargets = selectedTargets.ToArray();

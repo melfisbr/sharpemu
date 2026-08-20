@@ -1,0 +1,2 @@
+C:\Users\Edpo\Documents\GitHub\sharpemu\.sharpemu-hotfix-backup\RADEbootTimelineWave_V72_4_3_2_31_7_16_1_20260816_120220
+PROFILE_EXISTED=False

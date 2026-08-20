@@ -1,0 +1,70 @@
+        // SHARPEMU_V74_0_86_1_DS_UI_BINK_CHARACTER_CREATOR_COMPOSITE
+        private static bool IsUiBinkStickyPlaneEnabledV740861() =>
+            Environment.GetEnvironmentVariable("SHARPEMU_DS_UI_BINK_STICKY_PLANES") != "0";
+
+        private HostMovieTextureBindings FindLearnedUiBinkTextureBindingsV740861(
+            IReadOnlyList<GuestDrawTexture> textures)
+        {
+            if (!IsUiBinkStickyPlaneEnabledV740861() ||
+                !HostMovieBridge.IsDemonSoulsUiBinkCompositePathV740841(
+                    _hostMovieFramePath) ||
+                (_v740861LearnedUiBinkLumaAddresses.Count == 0 &&
+                 _v740861LearnedUiBinkChromaAddresses.Count == 0))
+            {
+                return HostMovieTextureBindings.None;
+            }
+
+            var lumaIndex = -1;
+            var chromaIndex = -1;
+            for (var index = 0; index < textures.Count; index++)
+            {
+                var texture = textures[index];
+                if (texture.Address == 0 ||
+                    texture.IsStorage ||
+                    texture.IsFallback ||
+                    texture.ArrayedView ||
+                    texture.ArrayLayers > 1)
+                {
+                    continue;
+                }
+
+                if (lumaIndex < 0 &&
+                    texture.Format == 1 &&
+                    texture.Width >= 1280 &&
+                    texture.Height >= 720 &&
+                    _v740861LearnedUiBinkLumaAddresses.Contains(texture.Address))
+                {
+                    lumaIndex = index;
+                }
+                else if (chromaIndex < 0 &&
+                         texture.Format == 3 &&
+                         texture.Width >= 640 &&
+                         texture.Height >= 360 &&
+                         _v740861LearnedUiBinkChromaAddresses.Contains(texture.Address))
+                {
+                    chromaIndex = index;
+                }
+            }
+
+            if (lumaIndex < 0 && chromaIndex < 0)
+            {
+                return HostMovieTextureBindings.None;
+            }
+
+            var trace = Interlocked.Increment(
+                ref _v740861UiBinkStickyPlaneCount);
+            if (trace <= 16 || (trace & (trace - 1)) == 0)
+            {
+                var lumaAddress = lumaIndex >= 0 ? textures[lumaIndex].Address : 0UL;
+                var chromaAddress = chromaIndex >= 0 ? textures[chromaIndex].Address : 0UL;
+                Console.Error.WriteLine(
+                    "[V74.0.86.1][UI_BINK_STICKY_PLANE] " +
+                    $"count={trace} file='{Path.GetFileName(_hostMovieFramePath)}' " +
+                    $"luma_index={lumaIndex} luma=0x{lumaAddress:X16} " +
+                    $"chroma_index={chromaIndex} chroma=0x{chromaAddress:X16} " +
+                    "action=host-plane-substitution raw-guest-sample=blocked scene_color=preserved");
+            }
+
+            return new HostMovieTextureBindings(lumaIndex, chromaIndex);
+        }
+

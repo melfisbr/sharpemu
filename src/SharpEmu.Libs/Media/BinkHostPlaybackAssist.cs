@@ -94,6 +94,62 @@ internal static partial class BinkHostPlaybackAssist
             generation);
     }
 
+    // SHARPEMU_V74_0_77_DEMONS_TITLE_TIMELINE
+    // Demon's Souls attract/title-loop movies are visual presentation owned by
+    // the host bridge, but the title's guest state machine must keep executing
+    // underneath them. In particular StartIntro/MusicSkipIntro, input and UI
+    // progression must be able to reach the PRESS ANY BUTTON/title-menu state.
+    //
+    // Keep one-shot startup logos on the historical hard gate. Only the
+    // guest-driven attract and title/press-start loop are pass-through.
+    private static readonly bool _demonsTitleTimelinePassthroughV74077 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_TITLE_TIMELINE_PASSTHROUGH"),
+            "0",
+            StringComparison.Ordinal);
+
+    internal static bool IsTitleTimelinePassthroughMovieV74077(
+        string? hostPath)
+    {
+        if (!_demonsTitleTimelinePassthroughV74077 ||
+            string.IsNullOrWhiteSpace(hostPath))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(hostPath);
+        return
+            string.Equals(
+                fileName,
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            // SHARPEMU_V74_0_83_LOGO_INTRO_TITLE_PASSTHROUGH
+            string.Equals(
+                fileName,
+                "logo_intro.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "logo_intro_loop.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            // SHARPEMU_V74_0_84_1_UI_BINK_GUEST_LIVE_PASSTHROUGH
+            // main_menu*.bk2 is a texture source behind live guest UI. It must
+            // never take the boot/fullscreen decoder execution gate.
+            string.Equals(
+                fileName,
+                "main_menu.bk2",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                fileName,
+                "main_menu_ngp.bk2",
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsActiveTitleTimelinePassthroughV74077() =>
+        IsTitleTimelinePassthroughMovieV74077(
+            Volatile.Read(ref _activeHostMoviePath));
+
     // [V61.13.23.3][DECODER_ACTIVE_GUARD]
     // Throttle guest snapshot production as soon as the host boot decoder is
     // attached, not only after its first frame arrives. This prevents a decoder
@@ -103,11 +159,19 @@ internal static partial class BinkHostPlaybackAssist
     {
         Interlocked.Increment(ref _hostMovieDecoderGeneration);
 
+        var titleTimelinePassthroughV74077 =
+            IsTitleTimelinePassthroughMovieV74077(hostPath);
+
         // V72.4.3.2.14 HOST_MOVIE_CPU_GATE_BEGIN
-        SharpEmu.HLE.HostMovieExecutionGateV7243214.Begin();
+        // V74.0.77: never freeze the Demon's Souls attract/title guest state.
+        if (!titleTimelinePassthroughV74077)
+        {
+            SharpEmu.HLE.HostMovieExecutionGateV7243214.Begin();
+        }
 
         var count = Interlocked.Increment(ref _activeHostMovieDecoders);
         if (count == 1 &&
+            !titleTimelinePassthroughV74077 &&
             Environment.GetEnvironmentVariable(
                 "SHARPEMU_BINK_THROTTLE_GUEST_CPU") == "1")
         {
@@ -122,6 +186,19 @@ internal static partial class BinkHostPlaybackAssist
                 _activeHostMoviePath = hostPath;
             }
         }
+
+        if (titleTimelinePassthroughV74077)
+        {
+            // Make absolutely sure a permit left reset by an immediately
+            // preceding one-shot movie cannot park the title state machine.
+            GuestCpuPermit.Set();
+
+            Console.Error.WriteLine(
+                "[V74.0.77][TITLE_TIMELINE_PASSTHROUGH] " +
+                $"action=start file='{Path.GetFileName(hostPath)}' " +
+                "hle_gate=False cpu_park=False gpu_throttle=False " +
+                "guest_input=True");
+        }
         Log(
             "HOST_MOVIE_DECODER_STARTED",
             "active=" + count.ToString(CultureInfo.InvariantCulture) +
@@ -130,10 +207,24 @@ internal static partial class BinkHostPlaybackAssist
 
     internal static void NotifyHostMovieDecoderStopped(string? hostPath)
     {
+        var titleTimelinePassthroughV74077 =
+            IsTitleTimelinePassthroughMovieV74077(hostPath);
+
         var count = Interlocked.Decrement(ref _activeHostMovieDecoders);
 
         // V72.4.3.2.14 HOST_MOVIE_CPU_GATE_END
-        SharpEmu.HLE.HostMovieExecutionGateV7243214.End();
+        // Pair End only with movies that actually entered Begin.
+        if (!titleTimelinePassthroughV74077)
+        {
+            SharpEmu.HLE.HostMovieExecutionGateV7243214.End();
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                "[V74.0.77][TITLE_TIMELINE_PASSTHROUGH] " +
+                $"action=stop file='{Path.GetFileName(hostPath)}' " +
+                "hle_gate=False guest_state_continued=True");
+        }
 
         if (count < 0)
         {
@@ -170,7 +261,8 @@ internal static partial class BinkHostPlaybackAssist
     // [V72.4.3.2.15][GUEST_CPU_EVENT_PARK]
     internal static void WaitForGuestCpuPermit()
     {
-        if (Environment.GetEnvironmentVariable(
+        if (IsActiveTitleTimelinePassthroughV74077() ||
+            Environment.GetEnvironmentVariable(
                 "SHARPEMU_BINK_THROTTLE_GUEST_CPU") != "1" ||
             GuestCpuPermit.IsSet)
         {
@@ -219,6 +311,11 @@ internal static partial class BinkHostPlaybackAssist
     {
         get
         {
+            if (IsActiveTitleTimelinePassthroughV74077())
+            {
+                return false;
+            }
+
             if (Environment.GetEnvironmentVariable(
                     "SHARPEMU_BINK_THROTTLE_GUEST_GPU") != "1")
             {
@@ -315,7 +412,8 @@ internal static partial class BinkHostPlaybackAssist
 
     internal static bool WaitForGuestGpuCapturePermit()
     {
-        if (Environment.GetEnvironmentVariable(
+        if (IsActiveTitleTimelinePassthroughV74077() ||
+            Environment.GetEnvironmentVariable(
                 "SHARPEMU_BINK_THROTTLE_GUEST_GPU") != "1")
         {
             return true;
@@ -323,6 +421,11 @@ internal static partial class BinkHostPlaybackAssist
 
         while (true)
         {
+            if (IsActiveTitleTimelinePassthroughV74077())
+            {
+                return true;
+            }
+
             var frames = Interlocked.Read(ref _frameCount);
             if (frames <= 0)
             {
@@ -468,7 +571,11 @@ internal static partial class BinkHostPlaybackAssist
                 Interlocked.Read(ref _frameCount)
                     .ToString(CultureInfo.InvariantCulture));
         }
-    }
+    
+
+        // V31.7.14_GUEST_FRAME_ATTRACT_HANDOFF
+
+        HostMovieBridge.NotifyV31714GuestFirstFrameAttractHandoff();}
 
     private static void SchedulePostMovieCleanup()
     {

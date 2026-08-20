@@ -1,0 +1,14 @@
+V74.0.67.2.11.1
+
+False failure:
+  provider_init_telemetry=false
+
+Actual source ownership:
+  [V74.0.67.2.10.2][UPSCALER][PROVIDER_INIT]
+
+V2.11 only added the BPE end-sentinel return repair. Retagging older runtime
+features was intentionally avoided.
+
+V2.11.1 fixes diagnostic.ps1 to check the real source owner tag.
+
+No runtime source implementation changes are introduced by this package.

@@ -216,6 +216,38 @@ public static partial class KernelMemoryCompatExports
     // "/app0/Data.bin" even though that file exists.
     private static readonly HashSet<string> _negativeStatCache = new(HostFsPath.Comparer);
     private static readonly ConcurrentDictionary<string, ulong> _aprFileSizeCache = new(HostFsPath.Comparer);
+
+    // SHARPEMU_V74_0_56_24_APP0_METADATA_HOTPATH
+    // V56.23 measured ResourcePool::GatherResourceFileInfo at 150.58 seconds.
+    // The old successful stat path performed several independent host metadata
+    // requests for the same pathname. Retail /app0 is immutable in the normal
+    // title path, so successful metadata and directory listings are safely
+    // reusable there.
+    private static readonly bool _app0MetadataHotPathV7405624 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_APP0_METADATA_HOTPATH"),
+            "0",
+            StringComparison.Ordinal);
+
+    private static readonly bool _traceApp0MetadataHotPathV7405624 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_APP0_METADATA_HOTPATH"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static readonly ConcurrentDictionary<string, HostPathStatV7405624>
+        _positiveApp0StatCacheV7405624 = new(HostFsPath.Comparer);
+
+    private static readonly ConcurrentDictionary<string, string[]>
+        _app0DirectoryEntriesCacheV7405624 = new(HostFsPath.Comparer);
+
+    private static long _v7405624StatCacheHitCount;
+    private static long _v7405624StatHostProbeCount;
+    private static long _v7405624DirectoryCacheHitCount;
+    private static long _v7405624DirectoryHostProbeCount;
+
     private static long _nextFileDescriptor = 2;
     private static string _applicationTitleId = "UNKNOWN";
 
@@ -405,6 +437,13 @@ public static partial class KernelMemoryCompatExports
         public required string[] Entries { get; init; }
         public int NextIndex { get; set; }
     }
+
+    private readonly record struct HostPathStatV7405624(
+        bool IsDirectory,
+        long Size,
+        DateTime LastAccessUtc,
+        DateTime LastWriteUtc,
+        DateTime CreationUtc);
 
     private readonly record struct DirectAllocation(ulong Start, ulong Length, int MemoryType);
     private readonly record struct LibcHeapAllocation(nint BaseAddress, nuint Size, nuint Alignment);
@@ -1763,6 +1802,10 @@ public static partial class KernelMemoryCompatExports
                 return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
             }
 
+            // SHARPEMU_DEMONS_BINK_COMPLETION_SHIM_OPEN_V1_1_3
+            // IMPORTANT: startup host takeover must still return a valid fd.
+            // KernelReadUnderscore patches NumFrames=1 and waits on the exact
+            // header read until host playback completes.
             HostMovieBridge.BinkGuestCompletionShim binkCompletionShim = default;
             var observedBinkMovie = false;
             var useBinkCompletionShim = access == FileAccess.Read &&
@@ -1806,7 +1849,9 @@ public static partial class KernelMemoryCompatExports
                     _openDirectories[directoryFd] = new OpenDirectory
                     {
                         Path = hostPath,
-                        Entries = EnumerateDirectoryEntriesForContentDiscovery(hostPath),
+                        Entries = GetDirectoryEntriesForOpenV7405624(
+                            guestPath,
+                            hostPath),
                         NextIndex = 0
                     };
                 }
@@ -1919,7 +1964,15 @@ public static partial class KernelMemoryCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
-        if (!TryWriteHostPathStat(ctx, statAddress, hostPath))
+        var usePositiveApp0CacheV7405624 =
+            _app0MetadataHotPathV7405624 &&
+            IsReadOnlyGuestMutationPath(guestPath);
+
+        if (!TryWriteHostPathStatV7405624(
+                ctx,
+                statAddress,
+                hostPath,
+                usePositiveApp0CacheV7405624))
         {
             if (statCacheKey is not null)
             {
@@ -7687,15 +7740,126 @@ public static partial class KernelMemoryCompatExports
         return !string.IsNullOrWhiteSpace(hostPath) && TryWriteHostPathStat(ctx, statAddress, hostPath!, isDirectory);
     }
 
-    private static bool TryWriteHostPathStat(CpuContext ctx, ulong statAddress, string hostPath)
+    private static bool TryWriteHostPathStat(
+        CpuContext ctx,
+        ulong statAddress,
+        string hostPath)
     {
-        var isDirectory = Directory.Exists(hostPath);
-        if (!isDirectory && !File.Exists(hostPath))
+        return TryWriteHostPathStatV7405624(
+            ctx,
+            statAddress,
+            hostPath,
+            usePositiveCache: false);
+    }
+
+    // SHARPEMU_V74_0_56_24_SINGLE_HOST_METADATA_PROBE
+    private static bool TryWriteHostPathStatV7405624(
+        CpuContext ctx,
+        ulong statAddress,
+        string hostPath,
+        bool usePositiveCache)
+    {
+        if (usePositiveCache &&
+            _positiveApp0StatCacheV7405624.TryGetValue(
+                hostPath,
+                out var cached))
+        {
+            TraceMetadataCounterV7405624(
+                "stat-cache-hit",
+                Interlocked.Increment(
+                    ref _v7405624StatCacheHitCount),
+                hostPath);
+
+            return TryWriteKernelStat(
+                ctx,
+                statAddress,
+                cached.IsDirectory,
+                cached.Size,
+                cached.LastAccessUtc,
+                cached.LastWriteUtc,
+                cached.CreationUtc,
+                hostPath);
+        }
+
+        if (!TryGetHostPathStatV7405624(
+                hostPath,
+                out var metadata))
         {
             return false;
         }
 
-        return TryWriteHostPathStat(ctx, statAddress, hostPath, isDirectory);
+        TraceMetadataCounterV7405624(
+            "stat-host-probe",
+            Interlocked.Increment(
+                ref _v7405624StatHostProbeCount),
+            hostPath);
+
+        if (usePositiveCache)
+        {
+            _positiveApp0StatCacheV7405624.TryAdd(
+                hostPath,
+                metadata);
+        }
+
+        return TryWriteKernelStat(
+            ctx,
+            statAddress,
+            metadata.IsDirectory,
+            metadata.Size,
+            metadata.LastAccessUtc,
+            metadata.LastWriteUtc,
+            metadata.CreationUtc,
+            hostPath);
+    }
+
+    private static bool TryGetHostPathStatV7405624(
+        string hostPath,
+        out HostPathStatV7405624 metadata)
+    {
+        metadata = default;
+
+        try
+        {
+            // FileInfo.Refresh fills the metadata snapshot subsequently used by
+            // Length and all timestamp properties. This avoids the old series
+            // of independent static File metadata requests.
+            var file = new FileInfo(hostPath);
+            file.Refresh();
+            if (file.Exists)
+            {
+                metadata = new HostPathStatV7405624(
+                    false,
+                    file.Length,
+                    file.LastAccessTimeUtc,
+                    file.LastWriteTimeUtc,
+                    file.CreationTimeUtc);
+                return true;
+            }
+
+            var directory = new DirectoryInfo(hostPath);
+            directory.Refresh();
+            if (!directory.Exists)
+            {
+                return false;
+            }
+
+            metadata = new HostPathStatV7405624(
+                true,
+                65536L,
+                directory.LastAccessTimeUtc,
+                directory.LastWriteTimeUtc,
+                directory.CreationTimeUtc);
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            ArgumentException or
+            NotSupportedException or
+            System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 
     private static bool TryGetAprFileSize(string hostPath, out ulong size)
@@ -7743,29 +7907,57 @@ public static partial class KernelMemoryCompatExports
         }
     }
 
-    private static bool TryWriteHostPathStat(CpuContext ctx, ulong statAddress, string hostPath, bool isDirectory)
+    private static bool TryWriteHostPathStat(
+        CpuContext ctx,
+        ulong statAddress,
+        string hostPath,
+        bool isDirectory)
     {
-        if (isDirectory)
+        try
         {
-            if (!Directory.Exists(hostPath))
+            if (isDirectory)
+            {
+                var directory = new DirectoryInfo(hostPath);
+                directory.Refresh();
+                if (!directory.Exists)
+                {
+                    return false;
+                }
+
+                return TryWriteKernelStat(
+                    ctx,
+                    statAddress,
+                    true,
+                    65536L,
+                    directory.LastAccessTimeUtc,
+                    directory.LastWriteTimeUtc,
+                    directory.CreationTimeUtc,
+                    hostPath);
+            }
+
+            var file = new FileInfo(hostPath);
+            file.Refresh();
+            if (!file.Exists)
             {
                 return false;
             }
-        }
-        else if (!File.Exists(hostPath))
-        {
-            return false;
-        }
 
-        try
-        {
-            var lastAccessUtc = File.GetLastAccessTimeUtc(hostPath);
-            var lastWriteUtc = File.GetLastWriteTimeUtc(hostPath);
-            var creationUtc = File.GetCreationTimeUtc(hostPath);
-            var size = isDirectory ? 65536L : new FileInfo(hostPath).Length;
-            return TryWriteKernelStat(ctx, statAddress, isDirectory, size, lastAccessUtc, lastWriteUtc, creationUtc, hostPath);
+            return TryWriteKernelStat(
+                ctx,
+                statAddress,
+                false,
+                file.Length,
+                file.LastAccessTimeUtc,
+                file.LastWriteTimeUtc,
+                file.CreationTimeUtc,
+                hostPath);
         }
-        catch
+        catch (Exception ex) when (
+            ex is IOException or
+            UnauthorizedAccessException or
+            ArgumentException or
+            NotSupportedException or
+            System.Security.SecurityException)
         {
             return false;
         }
@@ -7817,6 +8009,64 @@ public static partial class KernelMemoryCompatExports
     private static int KernelGetdirentriesCore(CpuContext ctx, int fd, ulong bufferAddress, int requested, ulong basePointerAddress)
     {
         return KernelGetdirentriesBatchCompat(ctx, fd, bufferAddress, requested, basePointerAddress);
+    }
+
+    private static string[] GetDirectoryEntriesForOpenV7405624(
+        string guestPath,
+        string hostPath)
+    {
+        var useCache =
+            _app0MetadataHotPathV7405624 &&
+            IsReadOnlyGuestMutationPath(guestPath);
+
+        if (useCache &&
+            _app0DirectoryEntriesCacheV7405624.TryGetValue(
+                hostPath,
+                out var cached))
+        {
+            TraceMetadataCounterV7405624(
+                "dir-cache-hit",
+                Interlocked.Increment(
+                    ref _v7405624DirectoryCacheHitCount),
+                hostPath);
+            return cached;
+        }
+
+        var entries =
+            EnumerateDirectoryEntriesForContentDiscovery(hostPath);
+
+        TraceMetadataCounterV7405624(
+            "dir-host-probe",
+            Interlocked.Increment(
+                ref _v7405624DirectoryHostProbeCount),
+            hostPath);
+
+        if (useCache)
+        {
+            _app0DirectoryEntriesCacheV7405624.TryAdd(
+                hostPath,
+                entries);
+        }
+
+        return entries;
+    }
+
+    private static void TraceMetadataCounterV7405624(
+        string kind,
+        long count,
+        string hostPath)
+    {
+        if (!_traceApp0MetadataHotPathV7405624 ||
+            !(count <= 64 ||
+              (count & (count - 1)) == 0))
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[V74.0.56.24][FILE_METADATA] " +
+            $"kind={kind} count={count} " +
+            $"path='{hostPath}'");
     }
 
     private static string[] EnumerateDirectoryEntries(string hostPath)
@@ -8515,5 +8765,7 @@ public static partial class KernelMemoryCompatExports
     private static byte ToAsciiLower(byte value) =>
         value is >= (byte)'A' and <= (byte)'Z' ? (byte)(value + 32) : value;
 }
+
+
 
 

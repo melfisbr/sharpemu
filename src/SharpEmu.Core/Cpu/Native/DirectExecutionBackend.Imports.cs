@@ -35,11 +35,72 @@ public sealed partial class DirectExecutionBackend
 	private const ulong StackCheckGuardValue = 0xC0DEC0DECAFEBA00UL;
 	private static long _canaryReturnRecoveries;
 
-	private readonly object _importResultLogSampleGate = new();
-	private readonly Dictionary<string, int> _importResultLogSamples = new(StringComparer.Ordinal);
+	private static readonly bool _logAllImportResults =
+		string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_LOG_ALL_IMPORT_RESULTS"),
+			"1",
+			StringComparison.Ordinal);
+	private readonly ImportLogSampler _importResultLogSampler = new();
 	private readonly object _unresolvedImportLogSampleGate = new();
 	private readonly Dictionary<string, long> _unresolvedImportLogSamples = new(StringComparer.Ordinal);
 	private int _il2CppExceptionDiagnosticCount;
+
+	// [V74.0.56.4][FRONTEND_EVENTFLAG_BOUNDARY_AUDIT]
+	// V56.3 proves the top-level entry thread remains inside
+	// sceKernelWaitEventFlag while the GPU drains. Trace only the real wait/set
+	// import boundary; never synthesize bits or change event-flag semantics.
+	private static readonly bool _traceFrontendEventFlagV740564 =
+		string.Equals(
+			Environment.GetEnvironmentVariable(
+				"SHARPEMU_TRACE_FRONTEND_EVENT_FLAG"),
+			"1",
+			StringComparison.Ordinal);
+	private long _frontendEventFlagWaitCountV740564;
+	private long _frontendEventFlagSetCountV740564;
+	private long _frontendEventFlagReturnCountV740564;
+
+	// SHARPEMU_PTHREAD_IMPORT_CROSSING_HOTPATH_V1_8_24
+	private static readonly string? _pthreadImportHotPathSettingV1824 =
+		Environment.GetEnvironmentVariable("SHARPEMU_PTHREAD_IMPORT_HOTPATH");
+	private static readonly bool _pthreadImportHotPathV1824Enabled =
+		!string.Equals(_pthreadImportHotPathSettingV1824, "0", StringComparison.OrdinalIgnoreCase) &&
+		!string.Equals(_pthreadImportHotPathSettingV1824, "false", StringComparison.OrdinalIgnoreCase) &&
+		!string.Equals(_pthreadImportHotPathSettingV1824, "off", StringComparison.OrdinalIgnoreCase);
+	// SHARPEMU_PTHREAD_SAFE_SPLIT_V1_8_27
+	// Self/TLS are pure leaf-style lookups and remain enabled by default.
+	// Mutex operations are synchronization boundaries: keep them on the normal
+	// import path unless explicitly enabled for A/B diagnostics.
+	private static readonly string? _pthreadIdentityTlsHotPathSettingV1827 =
+		Environment.GetEnvironmentVariable("SHARPEMU_PTHREAD_IDENTITY_TLS_HOTPATH");
+	private static readonly bool _pthreadIdentityTlsImportHotPathV1827Enabled =
+		!string.Equals(_pthreadIdentityTlsHotPathSettingV1827, "0", StringComparison.OrdinalIgnoreCase) &&
+		!string.Equals(_pthreadIdentityTlsHotPathSettingV1827, "false", StringComparison.OrdinalIgnoreCase) &&
+		!string.Equals(_pthreadIdentityTlsHotPathSettingV1827, "off", StringComparison.OrdinalIgnoreCase);
+
+	private static readonly string? _pthreadMutexHotPathSettingV1827 =
+		Environment.GetEnvironmentVariable("SHARPEMU_PTHREAD_MUTEX_IMPORT_HOTPATH");
+	private static readonly bool _pthreadMutexImportHotPathV1827Enabled =
+		string.Equals(_pthreadMutexHotPathSettingV1827, "1", StringComparison.OrdinalIgnoreCase) ||
+		string.Equals(_pthreadMutexHotPathSettingV1827, "true", StringComparison.OrdinalIgnoreCase) ||
+		string.Equals(_pthreadMutexHotPathSettingV1827, "on", StringComparison.OrdinalIgnoreCase);
+	private static readonly bool _pthreadImportDiagnosticsV1824 =
+		string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREADS"),
+			"1",
+			StringComparison.Ordinal) ||
+		string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_FASTPATH"),
+			"1",
+			StringComparison.Ordinal) ||
+		string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_CALLSITES"),
+			"1",
+			StringComparison.Ordinal) ||
+		!string.IsNullOrWhiteSpace(
+			Environment.GetEnvironmentVariable("SHARPEMU_LOG_PTHREAD_MUTEX_FILTER"));
+
+	[ThreadStatic]
+	private static bool _pthreadImportHotPathThreadAnnouncedV1824;
 
 	private static ulong ImportDispatchGatewayManaged(nint backendHandle, int importIndex, nint argPackPtr)
 	{
@@ -149,6 +210,127 @@ public sealed partial class DirectExecutionBackend
 		return 0;
 	}
 
+	private readonly record struct FrontendEventFlagBoundaryTraceV740564(
+		bool Enabled,
+		bool IsWait,
+		bool EntryLike,
+		long Ordinal,
+		long StartTicks,
+		ulong Handle,
+		ulong Pattern);
+
+	private FrontendEventFlagBoundaryTraceV740564
+		BeginFrontendEventFlagBoundaryTraceV740564(
+			string nid,
+			CpuContext cpuContext,
+			long dispatchIndex,
+			ulong returnRip)
+	{
+		if (!_traceFrontendEventFlagV740564 ||
+			(nid != "JTvBflhYazQ" && nid != "IOnSvHzqu6A"))
+		{
+			return default;
+		}
+
+		var isWaitV740564 = nid == "JTvBflhYazQ";
+		var entryLikeV740564 =
+			!GuestThreadExecution.IsGuestThread ||
+			GuestThreadExecution.CurrentGuestThreadHandle == 0;
+		var ordinalV740564 = isWaitV740564
+			? Interlocked.Increment(ref _frontendEventFlagWaitCountV740564)
+			: Interlocked.Increment(ref _frontendEventFlagSetCountV740564);
+		var startTicksV740564 = Stopwatch.GetTimestamp();
+
+		// Always trace the non-pthread entry wait. Producer calls are sampled:
+		// first 64 + powers of two, enough to prove continuing Set activity
+		// without turning event signaling into a logging bottleneck.
+		var shouldTraceV740564 =
+			(isWaitV740564 && entryLikeV740564) ||
+			ordinalV740564 <= 64 ||
+			(ordinalV740564 & (ordinalV740564 - 1)) == 0;
+
+		if (shouldTraceV740564)
+		{
+			var timeoutPointerV740564 = cpuContext[CpuRegister.R8];
+			ulong timeoutValueV740564 = 0;
+			var timeoutReadableV740564 =
+				timeoutPointerV740564 != 0 &&
+				cpuContext.TryReadUInt64(
+					timeoutPointerV740564,
+					out timeoutValueV740564);
+			Console.Error.WriteLine(
+				$"[V74.0.56.4][EVENTFLAG_ENTER] " +
+				$"ticks={startTicksV740564} " +
+				$"kind={(isWaitV740564 ? "wait" : "set")} " +
+				$"n={ordinalV740564} dispatch={dispatchIndex} " +
+				$"entry_like={(entryLikeV740564 ? 1 : 0)} " +
+				$"guest_thread=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} " +
+				$"fiber=0x{GuestThreadExecution.CurrentFiberAddress:X16} " +
+				$"handle=0x{cpuContext[CpuRegister.Rdi]:X16} " +
+				$"pattern=0x{cpuContext[CpuRegister.Rsi]:X16} " +
+				$"rdx=0x{cpuContext[CpuRegister.Rdx]:X16} " +
+				$"rcx=0x{cpuContext[CpuRegister.Rcx]:X16} " +
+				$"r8=0x{timeoutPointerV740564:X16} " +
+				$"r9=0x{cpuContext[CpuRegister.R9]:X16} " +
+				$"timeout_readable={(timeoutReadableV740564 ? 1 : 0)} " +
+				$"timeout_value=0x{timeoutValueV740564:X16} " +
+				$"ret=0x{returnRip:X16}");
+		}
+
+		return new FrontendEventFlagBoundaryTraceV740564(
+			Enabled: true,
+			IsWait: isWaitV740564,
+			EntryLike: entryLikeV740564,
+			Ordinal: ordinalV740564,
+			StartTicks: startTicksV740564,
+			Handle: cpuContext[CpuRegister.Rdi],
+			Pattern: cpuContext[CpuRegister.Rsi]);
+	}
+
+	private void EndFrontendEventFlagBoundaryTraceV740564(
+		FrontendEventFlagBoundaryTraceV740564 trace,
+		string nid,
+		CpuContext cpuContext,
+		long dispatchIndex,
+		ulong returnRip,
+		int returnValue)
+	{
+		if (!trace.Enabled)
+		{
+			return;
+		}
+
+		var returnOrdinalV740564 =
+			Interlocked.Increment(ref _frontendEventFlagReturnCountV740564);
+		var endTicksV740564 = Stopwatch.GetTimestamp();
+		var durationMsV740564 =
+			(endTicksV740564 - trace.StartTicks) * 1000.0 /
+			Stopwatch.Frequency;
+		var shouldTraceV740564 =
+			(trace.IsWait && trace.EntryLike) ||
+			trace.Ordinal <= 64 ||
+			(trace.Ordinal & (trace.Ordinal - 1)) == 0;
+
+		if (!shouldTraceV740564)
+		{
+			return;
+		}
+
+		Console.Error.WriteLine(
+			$"[V74.0.56.4][EVENTFLAG_RETURN] " +
+			$"ticks={endTicksV740564} " +
+			$"kind={(trace.IsWait ? "wait" : "set")} " +
+			$"n={trace.Ordinal} return_n={returnOrdinalV740564} " +
+			$"dispatch={dispatchIndex} " +
+			$"entry_like={(trace.EntryLike ? 1 : 0)} " +
+			$"guest_thread=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} " +
+			$"handle=0x{trace.Handle:X16} pattern=0x{trace.Pattern:X16} " +
+			$"return_value={returnValue} " +
+			$"rax=0x{cpuContext[CpuRegister.Rax]:X16} " +
+			$"duration_ms={durationMsV740564:F3} " +
+			$"ret=0x{returnRip:X16}");
+	}
+
 	private unsafe static bool TryRecoverCanaryReturn(void* contextRecord)
 	{
 		var rsp = ReadCtxU64(contextRecord, CTX_RSP);
@@ -218,6 +400,19 @@ public sealed partial class DirectExecutionBackend
 			return 18446744071562199042uL;
 		}
 		ImportStubEntry importStubEntry = _importEntries[importIndex];
+		var pthreadHotKindForDispatchV1834 = importStubEntry.PthreadHotKind;
+		if (pthreadHotKindForDispatchV1834 != PthreadHotKindNoneV1834 &&
+			(pthreadHotKindForDispatchV1834 == PthreadHotKindMutexV1834 ?
+				_pthreadMutexImportHotPathV1827Enabled :
+				_pthreadIdentityTlsImportHotPathV1827Enabled) &&
+			TryDispatchPthreadImportHotPathV1824(
+				cpuContext,
+				importStubEntry,
+				argPackPtr,
+				out var pthreadHotResultV1824))
+		{
+			return pthreadHotResultV1824;
+		}
 		// SHARPEMU_DBFZ_AMPR_DISPATCH_MATERIALIZATION_V1_2_2_BEGIN
 		// DBFZ: materialize the fixed guest AMM map before any leaf/non-leaf HLE path.
 		if (string.Equals(importStubEntry.Nid, "JEVYGhDc97M", StringComparison.Ordinal))
@@ -283,7 +478,7 @@ public sealed partial class DirectExecutionBackend
 		    }
 		}
 		var requiresNormalImportPath =
-			RequiresNormalImportPath(importStubEntry.Nid);
+			importStubEntry.RequiresNormalPath;
 
 		if (!requiresNormalImportPath &&
 			importStubEntry.IsLeaf &&
@@ -675,12 +870,25 @@ public sealed partial class DirectExecutionBackend
 				else if (importStubEntry.Export is { } cachedExport &&
 					(cachedExport.Target & cpuContext.TargetGeneration) != 0)
 				{
+					var frontendEventFlagTraceV740564 =
+						BeginFrontendEventFlagBoundaryTraceV740564(
+							importStubEntry.Nid,
+							cpuContext,
+							num,
+							num7);
 					cpuContext.ClearRaxWriteFlag();
 					var returnValue = cachedExport.Function(cpuContext);
 					if (!cpuContext.WasRaxWritten)
 					{
 						cpuContext[CpuRegister.Rax] = unchecked((ulong)returnValue);
 					}
+					EndFrontendEventFlagBoundaryTraceV740564(
+						frontendEventFlagTraceV740564,
+						importStubEntry.Nid,
+						cpuContext,
+						num,
+						num7,
+						returnValue);
 					orbisGen2Result = (OrbisGen2Result)returnValue;
 				}
 				else
@@ -716,7 +924,7 @@ public sealed partial class DirectExecutionBackend
 			}
 			if (!dispatchResolved)
 			{
-				LastError = "Missing HLE export for NID: " + importStubEntry.Nid;
+				LastError = importStubEntry.MissingHleExportError;
 				if (string.Equals(importStubEntry.Nid, "cfwBSQyr5Ys", StringComparison.Ordinal) &&
 					string.Equals(
 						Environment.GetEnvironmentVariable("SHARPEMU_LOG_IL2CPP_EXCEPTION"),
@@ -1410,6 +1618,120 @@ public sealed partial class DirectExecutionBackend
 			Mxcsr: context.Mxcsr,
 			RestoreFullFpuState: false);
 
+	// SHARPEMU_PTHREAD_IMPORT_CROSSING_HOTPATH_V1_8_24
+	// Ultra-hot pthread identity/TLS/uncontended-mutex calls avoid the generic
+	// CpuContext register pack/unpack and import-call-frame machinery.
+	// Pending guest exceptions and diagnostic modes force the original path.
+    // SHARPEMU_DBFZ_EXTERNAL_PTHREAD_IDENTITY_TLS_HOTPATH_V1_8_38
+    private static readonly bool _traceExternalPthreadHotpathV1838 =
+        string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_DBFZ_EXTERNAL_PTHREAD_TRACE"), "1", StringComparison.Ordinal);
+
+    [ThreadStatic]
+    private static long _externalPthreadHotpathCountV1838;
+
+	private unsafe bool TryDispatchPthreadImportHotPathV1824(
+		CpuContext cpuContext,
+		ImportStubEntry importStubEntry,
+		nint argPackPtr,
+		out ulong result)
+	{
+		result = 0;
+		var pthreadHotKindV1834 = importStubEntry.PthreadHotKind;
+		if (pthreadHotKindV1834 == PthreadHotKindNoneV1834 ||
+			((pthreadHotKindV1834 == PthreadHotKindIdentityV1834 ||
+			  pthreadHotKindV1834 == PthreadHotKindTlsGetV1834) &&
+			 !_pthreadIdentityTlsImportHotPathV1827Enabled) ||
+			(pthreadHotKindV1834 == PthreadHotKindMutexV1834 &&
+			 !_pthreadMutexImportHotPathV1827Enabled))
+		{
+			return false;
+		}
+
+		if (!_pthreadImportHotPathV1824Enabled ||
+			_pthreadImportDiagnosticsV1824 ||
+			_perfHleHistogram ||
+			_profileGuestRip ||
+			_logAllImports ||
+			_logImportPeriodic ||
+			_semanticTraceEnabled ||
+			Volatile.Read(ref _pendingGuestExceptionCount) != 0 ||
+			importStubEntry.Export is not { } export ||
+			(export.Target & cpuContext.TargetGeneration) == 0)
+		{
+			return false;
+		}
+
+		var guestThreadHandle = GuestThreadExecution.CurrentGuestThreadHandle;
+        var externalPthreadIdentityV1838 = false;
+        if (guestThreadHandle == 0 &&
+            (pthreadHotKindV1834 == PthreadHotKindIdentityV1834 ||
+             pthreadHotKindV1834 == PthreadHotKindTlsGetV1834))
+        {
+            guestThreadHandle = _currentExternalGuestThreadHandle;
+            if (guestThreadHandle == 0)
+            {
+                guestThreadHandle = KernelPthreadCompatExports.GetCurrentExternalPthreadHandleFastV1838();
+                if (guestThreadHandle != 0)
+                {
+                    RegisterGuestThreadContext(guestThreadHandle, cpuContext);
+                }
+            }
+            externalPthreadIdentityV1838 = guestThreadHandle != 0;
+        }
+		if (guestThreadHandle == 0)
+		{
+			return false;
+		}
+
+		var nid = importStubEntry.Nid;
+		var handled = false;
+		switch (pthreadHotKindV1834)
+		{
+			case PthreadHotKindIdentityV1834:
+				result = guestThreadHandle;
+				handled = true;
+				break;
+
+			case PthreadHotKindTlsGetV1834:
+				var key = unchecked((int)*(ulong*)argPackPtr);
+                handled = KernelPthreadExtendedCompatExports.TryGetSpecificForThreadHandleFastV1838(
+                    key,
+                    guestThreadHandle,
+                    out result);
+				break;
+
+			case PthreadHotKindMutexV1834:
+				handled = KernelPthreadCompatExports.TryPthreadMutexImportHotPathV1824(
+					cpuContext,
+					nid,
+					*(ulong*)argPackPtr,
+					out result);
+				break;
+		}
+
+        if (handled && externalPthreadIdentityV1838 && _traceExternalPthreadHotpathV1838)
+        {
+            var externalCountV1838 = ++_externalPthreadHotpathCountV1838;
+            if (externalCountV1838 <= 32 ||
+                (externalCountV1838 & (externalCountV1838 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[DBFZ-CPU-1838] external_identity_tls_hotpath n={externalCountV1838} " +
+                    $"guest=0x{guestThreadHandle:X16} kind={pthreadHotKindV1834} nid={nid}");
+            }
+        }
+
+		if (handled && !_pthreadImportHotPathThreadAnnouncedV1824)
+		{
+			_pthreadImportHotPathThreadAnnouncedV1824 = true;
+			Console.Error.WriteLine(
+				$"[DBFZ-CPU-1827] hotpath_thread_active " +
+				$"managed={Environment.CurrentManagedThreadId} " +
+				$"guest=0x{guestThreadHandle:X16} first_nid={nid}");
+		}
+
+		return handled;
+	}
 	/// <summary>
 	/// Ultra-thin path for hot memcpy/memmove leaf imports: skip
 	/// CpuContext register marshalling, import-call frames, and vector return
@@ -1777,6 +2099,21 @@ public sealed partial class DirectExecutionBackend
 		return true;
 	}
 
+	// SHARPEMU_PTHREAD_HOT_KIND_PRECLASS_V1_8_34_1
+	private const byte PthreadHotKindNoneV1834 = 0;
+	private const byte PthreadHotKindIdentityV1834 = 1;
+	private const byte PthreadHotKindTlsGetV1834 = 2;
+	private const byte PthreadHotKindMutexV1834 = 3;
+
+	private static byte ClassifyPthreadImportHotKindV1834(string nid) =>
+		nid is "aI+OeCz8xrQ" or "EotR8a3ASf4" ? PthreadHotKindIdentityV1834 :
+		nid is "eoht7mQOCmo" or "0-KXaS70xy4" ? PthreadHotKindTlsGetV1834 :
+		nid is
+			"9UK1vLZQft4" or "7H0iTOciTLo" or
+			"upoVrzMHFeE" or "K-jXhbt2gn4" or
+			"tn3VlD0hG60" or "2Z+PpY6CaJg" ? PthreadHotKindMutexV1834 :
+		PthreadHotKindNoneV1834;
+
 	private static bool RequiresNormalImportPath(string nid) =>
 		nid is
 			"tn3VlD0hG60" or // scePthreadMutexUnlock
@@ -1885,35 +2222,28 @@ public sealed partial class DirectExecutionBackend
 		var expectedPlayGoChunkEnumerationEnd =
 			string.Equals(nid, "uWIYLFkkwqk", StringComparison.Ordinal) &&
 			resultValue == unchecked((int)0x80B2000C);
-		if (!expectedFileProbeMiss &&
-			!expectedTimedWaitTimeout &&
-			!expectedEqueueTimeout &&
-			!expectedMutexTrylockBusy &&
-			!expectedSemaphoreTrywaitAgain &&
-			!expectedPollSemaBusy &&
-			!expectedNetAcceptWouldBlock &&
-			!expectedUserServiceNoEvent &&
-			!expectedPrivacyInvalidParameter &&
-			!expectedPlayGoChunkEnumerationEnd)
-		{
-			return true;
-		}
 
-		if (!ShouldLogExpectedImportResults())
+		var expectedNoise =
+			expectedFileProbeMiss ||
+			expectedTimedWaitTimeout ||
+			expectedEqueueTimeout ||
+			expectedMutexTrylockBusy ||
+			expectedSemaphoreTrywaitAgain ||
+			expectedPollSemaBusy ||
+			expectedNetAcceptWouldBlock ||
+			expectedUserServiceNoEvent ||
+			expectedPrivacyInvalidParameter ||
+			expectedPlayGoChunkEnumerationEnd;
+
+		if (expectedNoise &&
+			!_logAllImportResults &&
+			!ShouldLogExpectedImportResults())
 		{
 			return false;
 		}
 
-		var key = nid + "\0" + resultValue;
-		int count;
-		lock (_importResultLogSampleGate)
-		{
-			_importResultLogSamples.TryGetValue(key, out count);
-			count++;
-			_importResultLogSamples[key] = count;
-		}
-
-		return count <= 8 || count % 10000 == 0;
+		return _logAllImportResults ||
+			_importResultLogSampler.ShouldLog(nid, resultValue);
 	}
 
 	private static bool ShouldLogExpectedImportResults() =>

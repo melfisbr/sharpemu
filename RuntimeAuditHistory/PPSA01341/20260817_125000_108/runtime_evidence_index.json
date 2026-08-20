@@ -1,0 +1,62 @@
+[
+  {
+    "OriginalPath": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\logs\\demonssoul_ps5_2026- 8-17-12-50- 5_0.log",
+    "CopiedPath": "runtime_evidence\\artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\logs\\demonssoul_ps5_2026- 8-17-12-50- 5_0.log",
+    "Kind": "runtime_touched",
+    "OriginalSize": 2911,
+    "CopiedBytes": 2911,
+    "Truncated": false,
+    "Sha256": "7B9794B3C0E3571326CB4A864C3A47DC6AB4EE0F19E9D00C41F7C7300C235700",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\misc\\findWriteRepository.txt",
+    "CopiedPath": "runtime_evidence\\artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\misc\\findWriteRepository.txt",
+    "Kind": "runtime_touched",
+    "OriginalSize": 0,
+    "CopiedBytes": 0,
+    "Truncated": false,
+    "Sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\library_cache.json",
+    "CopiedPath": "runtime_evidence\\artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\library_cache.json",
+    "Kind": "runtime_touched",
+    "OriginalSize": 2224,
+    "CopiedBytes": 2224,
+    "Truncated": false,
+    "Sha256": "1A914417E241BDF3CE6402F08EDB29439B43A6C5093793EFE1CD66A0A1B0874B",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "debug_session\\debug_trace_profile.json",
+    "CopiedPath": "runtime_evidence\\debug_session\\debug_trace_profile.json",
+    "Kind": "debug_console",
+    "OriginalSize": 3540,
+    "CopiedBytes": 3540,
+    "Truncated": false,
+    "Sha256": "6304DC40F8624D7B540CA56E3D11D845365B440A70F67673BE3F258C7659715E",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "debug_session\\emulator_console_error.log",
+    "CopiedPath": "runtime_evidence\\debug_session\\emulator_console_error.log",
+    "Kind": "debug_console",
+    "OriginalSize": 55,
+    "CopiedBytes": 55,
+    "Truncated": false,
+    "Sha256": "AC267EBCB27E19EEA09C202430008442BEA7AB91D61CA68A1BFCA2E19CF32290",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "debug_session\\emulator_console_out.log",
+    "CopiedPath": "runtime_evidence\\debug_session\\emulator_console_out.log",
+    "Kind": "debug_console",
+    "OriginalSize": 0,
+    "CopiedBytes": 0,
+    "Truncated": false,
+    "Sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "Error": ""
+  }
+]

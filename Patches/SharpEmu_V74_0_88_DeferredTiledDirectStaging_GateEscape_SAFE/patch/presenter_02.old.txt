@@ -1,0 +1,6 @@
+        SharpEmu.Libs.Kernel.KernelMemoryCompatExports.TryReadTrackedLibcHeapGpuAlias(
+            address,
+            destination);
+
+    private static ulong ComputeSparseGuestContentProbe(
+        SharpEmu.HLE.ICpuMemory memory,

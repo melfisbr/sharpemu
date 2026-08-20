@@ -1,0 +1,111 @@
+%s ShowHUDScene (%s) 
+%sType: ShowHUDScene (%s)
+bool UIManager::HasOpenMenus() const
+bool UIManager::IsAnyActiveSceneTransitioningIn() const
+bool UIManager::IsAnyActiveSceneTransitioningOut() const
+bool UIManager::IsHUDSceneTransitioningIn(const uiScene::Id &) const
+bool UIManager::IsHUDSceneTransitioningOut(const uiScene::Id &) const
+bool UIManager::IsLoading() const
+bool UIManager::IsSceneActiveOrTransitioningIn(const uiScene::Id &) const
+bool UIManager::IsSceneFullyLoaded(const uiScene::Id &) const
+bpe::ECmdExecuteResult uiShowHudScene_command(bpe::ConCommand &, const bpe::Command &)
+bpe::EDebugMenuFlags::Menu_AutoAddedToMainMenu
+BPMainMenu_Credits
+BPMainMenu_CreditsWait
+BPMainMenu_Gallery
+BPMainMenu_GalleryPlayGoWait
+BPMainMenu_GalleryWait
+BPMainMenu_Settings
+BPMainMenu_SettingsWait
+BPMainMenu_StartMenuChoose
+BPMainMenu_StartMenuChooseWait
+BP_ShowHudScene
+CCPLdrUIBehaviorStartMenuInputHandler
+CMOLdrShowHUDScene
+const uiManagerPrivate::TransitionSlot *UIManager::FindHUDTransitionSlot(const uiScene::Id &) const
+cp11_uiStartMenuOpensEmpty
+cp11_uiUseBpeStartMenu
+d:\dev\CP11_packaging\Main\Code\BPE\Source\Game\GameObjects\Messages/./CMOLdrShowHUDScene.cpp
+d:\dev\CP11_packaging\Main\Code\BPE\Source\Game\UI\UIManager.cpp
+d:\dev\CP11_packaging\Main\Code\BPE\Source\Game\UI\UITransition_ShowHUDScene.cpp
+d:\dev\CP11_packaging\Main\Code\Game\CP11\Shared\GameObjects\UIBehavior\CComponentUIBehaviorStartMenuInputHandler.cpp
+d:\dev\CP11_packaging\Main\Code\Game\CP11\Shared\GameObjects\UIBehavior\CCPLdrUIBehaviorStartMenuInputHandler.cpp
+ds_enableDebugStartMenu
+EDebugGraphSamplePointGroup::UIManagerThink
+EThinkBucket::UIManagerAsync
+EThinkBucket::UIManagerSync
+FE_MainMenu
+FE_MainMenu_Credits
+FE_MainMenu_Gallery
+FE_MainMenu_Settings
+FE_MainMenu_StartMenuChoose
+FrontEnd_MainMenu_HasAnySaveGame
+FrontEnd_MainMenu_Selection
+FrontEnd_MainMenu_TimeToAttractMovie
+Menu_AutoAddedToMainMenu
+ShowHUDScene
+StartMenu
+StartMenuInputHandler
+startMenuSwitch
+TransitionShowHUDScene::%s %s %s
+TransitionShowHUDScene::%s %s (%f => %f)
+UI ShowHUDScene: Scene not found for ID: %s
+UIBehaviorStartMenuInputHandler
+uiElement::EHandleInputFocusResult CComponentUIBehaviorStartMenuInputHandler::HandleInputFocus(uiElement::HandleInputFocusParams &)
+UIManager::PrintSceneState BEGIN
+UIManager::PrintSceneState END
+UIManager::ThinkAsync
+UIManager::ThinkSync
+UIManagerAsync
+uiManagerPrivate::ETransitionState
+uiManagerPrivate::ETransitionState::Finished
+uiManagerPrivate::ETransitionState::InProgress
+uiManagerPrivate::ETransitionState::Loading
+uiManagerPrivate::ETransitionState::Start
+uiManagerPrivate::ETransitionState::Unloaded
+uiManagerPrivate::ETransitionState::Validate
+uiManagerPrivate::TransitionSlot *UIManager::FindOrCreateHUDTransitionSlot(const uiScene::Id &)
+UIManagerSync
+UIManagerThink
+uiShowHudScene
+virtual bool uiManagerPrivate::TransitionHideHUDScene::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionHideHUDScene::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionMoveSceneFromHUDtoStack::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionMoveSceneFromHUDtoStack::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionMoveSceneFromStackToHUD::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionMoveSceneFromStackToHUD::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionPopAllScenes::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionPopAllScenes::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionPopScene::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionPopScene::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionPushScene::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionPushScene::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionRemoveSceneFromStack::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionRemoveSceneFromStack::Transition_Validate(TransitionEntry &)
+virtual bool uiManagerPrivate::TransitionShowHUDScene::Transition_RequestState(TransitionRequestStateParams &)
+virtual bool uiManagerPrivate::TransitionShowHUDScene::Transition_Validate(TransitionEntry &)
+virtual uiManagerPrivate::ETransitionMergeResult uiManagerPrivate::TransitionHideHUDScene::Transition_AttemptMerge(TransitionEntry &, const TransitionEntry &)
+virtual uiManagerPrivate::ETransitionMergeResult uiManagerPrivate::TransitionMoveSceneFromHUDtoStack::Transition_AttemptMerge(TransitionEntry &, const TransitionEntry &)
+virtual uiManagerPrivate::ETransitionMergeResult uiManagerPrivate::TransitionShowHUDScene::Transition_AttemptMerge(TransitionEntry &, const TransitionEntry &)
+virtual void CCPLdrUIBehaviorStartMenuInputHandler::ApplyProperties(GameObjectApplyPropertiesData &, IGameObjectFactory &, EvaluatorAllocator &)
+virtual void CMOLdrShowHUDScene::ApplyProperties(GameObjectApplyPropertiesData &, IGameObjectFactory &, EvaluatorAllocator &)
+virtual void uiManagerPrivate::TransitionHideHUDScene::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionMoveSceneFromHUDtoStack::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionMoveSceneFromStackToHUD::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionPopAllScenes::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionPopScene::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionPushScene::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionRemoveSceneFromStack::Transition_ApplyWeight(float, float)
+virtual void uiManagerPrivate::TransitionShowHUDScene::Transition_ApplyWeight(float, float)
+void CComponentUIBehaviorStartMenuInputHandler::Think(GameManager &, const float)
+void UIManager::AdvanceMenuStackSceneTransitions(uint32, const float, uiManagerPrivate::EUpdateTransitionFlags)
+void UIManager::HideHUDSceneImpl(const uiManagerPrivate::HideHUDSceneParams &)
+void UIManager::Layout()
+void UIManager::MatchSceneToTransitionState(UIScene &)
+void UIManager::PopAllScenesImpl(const uiManagerPrivate::PopAllScenesParams &)
+void UIManager::PopSceneImpl(const uiManagerPrivate::PopSceneParams &)
+void UIManager::PrintSceneState()
+void UIManager::PushSceneImpl(const uiManagerPrivate::PushSceneParams &)
+void UIManager::RemoveScene(UIScene &)
+void UIManager::RemoveSceneFromStackImpl(const uiManagerPrivate::RemoveSceneFromStackParams &)
+void UIManager::ShowHUDSceneImpl(const uiManagerPrivate::ShowHUDSceneParams &)

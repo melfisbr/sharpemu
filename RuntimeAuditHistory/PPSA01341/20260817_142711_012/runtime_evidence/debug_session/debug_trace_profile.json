@@ -1,0 +1,161 @@
+{
+  "schema": "SharpEmu.RuntimeDebug.TraceProfile.V1",
+  "activatedUtc": "2026-08-17T17:27:11.0137784+00:00",
+  "mustStartBeforeGameLaunch": true,
+  "profile": "diagnostic-balanced",
+  "intentionallyNotEnabled": [
+    "SHARPEMU_LOG_AGC",
+    "SHARPEMU_LOG_AGC_SHADER",
+    "SHARPEMU_LOG_VK_SHADER",
+    "SHARPEMU_LOG_ALL_IMPORTS",
+    "SHARPEMU_LOG_GUEST_THREADS"
+  ],
+  "reason": "Avoid hot-path trace volume that can materially alter timing while enabling existing targeted subsystem diagnostics.",
+  "variables": [
+    {
+      "name": "SHARPEMU_LOG_IO",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_OPEN",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_STDIO",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_CONTENT_ROUTE_TRACE",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_AJM",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_AJM_SUMMARY",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_AUDIO_OUT",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_AUDIO_OUT2",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_ACM",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_NGS2",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_MOVIE_SYNC",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_BINK2",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_MOVIE_IO",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_SHADER_PIPELINE_TIMING",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_PRESENT_CADENCE",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_SLOW_RENDER_WORK",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_RESOURCE_DEPENDENCIES",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_GPU_DETILE",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_DEMONS_TEXTURE_CONTRACT",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_DEMONS_UI_METHODS",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_TRACE_DEMONS_SCRIPT_LOADER",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_DLSYM",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_EXPECTED_IMPORT_RESULTS",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_BOOTSTRAP",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_GUEST_EXCEPTIONS",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_PTHREAD_CONDS",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_EVENT_FLAG",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_SEMA",
+      "value": "1",
+      "previous": null
+    },
+    {
+      "name": "SHARPEMU_LOG_EQUEUE",
+      "value": "1",
+      "previous": null
+    }
+  ]
+}

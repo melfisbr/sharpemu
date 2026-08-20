@@ -40,6 +40,19 @@ public static class KernelPthreadExtendedCompatExports
     private static readonly bool _strictRwlockWriterPreference =
         string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_STRICT_RWLOCK_WRITER_PREFERENCE"), "1", StringComparison.Ordinal);
 
+    // [V74.0.56.8][RWLOCK_UNLOCK_WAKE_GATE]
+    // Wake the global guest scheduler only when an ownership transition can
+    // actually make a blocked rwlock waiter eligible.
+    private static readonly bool _traceRwlockUnlockWakeGateV740568 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_TRACE_RWLOCK_UNLOCK_WAKE_GATE"),
+            "1",
+            StringComparison.Ordinal);
+    private static long _rwlockUnlockWakeEligibleV740568;
+    private static long _rwlockUnlockWakeSkippedV740568;
+    private static long _rwlockUnlockSchedulerWokenV740568;
+
     private static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<int, ulong>> _threadLocalSpecific = new();
 
     internal static void GetThreadStartScheduling(
@@ -1300,12 +1313,22 @@ public static class KernelPthreadExtendedCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
-        if (!TryResolveRwlockState(ctx, rwlockAddress, createIfZero: false, out var resolvedAddress, out var rwlock))
+        if (!TryResolveRwlockState(
+                ctx,
+                rwlockAddress,
+                createIfZero: false,
+                out var resolvedAddress,
+                out var rwlock))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
 
         var currentThreadId = KernelPthreadState.GetCurrentThreadHandle();
+        var wakeEligibleV740568 = false;
+        var unlockKindV740568 = "none";
+        var readersAfterV740568 = 0;
+        var compatWritersAfterV740568 = 0;
+        var waitingWritersAfterV740568 = 0;
 
         try
         {
@@ -1313,16 +1336,31 @@ public static class KernelPthreadExtendedCompatExports
             {
                 if (rwlock.RemoveCompatWriter(currentThreadId))
                 {
-                    Monitor.PulseAll(rwlock.SyncRoot);
+                    unlockKindV740568 = "compat-writer";
+                    wakeEligibleV740568 =
+                        rwlock.CompatWriterTotalCount == 0;
+                    if (wakeEligibleV740568)
+                    {
+                        Monitor.PulseAll(rwlock.SyncRoot);
+                    }
                 }
                 else if (rwlock.WriterThreadId == currentThreadId)
                 {
+                    unlockKindV740568 = "writer";
                     rwlock.WriterThreadId = 0;
+                    wakeEligibleV740568 = true;
                     Monitor.PulseAll(rwlock.SyncRoot);
                 }
                 else if (rwlock.RemoveReader(currentThreadId))
                 {
-                    if (rwlock.ReaderTotalCount == 0 || rwlock.WaitingWriters > 0)
+                    unlockKindV740568 = "reader";
+
+                    // A writer cannot acquire until the final reader leaves.
+                    // If writer preference is active, blocked readers must not
+                    // leapfrog a queued writer either.
+                    wakeEligibleV740568 =
+                        rwlock.ReaderTotalCount == 0;
+                    if (wakeEligibleV740568)
                     {
                         Monitor.PulseAll(rwlock.SyncRoot);
                     }
@@ -1331,6 +1369,12 @@ public static class KernelPthreadExtendedCompatExports
                 {
                     return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_PERMISSION_DENIED;
                 }
+
+                readersAfterV740568 = rwlock.ReaderTotalCount;
+                compatWritersAfterV740568 =
+                    rwlock.CompatWriterTotalCount;
+                waitingWritersAfterV740568 =
+                    rwlock.WaitingWriters;
             }
         }
         catch (SynchronizationLockException)
@@ -1338,7 +1382,51 @@ public static class KernelPthreadExtendedCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_PERMISSION_DENIED;
         }
 
-        _ = GuestThreadExecution.Scheduler?.WakeBlockedThreads(rwlock.WakeKey);
+        var eventOrdinalV740568 = wakeEligibleV740568
+            ? Interlocked.Increment(
+                ref _rwlockUnlockWakeEligibleV740568)
+            : Interlocked.Increment(
+                ref _rwlockUnlockWakeSkippedV740568);
+
+        var schedulerWokenV740568 = 0;
+        if (wakeEligibleV740568)
+        {
+            var maxWakeCountV740568 =
+                waitingWritersAfterV740568 > 0
+                    ? 1
+                    : int.MaxValue;
+            schedulerWokenV740568 =
+                GuestThreadExecution.Scheduler?.WakeBlockedThreads(
+                    rwlock.WakeKey,
+                    maxWakeCountV740568) ?? 0;
+            if (schedulerWokenV740568 != 0)
+            {
+                Interlocked.Add(
+                    ref _rwlockUnlockSchedulerWokenV740568,
+                    schedulerWokenV740568);
+            }
+        }
+
+        if (_traceRwlockUnlockWakeGateV740568 &&
+            (eventOrdinalV740568 <= 16 ||
+             (eventOrdinalV740568 &
+              (eventOrdinalV740568 - 1)) == 0))
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.56.8][RWLOCK_UNLOCK_WAKE_GATE] " +
+                $"event={(wakeEligibleV740568 ? "wake" : "skip")} " +
+                $"n={eventOrdinalV740568} " +
+                $"kind={unlockKindV740568} " +
+                $"address=0x{rwlockAddress:X16} " +
+                $"resolved=0x{resolvedAddress:X16} " +
+                $"thread=0x{currentThreadId:X16} " +
+                $"readers_after={readersAfterV740568} " +
+                $"compat_after={compatWritersAfterV740568} " +
+                $"waiting_writers={waitingWritersAfterV740568} " +
+                $"scheduler_woken={schedulerWokenV740568} " +
+                $"scheduler_woken_total={Volatile.Read(ref _rwlockUnlockSchedulerWokenV740568)}");
+        }
+
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
@@ -1477,7 +1565,8 @@ public static class KernelPthreadExtendedCompatExports
         var values = _threadLocalSpecific.GetOrAdd(
             currentThreadHandle,
             static _ => new ConcurrentDictionary<int, ulong>());
-        values[key] = value;
+        _pthreadTlsFastThreadHandleV1824 = currentThreadHandle;
+        _pthreadTlsFastValuesV1824 = values;        values[key] = value;
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
@@ -1489,6 +1578,83 @@ public static class KernelPthreadExtendedCompatExports
         LibraryName = "libKernel")]
     public static int OrbisPthreadSetspecific(CpuContext ctx) => PosixPthreadSetspecific(ctx);
 
+    // SHARPEMU_PTHREAD_TLS_DIRECT_CACHE_V1_8_24
+    // Guest pthreads use persistent host runners. Cache only the outer
+    // per-thread TLS dictionary reference. Key/value storage remains shared
+    // ConcurrentDictionary state, preserving key_delete/destructor behavior.
+    [ThreadStatic]
+    private static ulong _pthreadTlsFastThreadHandleV1824;
+
+    [ThreadStatic]
+    private static ConcurrentDictionary<int, ulong>? _pthreadTlsFastValuesV1824;
+
+    // SHARPEMU_DBFZ_EXPLICIT_TLS_HANDLE_FASTPATH_V1_8_38
+    // Same dictionary/cache semantics as V1.8.24, but accepts the already
+    // validated pthread identity explicitly so the root/external executor
+    // does not need to masquerade as a scheduler-owned guest pthread.
+    public static bool TryGetSpecificForThreadHandleFastV1838(
+        int key,
+        ulong currentThreadHandle,
+        out ulong value)
+    {
+        value = 0;
+        if (currentThreadHandle == 0)
+        {
+            return false;
+        }
+
+        ConcurrentDictionary<int, ulong>? values;
+        if (_pthreadTlsFastThreadHandleV1824 == currentThreadHandle)
+        {
+            values = _pthreadTlsFastValuesV1824;
+        }
+        else
+        {
+            _threadLocalSpecific.TryGetValue(currentThreadHandle, out values);
+            _pthreadTlsFastThreadHandleV1824 = currentThreadHandle;
+            _pthreadTlsFastValuesV1824 = values;
+        }
+
+        if (values is not null &&
+            values.TryGetValue(key, out var storedValue))
+        {
+            value = storedValue;
+        }
+
+        return true;
+    }
+
+    public static bool TryGetSpecificForBoundGuestThreadFastV1824(
+        int key,
+        out ulong value)
+    {
+        value = 0;
+        var currentThreadHandle = GuestThreadExecution.CurrentGuestThreadHandle;
+        if (currentThreadHandle == 0)
+        {
+            return false;
+        }
+
+        ConcurrentDictionary<int, ulong>? values;
+        if (_pthreadTlsFastThreadHandleV1824 == currentThreadHandle)
+        {
+            values = _pthreadTlsFastValuesV1824;
+        }
+        else
+        {
+            _threadLocalSpecific.TryGetValue(currentThreadHandle, out values);
+            _pthreadTlsFastThreadHandleV1824 = currentThreadHandle;
+            _pthreadTlsFastValuesV1824 = values;
+        }
+
+        if (values is not null &&
+            values.TryGetValue(key, out var storedValue))
+        {
+            value = storedValue;
+        }
+
+        return true;
+    }
     [SysAbiExport(
         Nid = "0-KXaS70xy4",
         ExportName = "pthread_getspecific",
@@ -1497,14 +1663,14 @@ public static class KernelPthreadExtendedCompatExports
     public static int PosixPthreadGetspecific(CpuContext ctx)
     {
         var key = unchecked((int)ctx[CpuRegister.Rdi]);
-        var currentThreadHandle = KernelPthreadState.GetCurrentThreadHandle();
-        ulong value = 0;
-        if (!_tlsKeys.ContainsKey(key))
+        if (TryGetSpecificForBoundGuestThreadFastV1824(key, out var fastValue))
         {
-            ctx[CpuRegister.Rax] = 0;
+            ctx[CpuRegister.Rax] = fastValue;
             return (int)OrbisGen2Result.ORBIS_GEN2_OK;
         }
 
+        var currentThreadHandle = KernelPthreadState.GetCurrentThreadHandle();
+        ulong value = 0;
         if (_threadLocalSpecific.TryGetValue(currentThreadHandle, out var values) &&
             values.TryGetValue(key, out var storedValue))
         {
@@ -1586,6 +1752,11 @@ public static class KernelPthreadExtendedCompatExports
         }
 
         _threadLocalSpecific.TryRemove(threadHandle, out _);
+        if (_pthreadTlsFastThreadHandleV1824 == threadHandle)
+        {
+            _pthreadTlsFastThreadHandleV1824 = 0;
+            _pthreadTlsFastValuesV1824 = null;
+        }
     }
 
     private static int PthreadRwlockLockCore(CpuContext ctx, ulong rwlockAddress, bool write)

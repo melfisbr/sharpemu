@@ -21,6 +21,10 @@ internal static class ContentAssetRoutingDiagnostics
     private static readonly ConcurrentDictionary<string, byte> Seen =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // SHARPEMU_V74_0_56_27_BOUNDED_CONTENT_ROUTE
+    private static readonly ConcurrentDictionary<string, long> RouteCounts =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly bool Enabled =
         string.Equals(
             Environment.GetEnvironmentVariable("SHARPEMU_CONTENT_ROUTE_TRACE"),
@@ -50,6 +54,23 @@ internal static class ContentAssetRoutingDiagnostics
             return;
         }
 
+        var counterKey =
+            operation + "|" + extension + "|" + found;
+
+        var count = RouteCounts.AddOrUpdate(
+            counterKey,
+            1,
+            static (_, current) => current + 1);
+
+        // First sixteen unique paths make the route human-inspectable. After
+        // that, powers of two retain a useful count without producing tens of
+        // thousands of asset-path lines.
+        if (count > 16 &&
+            (count & (count - 1)) != 0)
+        {
+            return;
+        }
+
         var route = GetRoute(extension);
         var signature = found
             ? ProbeSignature(hostPath, extension)
@@ -57,7 +78,8 @@ internal static class ContentAssetRoutingDiagnostics
 
         Console.Error.WriteLine(
             $"[CONTENT-ROUTE] op={operation} ext={extension} found={found} " +
-            $"route={route} signature={signature} guest='{guestPath}' host='{hostPath}'");
+            $"count={count} route={route} signature={signature} " +
+            $"guest='{guestPath}' host='{hostPath}'");
     }
 
     private static bool IsInteresting(string extension) =>

@@ -1,8 +1,0 @@
-{
-  "revision": "V72.4.3.2.28.0.1",
-  "base_correction": "V72.4.3.2.28",
-  "package_fix": "rename $host to $hostBridgePath because PowerShell $Host is read-only and variable names are case-insensitive",
-  "source_apply_reached_in_failed_v28_run": false,
-  "rollback_required_before_v28_0_1": false,
-  "payload_semantics_changed": false
-}

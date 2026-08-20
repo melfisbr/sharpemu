@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using SharpEmu.Core.Cpu;
 using SharpEmu.Core.Cpu.Debugging;
+using SharpEmu.Core.Cpu.Emulation;
 using SharpEmu.Core.Loader;
 using SharpEmu.Core.Memory;
 using SharpEmu.HLE;
@@ -44,6 +45,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 		public string Nid { get; }
 
+		public string MissingHleExportError { get; }
+
 		public ExportedFunction? Export { get; }
 
 		// Precomputed per-import classification: DispatchImport runs for
@@ -52,6 +55,14 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		public bool IsLeaf { get; }
 
 		public bool IsNoBlockLeaf { get; }
+
+		// SHARPEMU_IMPORT_NORMAL_PATH_PRECLASS_STRUCTURAL_V1_8_33_2
+		// Hoist the remaining immutable NID classification out of DispatchImport.
+		public bool RequiresNormalPath { get; }
+
+		// SHARPEMU_PTHREAD_HOT_KIND_PRECLASS_V1_8_34_1
+		// Classify the pthread crossing once; DispatchImport can reject disabled/non-pthread paths without NID string work.
+		public byte PthreadHotKind { get; }
 
 		public bool SuppressStrlenTrace { get; }
 
@@ -65,15 +76,20 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			ExportedFunction? export,
 			bool isLeaf,
 			bool isNoBlockLeaf,
+			bool requiresNormalPath,
+			byte pthreadHotKind,
 			bool suppressStrlenTrace,
 			bool isLoopGuardBoundary,
 			ulong nidHash)
 		{
 			Address = address;
 			Nid = nid;
+			MissingHleExportError = "Missing HLE export for NID: " + nid;
 			Export = export;
 			IsLeaf = isLeaf;
 			IsNoBlockLeaf = isNoBlockLeaf;
+			RequiresNormalPath = requiresNormalPath;
+			PthreadHotKind = pthreadHotKind;
 			SuppressStrlenTrace = suppressStrlenTrace;
 			IsLoopGuardBoundary = isLoopGuardBoundary;
 			NidHash = nidHash;
@@ -911,7 +927,9 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		ulong Rax,
 		ulong Rbx,
 		ulong Rcx,
-		ulong Rdx);
+		ulong Rdx,
+		ulong Rsi,
+		ulong Rdi);
 
 	public string BackendName => "native-backend";
 
@@ -1273,10 +1291,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		_importLoopSignatureWriteIndex = 0;
 		_importLoopPatternHits = 0;
 		_importLoopPatternStartTimestamp = 0;
-		lock (_importResultLogSampleGate)
-		{
-			_importResultLogSamples.Clear();
-		}
+		_importResultLogSampler.Reset();
 		lock (_lazyCommitRangeGate)
 		{
 			_prtLazyCommitRanges.Clear();
@@ -1363,15 +1378,51 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		int num = 0;
 		int num2 = 0;
 		int num3 = 0;
+		// SHARPEMU_IMPORT_TARGETED_HLE_JIT_V1_8_23
+		// Freeze() warms class initializers. Method JIT is constrained to the
+		// imports that the current executable/module can actually reach.
+		var prepareImportTargets = !string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_HLE_FULL_JIT_WARMUP"),
+			"1",
+			StringComparison.Ordinal);
+		var preparedHleMethods = new HashSet<RuntimeMethodHandle>();
+		var preparedHleMethodCount = 0;
+		var failedHleMethodCount = 0;
 		foreach (var (num4, text2) in importStubs)
 		{
 			_ = _moduleManager.TryGetExport(text2, out var resolvedExport);
+			if (prepareImportTargets && resolvedExport is not null)
+			{
+				try
+				{
+					var method = resolvedExport.Function.Method;
+					if (!method.ContainsGenericParameters &&
+						preparedHleMethods.Add(method.MethodHandle))
+					{
+						System.Runtime.CompilerServices.RuntimeHelpers.PrepareMethod(
+							method.MethodHandle);
+						preparedHleMethodCount++;
+					}
+				}
+				catch (Exception ex)
+				{
+					failedHleMethodCount++;
+					if (failedHleMethodCount <= 8)
+					{
+						Console.Error.WriteLine(
+							$"[HLE][V1.8.23][WARN] import JIT failed nid={text2} " +
+							$"error={ex.GetType().Name}: {ex.Message}");
+					}
+				}
+			}
 			_importEntries[num] = new ImportStubEntry(
 				num4,
 				text2,
 				resolvedExport,
 				IsLeafImport(text2),
 				IsNoBlockLeafImport(text2),
+				RequiresNormalImportPath(text2),
+				ClassifyPthreadImportHotKindV1834(text2),
 				ShouldSuppressStrlenTrace(text2),
 				(IsImportLoopGuardBoundary(text2) || IsSynchronizationProgressBoundaryV1763(text2) || IsPureLibcMathProgressBoundaryV48(resolvedExport)),
 				StableHash64(text2));
@@ -1436,6 +1487,10 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 			num2++;
 			num++;
 		}
+		Console.Error.WriteLine(
+			$"[HLE][V1.8.23] import_jit_mode={(prepareImportTargets ? "targeted" : "full-prewarmed")} " +
+			$"prepared={preparedHleMethodCount} failed={failedHleMethodCount} " +
+			$"unique_imports={importStubs.Count}");
 		Console.Error.WriteLine($"[LOADER][INFO] Setup {num2}/{importStubs.Count} import stubs (direct bridge, lle_redirects={num3})");
 		return num2 == importStubs.Count;
 	}
@@ -2444,7 +2499,10 @@ private static bool IsSafeLleLibcExport(string exportName)
 
 	private unsafe void CreateTlsHandler()
 	{
-		_tlsHandlerAddress = (nint)TryAllocateNearEntry(TlsHandlerRegionSize);
+		// Anchor the TLS handler just below the Gen5 guest image window. During
+		// module initialization _entryPoint may be a host address; anchoring there
+		// can place the handler outside E8 rel32 reach of guest code.
+		_tlsHandlerAddress = (nint)TryAllocateNear(0x00000007FF000000UL, TlsHandlerRegionSize);
 		if (_tlsHandlerAddress == 0)
 		{
 			_tlsHandlerAddress = (nint)VirtualAlloc(null, TlsHandlerRegionSize, 12288u, 64u);
@@ -2618,7 +2676,7 @@ private static bool IsSafeLleLibcExport(string exportName)
 		byte* code = (byte*)ptr;
 		int offset = 0;
 		EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0x83);
-		EmitByte(code, ref offset, 0xEC); EmitByte(code, ref offset, 0x28); // sub rsp, 0x28
+		EmitByte(code, ref offset, 0xEC); EmitByte(code, ref offset, 0x20); // sub rsp, 0x20 (RIP redirect enters 16-byte aligned)
 		EmitByte(code, ref offset, 0xB9);
 		EmitUInt32(code, ref offset, _workerDoneEventTlsIndex); // mov ecx, tls
 		EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0xB8);
@@ -2793,7 +2851,7 @@ private static bool IsSafeLleLibcExport(string exportName)
 			EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x51);
 			EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x52); // push r10 (Rip)
 			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0x83);
-			EmitByte(code, ref offset, 0xEC); EmitByte(code, ref offset, 0x40); // sub rsp, 0x40 (hex buf @ +0x30)
+			EmitByte(code, ref offset, 0xEC); EmitByte(code, ref offset, 0x48); // sub rsp, 0x48 (Win64 call alignment; hex buf @ +0x30)
 			EmitByte(code, ref offset, 0xB9); EmitUInt32(code, ref offset, unchecked((uint)-12));
 			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0xB8);
 			*(nint*)(code + offset) = getStdHandle;
@@ -2824,10 +2882,10 @@ private static bool IsSafeLleLibcExport(string exportName)
 			offset += sizeof(nint);
 			EmitByte(code, ref offset, 0xFF); EmitByte(code, ref offset, 0xD0);
 
-			// Hex-encode Rip. Stack after sub 0x40: [rsp+0x40]=saved Rip (push r10).
+			// Hex-encode Rip. Stack after sub 0x48: [rsp+0x48]=saved Rip (push r10).
 			EmitByte(code, ref offset, 0x4C); EmitByte(code, ref offset, 0x8B);
 			EmitByte(code, ref offset, 0x54); EmitByte(code, ref offset, 0x24);
-			EmitByte(code, ref offset, 0x40); // mov r10, [rsp+0x40]
+			EmitByte(code, ref offset, 0x48); // mov r10, [rsp+0x48]
 			EmitByte(code, ref offset, 0x49); EmitByte(code, ref offset, 0xB8);
 			var hexDigitsAbsSlot = offset;
 			*(nint*)(code + offset) = 0;
@@ -2866,9 +2924,6 @@ private static bool IsSafeLleLibcExport(string exportName)
 			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0xC7);
 			EmitByte(code, ref offset, 0x44); EmitByte(code, ref offset, 0x24);
 			EmitByte(code, ref offset, 0x20); EmitUInt32(code, ref offset, 0);
-			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0xC7);
-			EmitByte(code, ref offset, 0x44); EmitByte(code, ref offset, 0x24);
-			EmitByte(code, ref offset, 0x38); EmitUInt32(code, ref offset, 0);
 			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0xB8);
 			*(nint*)(code + offset) = writeFile;
 			offset += sizeof(nint);
@@ -2888,7 +2943,7 @@ private static bool IsSafeLleLibcExport(string exportName)
 			}
 
 			EmitByte(code, ref offset, 0x48); EmitByte(code, ref offset, 0x83);
-			EmitByte(code, ref offset, 0xC4); EmitByte(code, ref offset, 0x40);
+			EmitByte(code, ref offset, 0xC4); EmitByte(code, ref offset, 0x48); // add rsp, 0x48 (match sub)
 			EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x5A); // pop r10
 			EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x59);
 			EmitByte(code, ref offset, 0x41); EmitByte(code, ref offset, 0x58);
@@ -3265,10 +3320,9 @@ if (offset > (int)stubSize)
 		return (nint)ptr;
 	}
 
-	private unsafe void* TryAllocateNearEntry(nuint size)
+	private unsafe void* TryAllocateNear(ulong anchor, nuint size)
 	{
-		ulong entryPoint = _entryPoint;
-		ulong baseAddress = entryPoint & 0xFFFFFFFFFFFF0000uL;
+		ulong baseAddress = anchor & 0xFFFFFFFFFFFF0000uL;
 		for (long num = 0L; num <= 1879048192; num += 16777216)
 		{
 			if (TryAllocAt(baseAddress, num, size, out var memory))
@@ -3315,35 +3369,21 @@ if (offset > (int)stubSize)
 
 	private unsafe void PatchTlsPatterns()
 	{
+		// Scan the full Gen5 guest module window. _entryPoint can temporarily be a
+		// host address during module init; PatchTlsRange already uses VirtualQuery
+		// and byte-scans only committed executable regions, so the cost follows
+		// mapped guest code rather than the nominal 4 GiB window.
 		const ulong CanonicalGen5Base = 0x0000000800000000UL;
-		const ulong CanonicalGen5Limit = 0x0000000810000000UL;
-		const ulong MaxForwardScanBytes = 134217728UL;
+		const ulong CanonicalGen5Limit = 0x0000000900000000UL;
 
 		int tlsLoadPatchCount = 0;
 		int stackCanaryPatchCount = 0;
 		int tlsStorePatchCount = 0;
 		int sse4aPatchCount = 0;
 
-		if (_entryPoint > CanonicalGen5Base &&
-			_entryPoint < CanonicalGen5Limit)
-		{
-			PatchTlsRange(
-				CanonicalGen5Base,
-				_entryPoint,
-				ref tlsLoadPatchCount,
-				ref tlsStorePatchCount,
-				ref stackCanaryPatchCount,
-				ref sse4aPatchCount);
-		}
-
-		ulong forwardEnd =
-			ulong.MaxValue - _entryPoint < MaxForwardScanBytes
-				? ulong.MaxValue
-				: _entryPoint + MaxForwardScanBytes;
-
 		PatchTlsRange(
-			_entryPoint,
-			forwardEnd,
+			CanonicalGen5Base,
+			CanonicalGen5Limit,
 			ref tlsLoadPatchCount,
 			ref tlsStorePatchCount,
 			ref stackCanaryPatchCount,
@@ -3584,50 +3624,19 @@ if (offset > (int)stubSize)
 			return false;
 		}
 
-		var offset = 0;
-		while (offset < availableLength && source[offset] == 0x66)
-		{
-			offset++;
-		}
-
-		if (offset >= availableLength || source[offset] != 0x64)
-		{
-			return false;
-		}
-
-		offset++;
-		if (offset >= availableLength)
+		// Keep the load-time patcher and the fault-time recovery on one decoder.
+		// Bound both consumers to the same maximum instruction window.
+		int decodeLength = Math.Min(availableLength, TlsThreadPointerLoad.MaxLength);
+		if (!TlsThreadPointerLoad.TryDecode(
+				new ReadOnlySpan<byte>(source, decodeLength),
+				out var destinationRegister,
+				out var instructionLength))
 		{
 			return false;
 		}
 
-		var rex = (byte)0;
-		if (source[offset] >= 0x40 && source[offset] <= 0x4F)
-		{
-			rex = source[offset];
-			offset++;
-		}
-
-		if (offset + 7 > availableLength || source[offset] != 0x8B)
-		{
-			return false;
-		}
-
-		var modRm = source[offset + 1];
-		var sib = source[offset + 2];
-		if ((modRm >> 6) != 0 || (modRm & 7) != 4 || sib != 0x25)
-		{
-			return false;
-		}
-
-		var displacement = *(int*)(source + offset + 3);
-		if (displacement != 0)
-		{
-			return false;
-		}
-
-		var destinationRegister = ((modRm >> 3) & 7) | (((rex & 4) != 0) ? 8 : 0);
-		var instructionLength = offset + 7;
+		// The decoder can recognize shorter legal forms, but the ahead-of-time
+		// rewrite still needs enough bytes for CALL rel32 plus an optional MOV.
 		if (instructionLength < MinTlsPatchInstructionBytes)
 		{
 			return false;
@@ -3645,7 +3654,6 @@ if (offset > (int)stubSize)
 		}
 		try
 		{
-			*(sbyte*)address = -24;
 			long num = _tlsHandlerAddress;
 			long num2 = address + 5;
 			long num3 = num - num2;
@@ -3655,6 +3663,9 @@ if (offset > (int)stubSize)
 				return false;
 			}
 
+			// Only mutate guest code after the displacement is known to be valid.
+			// This prevents a failed patch from leaving a stray E8 opcode behind.
+			*(sbyte*)address = -24;
 			*(int*)(address + 1) = (int)num3;
 			var offset = 5;
 			if (destinationRegister != 0)
@@ -3936,6 +3947,20 @@ if (offset > (int)stubSize)
 	}
 
 	public bool SupportsGuestContextTransfer => true;
+
+    // SHARPEMU_DBFZ_SCHEDULER_MANAGED_THREAD_QUERY_V1_8_37
+    public bool IsManagedGuestThread(ulong guestThreadHandle)
+    {
+        if (guestThreadHandle == 0)
+        {
+            return false;
+        }
+
+        lock (_guestThreadGate)
+        {
+            return _guestThreads.ContainsKey(guestThreadHandle);
+        }
+    }
 
 	public void RegisterGuestThreadContext(ulong threadHandle, CpuContext context)
 	{
@@ -5824,6 +5849,10 @@ if (offset > (int)stubSize)
 			_activeGuestThreadState = previousGuestThreadState;
 			Volatile.Write(ref thread.HostThreadId, 0);
 			GuestThreadExecution.RestoreGuestThread(previousGuestThreadHandle);
+            if (thread.State == GuestThreadRunState.Exited || thread.State == GuestThreadRunState.Faulted)
+            {
+                WakeBlockedThreads($"pthread_join:{thread.ThreadHandle:X16}", int.MaxValue);
+            }
 			LastError = previousLastError;
 			lock (_guestThreadGate)
 			{
@@ -6951,6 +6980,118 @@ if (offset > (int)stubSize)
 		_stallWatchdogThread = null;
 	}
 
+	// [V74.0.56.3][ENTRY_THREAD_PROGRESS]
+	// Guest pthread snapshots exclude the initial e_entry thread. Sample the
+	// live native RIP plus CpuContext/import view at low frequency.
+	private void TraceEntryThreadProgressV740563(long ordinal)
+	{
+		var cpuContext = _cpuContext;
+		var entryHostThreadId = Volatile.Read(ref _entryHostThreadId);
+		var entryManagedThreadId = Volatile.Read(ref _entryManagedThreadId);
+
+		int readyV740563 = 0;
+		int runningV740563 = 0;
+		int blockedV740563 = 0;
+		int exitedV740563 = 0;
+		int faultedV740563 = 0;
+		using (LockGate("EntryThreadProgressV740563"))
+		{
+			foreach (var threadV740563 in _guestThreads.Values)
+			{
+				switch (threadV740563.State)
+				{
+					case GuestThreadRunState.Ready:
+						readyV740563++;
+						break;
+					case GuestThreadRunState.Running:
+						runningV740563++;
+						break;
+					case GuestThreadRunState.Blocked:
+						blockedV740563++;
+						break;
+					case GuestThreadRunState.Exited:
+						exitedV740563++;
+						break;
+					case GuestThreadRunState.Faulted:
+						faultedV740563++;
+						break;
+				}
+			}
+		}
+
+		if (cpuContext is null || entryHostThreadId == 0)
+		{
+			Console.Error.WriteLine(
+				$"[V74.0.56.3][ENTRY_PROGRESS] n={ordinal} " +
+				$"entry_available=0 managed={entryManagedThreadId} " +
+				$"host_tid={entryHostThreadId} " +
+				$"threads=ready:{readyV740563},running:{runningV740563}," +
+				$"blocked:{blockedV740563},exited:{exitedV740563}," +
+				$"faulted:{faultedV740563}");
+			return;
+		}
+
+		var cpuRipV740563 = cpuContext.Rip;
+		var cpuRspV740563 = cpuContext[CpuRegister.Rsp];
+		var importNidV740563 = "none";
+		var importNameV740563 = "none";
+		var cpuImportAddressV740563 = cpuRipV740563 & 0xFFFFFFFFFFFFFFF0UL;
+		foreach (var entryV740563 in _importEntries)
+		{
+			if (entryV740563.Address != cpuImportAddressV740563)
+			{
+				continue;
+			}
+
+			importNidV740563 = entryV740563.Nid;
+			importNameV740563 =
+				_moduleManager.TryGetExport(entryV740563.Nid, out var exportV740563)
+					? $"{exportV740563.LibraryName}:{exportV740563.Name}"
+					: entryV740563.Nid;
+			break;
+		}
+
+		if (!TryCaptureExtendedHostThreadContext(entryHostThreadId, out var hostV740563))
+		{
+			Console.Error.WriteLine(
+				$"[V74.0.56.3][ENTRY_PROGRESS] n={ordinal} " +
+				$"entry_available=1 managed={entryManagedThreadId} " +
+				$"host_tid={entryHostThreadId} host_ctx=unavailable " +
+				$"cpu_rip=0x{cpuRipV740563:X16} cpu_rsp=0x{cpuRspV740563:X16} " +
+				$"import_nid={importNidV740563} import_name='{importNameV740563}' " +
+				$"imports={Volatile.Read(ref _importDispatchCount)} " +
+				$"threads=ready:{readyV740563},running:{runningV740563}," +
+				$"blocked:{blockedV740563},exited:{exitedV740563}," +
+				$"faulted:{faultedV740563}");
+			return;
+		}
+
+		Span<byte> hostBytesV740563 = stackalloc byte[16];
+		var hostRipGuestMappedV740563 =
+			cpuContext.Memory.TryRead(hostV740563.Rip, hostBytesV740563);
+		var hostBytesTextV740563 =
+			hostRipGuestMappedV740563
+				? BitConverter.ToString(hostBytesV740563.ToArray()).Replace("-", string.Empty)
+				: "unmapped";
+
+		Console.Error.WriteLine(
+			$"[V74.0.56.3][ENTRY_PROGRESS] n={ordinal} " +
+			$"entry_available=1 managed={entryManagedThreadId} host_tid={entryHostThreadId} " +
+			$"host_rip=0x{hostV740563.Rip:X16} host_rsp=0x{hostV740563.Rsp:X16} " +
+			$"host_rbp=0x{hostV740563.Rbp:X16} host_rax=0x{hostV740563.Rax:X16} " +
+			$"host_rbx=0x{hostV740563.Rbx:X16} host_rcx=0x{hostV740563.Rcx:X16} " +
+			$"host_rdx=0x{hostV740563.Rdx:X16} host_r14=0x{hostV740563.R14:X16} " +
+			$"host_r15=0x{hostV740563.R15:X16} " +
+			$"host_guest_mapped={(hostRipGuestMappedV740563 ? 1 : 0)} " +
+			$"host_bytes={hostBytesTextV740563} " +
+			$"cpu_rip=0x{cpuRipV740563:X16} cpu_rsp=0x{cpuRspV740563:X16} " +
+			$"import_nid={importNidV740563} import_name='{importNameV740563}' " +
+			$"imports={Volatile.Read(ref _importDispatchCount)} " +
+			$"threads=ready:{readyV740563},running:{runningV740563}," +
+			$"blocked:{blockedV740563},exited:{exitedV740563}," +
+			$"faulted:{faultedV740563}");
+	}
+
 	// A guest thread only gets dispatched to a native thread when some running
 	// guest thread calls Pump (which happens inside blocking HLE primitives:
 	// waits, usleep, pthread_create, entry_return). That leaves a starvation
@@ -6975,6 +7116,54 @@ if (offset > (int)stubSize)
 			"1",
 			StringComparison.Ordinal);
 		var nextSnapshotTimestamp = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
+
+		// [V74.0.56.3][TIMEOUT_WAKE_DECOUPLE]
+		// No-auto-kill runs set STALL_WATCHDOG_SECONDS=0. Historically that
+		// also disabled the watchdog-owned expired-wait dispatcher. Timed guest
+		// waits must keep progressing independently of watchdog exit policy.
+		var entrySnapshotSecondsV740563 =
+			int.TryParse(
+				Environment.GetEnvironmentVariable(
+					"SHARPEMU_ENTRY_THREAD_SNAPSHOT_SECONDS"),
+				out var parsedEntrySnapshotSecondsV740563)
+				? Math.Max(0, parsedEntrySnapshotSecondsV740563)
+				: 0;
+		var entrySnapshotTicksV740563 =
+			entrySnapshotSecondsV740563 > 0
+				? (long)((double)entrySnapshotSecondsV740563 * Stopwatch.Frequency)
+				: 0L;
+		var nextEntrySnapshotTimestampV740563 =
+			entrySnapshotTicksV740563 > 0
+				? Stopwatch.GetTimestamp() + entrySnapshotTicksV740563
+				: long.MaxValue;
+		long timeoutWakeEventV740563 = 0;
+		long timeoutWakeThreadTotalV740563 = 0;
+		long entrySnapshotOrdinalV740563 = 0;
+
+		// [V74.0.56.6][PS5SYNC_PRODUCER_NATIVE_RIP_AUDIT]
+		// V56.5.1 shows the primary PS5SyncEvent never receives Set while
+		// BPE CPU0 remains Running with no import progress. Sample the live
+		// native RIP/registers of BPE/resource workers without enabling the
+		// fatal stall watchdog or high-volume guest-thread logging.
+		var producerNativeSnapshotSecondsV740566 =
+			int.TryParse(
+				Environment.GetEnvironmentVariable(
+					"SHARPEMU_PS5SYNC_NATIVE_SNAPSHOT_SECONDS"),
+				out var parsedProducerNativeSnapshotSecondsV740566)
+				? Math.Max(0, parsedProducerNativeSnapshotSecondsV740566)
+				: 0;
+		var producerNativeSnapshotTicksV740566 =
+			producerNativeSnapshotSecondsV740566 > 0
+				? (long)((double)producerNativeSnapshotSecondsV740566 *
+					Stopwatch.Frequency)
+				: 0L;
+		var nextProducerNativeSnapshotTimestampV740566 =
+			producerNativeSnapshotTicksV740566 > 0
+				? Stopwatch.GetTimestamp() +
+					producerNativeSnapshotTicksV740566
+				: long.MaxValue;
+		long producerNativeSnapshotOrdinalV740566 = 0;
+
 		_readyDispatchStop = false;
 		_readyDispatchThread = new Thread(new ThreadStart(delegate
 		{
@@ -6988,8 +7177,48 @@ if (offset > (int)stubSize)
 				// The count is a fast diagnostic hint, while the queue/state pair under
 				// _guestThreadGate is authoritative. Always attempt a locked drain so a
 				// stale hint cannot strand a runnable continuation.
+				var expiredWakeCountV740563 = WakeExpiredBlockedGuestThreads();
+				if (expiredWakeCountV740563 != 0)
+				{
+					timeoutWakeEventV740563++;
+					timeoutWakeThreadTotalV740563 += expiredWakeCountV740563;
+					if (timeoutWakeEventV740563 <= 64 ||
+						(timeoutWakeEventV740563 &
+						 (timeoutWakeEventV740563 - 1)) == 0)
+					{
+						Console.Error.WriteLine(
+							$"[V74.0.56.3][TIMEOUT_WAKE] " +
+							$"event={timeoutWakeEventV740563} " +
+							$"woke={expiredWakeCountV740563} " +
+							$"total={timeoutWakeThreadTotalV740563}");
+					}
+				}
+
 				DispatchReadyGuestThreads();
-				if (logSnapshots && Stopwatch.GetTimestamp() >= nextSnapshotTimestamp)
+
+				var nowV740563 = Stopwatch.GetTimestamp();
+				if (entrySnapshotTicksV740563 > 0 &&
+					nowV740563 >= nextEntrySnapshotTimestampV740563)
+				{
+					entrySnapshotOrdinalV740563++;
+					TraceEntryThreadProgressV740563(entrySnapshotOrdinalV740563);
+					nextEntrySnapshotTimestampV740563 =
+						nowV740563 + entrySnapshotTicksV740563;
+				}
+
+				if (producerNativeSnapshotTicksV740566 > 0 &&
+					nowV740563 >=
+						nextProducerNativeSnapshotTimestampV740566)
+				{
+					producerNativeSnapshotOrdinalV740566++;
+					TracePs5SyncProducerNativeRipsV740566(
+						producerNativeSnapshotOrdinalV740566);
+					nextProducerNativeSnapshotTimestampV740566 =
+						nowV740563 +
+						producerNativeSnapshotTicksV740566;
+				}
+
+				if (logSnapshots && nowV740563 >= nextSnapshotTimestamp)
 				{
 					lock (_guestThreadGate)
 					{
@@ -7008,7 +7237,7 @@ if (offset > (int)stubSize)
 								$"host_tid={Volatile.Read(ref thread.HostThreadId)}");
 						}
 					}
-					nextSnapshotTimestamp = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
+					nextSnapshotTimestamp = nowV740563 + Stopwatch.Frequency;
 				}
 			}
 		}))
@@ -7017,6 +7246,93 @@ if (offset > (int)stubSize)
 			Name = "SharpEmu-ReadyDispatch",
 		};
 		_readyDispatchThread.Start();
+	}
+
+	private void TracePs5SyncProducerNativeRipsV740566(long ordinal)
+	{
+		GuestThreadState[] candidates;
+		using (LockGate("Ps5SyncProducerNativeRipsV740566"))
+		{
+			candidates = _guestThreads.Values
+				.Where(thread =>
+					thread.Name.StartsWith(
+						"BPE JobWorkerThread",
+						StringComparison.Ordinal) ||
+					thread.Name.StartsWith(
+						"Core.Res.",
+						StringComparison.Ordinal) ||
+					thread.Name.StartsWith(
+						"NexusRevolution",
+						StringComparison.Ordinal) ||
+					string.Equals(
+						thread.Name,
+						"HighGraphics",
+						StringComparison.Ordinal) ||
+					string.Equals(
+						thread.Name,
+						"ncaPumpThread",
+						StringComparison.Ordinal))
+				.ToArray();
+		}
+
+		foreach (var thread in candidates)
+		{
+			var hostThreadId = Volatile.Read(ref thread.HostThreadId);
+			var contextRip = thread.Context.Rip;
+			var contextRsp = thread.Context[CpuRegister.Rsp];
+			var contextRbp = thread.Context[CpuRegister.Rbp];
+			var imports = Interlocked.Read(ref thread.ImportCount);
+			var lastNid = Volatile.Read(ref thread.LastImportNid) ?? "none";
+			var lastReturnRip = Volatile.Read(ref thread.LastReturnRip);
+			var hostText = "host_ctx=unavailable";
+
+			if (TryCaptureExtendedHostThreadContext(
+					hostThreadId,
+					out var host))
+			{
+				Span<byte> hostBytesV740566 = stackalloc byte[16];
+				var hostGuestMappedV740566 =
+					_cpuContext is { } cpuContextV740566 &&
+					cpuContextV740566.Memory.TryRead(
+						host.Rip,
+						hostBytesV740566);
+				var hostBytesTextV740566 =
+					hostGuestMappedV740566
+						? BitConverter.ToString(
+							hostBytesV740566.ToArray())
+							.Replace("-", string.Empty)
+						: "unmapped";
+				hostText =
+					$"host_rip=0x{host.Rip:X16} " +
+					$"host_rsp=0x{host.Rsp:X16} " +
+					$"host_rbp=0x{host.Rbp:X16} " +
+					$"host_rax=0x{host.Rax:X16} " +
+					$"host_rbx=0x{host.Rbx:X16} " +
+					$"host_rcx=0x{host.Rcx:X16} " +
+					$"host_rdx=0x{host.Rdx:X16} " +
+					$"host_r9=0x{host.R9:X16} " +
+					$"host_r10=0x{host.R10:X16} " +
+					$"host_r12=0x{host.R12:X16} " +
+					$"host_r13=0x{host.R13:X16} " +
+					$"host_r14=0x{host.R14:X16} " +
+					$"host_r15=0x{host.R15:X16} " +
+					$"host_guest_mapped={(hostGuestMappedV740566 ? 1 : 0)} " +
+					$"host_bytes={hostBytesTextV740566}";
+			}
+
+			Console.Error.WriteLine(
+				$"[V74.0.56.6][PRODUCER_NATIVE] " +
+				$"n={ordinal} handle=0x{thread.ThreadHandle:X16} " +
+				$"name='{thread.Name}' state={thread.State} " +
+				$"executor={(thread.ExecutorActive ? 1 : 0)} " +
+				$"imports={imports} nid={lastNid} " +
+				$"ret=0x{lastReturnRip:X16} " +
+				$"block='{thread.BlockReason ?? "none"}' " +
+				$"host_tid={hostThreadId} {hostText} " +
+				$"context_rip=0x{contextRip:X16} " +
+				$"context_rsp=0x{contextRsp:X16} " +
+				$"context_rbp=0x{contextRbp:X16}");
+		}
 	}
 
 	private void StopReadyThreadDispatcher()
@@ -7132,9 +7448,41 @@ if (offset > (int)stubSize)
 			{
 				return;
 			}
+			var entryHostThreadId = Volatile.Read(ref _entryHostThreadId);
+			var entryManagedThreadId = Volatile.Read(ref _entryManagedThreadId);
+			var entryRip = cpuContext.Rip;
+			var snapshotSource = "entry-context";
+			ulong rip = entryRip;
 			ulong rsp = cpuContext[CpuRegister.Rsp];
-			Console.Error.WriteLine($"[LOADER][ERROR] Stall snapshot: rip=0x{cpuContext.Rip:X16} rsp=0x{rsp:X16} rbp=0x{cpuContext[CpuRegister.Rbp]:X16} rax=0x{cpuContext[CpuRegister.Rax]:X16} rbx=0x{cpuContext[CpuRegister.Rbx]:X16} rcx=0x{cpuContext[CpuRegister.Rcx]:X16} rdx=0x{cpuContext[CpuRegister.Rdx]:X16} rsi=0x{cpuContext[CpuRegister.Rsi]:X16} rdi=0x{cpuContext[CpuRegister.Rdi]:X16}");
-			ulong num = cpuContext.Rip & 0xFFFFFFFFFFFFFFF0uL;
+			ulong rbp = cpuContext[CpuRegister.Rbp];
+			ulong rax = cpuContext[CpuRegister.Rax];
+			ulong rbx = cpuContext[CpuRegister.Rbx];
+			ulong rcx = cpuContext[CpuRegister.Rcx];
+			ulong rdx = cpuContext[CpuRegister.Rdx];
+			ulong rsi = cpuContext[CpuRegister.Rsi];
+			ulong rdi = cpuContext[CpuRegister.Rdi];
+
+			if (entryHostThreadId != 0 &&
+				TryCaptureHostThreadContext(entryHostThreadId, out var liveStallContext))
+			{
+				snapshotSource = "live";
+				rip = liveStallContext.Rip;
+				rsp = liveStallContext.Rsp;
+				rbp = liveStallContext.Rbp;
+				rax = liveStallContext.Rax;
+				rbx = liveStallContext.Rbx;
+				rcx = liveStallContext.Rcx;
+				rdx = liveStallContext.Rdx;
+				rsi = liveStallContext.Rsi;
+				rdi = liveStallContext.Rdi;
+			}
+
+			Console.Error.WriteLine(
+				$"[LOADER][ERROR] Stall snapshot: rip=0x{rip:X16} rsp=0x{rsp:X16} " +
+				$"rbp=0x{rbp:X16} rax=0x{rax:X16} rbx=0x{rbx:X16} " +
+				$"rcx=0x{rcx:X16} rdx=0x{rdx:X16} rsi=0x{rsi:X16} rdi=0x{rdi:X16} " +
+				$"source={snapshotSource} host_tid={entryHostThreadId} entry_rip=0x{entryRip:X16}");
+			ulong num = rip & 0xFFFFFFFFFFFFFFF0uL;
 			for (int i = 0; i < _importEntries.Length; i++)
 			{
 				if (_importEntries[i].Address != num)
@@ -7153,7 +7501,7 @@ if (offset > (int)stubSize)
 				break;
 			}
 			Span<byte> destination = stackalloc byte[16];
-			if (cpuContext.Memory.TryRead(cpuContext.Rip, destination))
+			if (cpuContext.Memory.TryRead(rip, destination))
 			{
 				Console.Error.WriteLine($"[LOADER][ERROR] Stall bytes @rip: {BitConverter.ToString(destination.ToArray()).Replace("-", " ")}");
 			}
@@ -7166,8 +7514,6 @@ if (offset > (int)stubSize)
 				Console.Error.WriteLine($"[LOADER][ERROR] Stall stack: [rsp]=0x{value:X16} [rsp+8]=0x{value2:X16}");
 			}
 
-			var entryHostThreadId = Volatile.Read(ref _entryHostThreadId);
-			var entryManagedThreadId = Volatile.Read(ref _entryManagedThreadId);
 			if (entryHostThreadId != 0)
 			{
 				if (TryCaptureHostThreadContext(entryHostThreadId, out var entryHostContext))
@@ -7400,7 +7746,9 @@ if (offset > (int)stubSize)
 				ReadCtxU64(contextRecord, 120),
 				ReadCtxU64(contextRecord, 144),
 				ReadCtxU64(contextRecord, 128),
-				ReadCtxU64(contextRecord, 136));
+				ReadCtxU64(contextRecord, 136),
+				ReadCtxU64(contextRecord, 168),
+				ReadCtxU64(contextRecord, 176));
 			return true;
 		}
 		finally

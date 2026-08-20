@@ -385,6 +385,65 @@ internal static class GpuWaitRegistry
         return matches;
     }
 
+    // SHARPEMU_V74_0_56_18_CROSS_QUEUE_WATCHED_RANGE
+    /// <summary>
+    /// Counts active waiters overlapped by a producer range whose logical guest
+    /// queue differs from the producer queue. This is intentionally narrower
+    /// than SnapshotInRange: V56.18 uses it only to identify a WRITE_DATA packet
+    /// that is the live dependency of another PS5 queue.
+    /// </summary>
+    public static int CountCrossQueueWaitersInRange(
+        object memory,
+        ulong start,
+        ulong length,
+        string producerQueueName)
+    {
+        memory = Canonicalize(memory)!;
+        if (length == 0 ||
+            string.IsNullOrWhiteSpace(producerQueueName))
+        {
+            return 0;
+        }
+
+        var end = start > ulong.MaxValue - length
+            ? ulong.MaxValue
+            : start + length;
+        var count = 0;
+
+        lock (_gate)
+        {
+            foreach (var (address, list) in _waiters)
+            {
+                foreach (var waiter in list)
+                {
+                    if (!ReferenceEquals(waiter.Memory, memory) ||
+                        string.IsNullOrWhiteSpace(waiter.QueueName) ||
+                        string.Equals(
+                            waiter.QueueName,
+                            producerQueueName,
+                            StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var width = waiter.Is64Bit
+                        ? (ulong)sizeof(ulong)
+                        : sizeof(uint);
+                    var waitEnd = address > ulong.MaxValue - width
+                        ? ulong.MaxValue
+                        : address + width;
+
+                    if (start < waitEnd && address < end)
+                    {
+                        count++;
+                    }
+                }
+            }
+        }
+
+        return count;
+    }
+
     /// <summary>
     /// Returns watched labels overlapped by a producer range, including the
     /// widest access required at each address. This is used after DMA/WRITE_DATA
@@ -746,6 +805,39 @@ internal static class GpuWaitRegistry
         }
     }
 
+    /// <summary>
+    /// Removes the waiter owned by <paramref name="state"/> at the supplied
+    /// address. Used when a fresh explicit submission supersedes a synthetic
+    /// ring-tail park, while preserving all unrelated WAIT_REG_MEM entries.
+    /// </summary>
+    public static bool TryRemoveByState(object state, ulong address)
+    {
+        lock (_gate)
+        {
+            if (!_waiters.TryGetValue(address, out var list))
+            {
+                return false;
+            }
+
+            for (var i = list.Count - 1; i >= 0; i--)
+            {
+                if (!ReferenceEquals(list[i].State, state))
+                {
+                    continue;
+                }
+
+                RemoveWaiterAtLocked(list, i);
+                if (list.Count == 0)
+                {
+                    _waiters.Remove(address);
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
     private static void RemoveWaiterAtLocked(List<WaitingDcb> list, int index)
     {
         list.RemoveAt(index);

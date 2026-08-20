@@ -1,0 +1,13 @@
+V74.0.67.2.13.1
+
+V2.13 searched for v74015Age TTL comparisons, but the accumulated source uses
+the V74.0.64 multi-entry large-array cache.
+
+V74.0.64 owns TTL through:
+  _v74064LargeArraySnapshotTtlMs
+  SHARPEMU_LARGE_ARRAY_SNAPSHOT_REUSE_MS
+
+V2.13.1 validates and reuses that mechanism rather than layering another TTL
+implementation on top of it.
+
+The content-aware large-array identity patch remains independent of TTL.

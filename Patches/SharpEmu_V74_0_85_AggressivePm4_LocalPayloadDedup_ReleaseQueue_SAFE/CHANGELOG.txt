@@ -1,0 +1,6 @@
+V74.0.85
+- Default-on Kyty PM4 blocked scheduler.
+- Default-on inline WRITE_DATA.
+- Per-work large texture payload dedup (>=1 MiB).
+- RELEASE_MEM queue-completion-only path, avoiding global dirty-buffer readback.
+- Rollback switches and structural validation.

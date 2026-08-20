@@ -1,0 +1,1 @@
+﻿C:\Users\Edpo\Documents\GitHub\sharpemu\src\SharpEmu.Libs\Kernel\KernelPthreadExtendedCompatExports.cs

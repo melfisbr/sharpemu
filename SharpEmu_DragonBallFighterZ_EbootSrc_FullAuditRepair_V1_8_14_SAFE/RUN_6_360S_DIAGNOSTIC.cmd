@@ -1,2 +1,0 @@
-@echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\diagnostic.ps1" -Seconds 360

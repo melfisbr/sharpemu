@@ -22,17 +22,30 @@ internal static class KernelPthreadState
     [ThreadStatic]
     private static ulong _currentThreadUniqueId;
 
+    // SHARPEMU_PTHREAD_IDENTITY_CACHE_V1_8_24
+    // Persistent guest runners remain bound to a guest pthread for long
+    // stretches. Cache its already-registered identity per host thread so
+    // pthread/TLS/mutex hot calls do not hit ConcurrentDictionary each time.
+    [ThreadStatic]
+    private static ulong _cachedGuestThreadHandleV1824;
+
+    [ThreadStatic]
+    private static ulong _cachedGuestThreadUniqueIdV1824;
+
     internal readonly record struct ThreadIdentity(ulong UniqueId, string Name);
 
     internal static ulong GetCurrentThreadHandle()
     {
         var guestThreadHandle = GuestThreadExecution.CurrentGuestThreadHandle;
-        // Prefer the bound guest handle even when it is not yet in Threads.
-        // Falling through to a synthetic ThreadStatic handle while a guest
-        // thread is bound causes mutex owner mismatches (unlock PERM → hang).
         if (guestThreadHandle != 0)
         {
-            EnsureGuestThreadIdentity(guestThreadHandle);
+            if (_cachedGuestThreadHandleV1824 != guestThreadHandle)
+            {
+                var identity = EnsureGuestThreadIdentity(guestThreadHandle);
+                _cachedGuestThreadHandleV1824 = guestThreadHandle;
+                _cachedGuestThreadUniqueIdV1824 = identity.UniqueId;
+            }
+
             return guestThreadHandle;
         }
 
@@ -45,7 +58,14 @@ internal static class KernelPthreadState
         var guestThreadHandle = GuestThreadExecution.CurrentGuestThreadHandle;
         if (guestThreadHandle != 0)
         {
-            return EnsureGuestThreadIdentity(guestThreadHandle).UniqueId;
+            if (_cachedGuestThreadHandleV1824 != guestThreadHandle)
+            {
+                var identity = EnsureGuestThreadIdentity(guestThreadHandle);
+                _cachedGuestThreadHandleV1824 = guestThreadHandle;
+                _cachedGuestThreadUniqueIdV1824 = identity.UniqueId;
+            }
+
+            return _cachedGuestThreadUniqueIdV1824;
         }
 
         EnsureCurrentThreadRegistered();

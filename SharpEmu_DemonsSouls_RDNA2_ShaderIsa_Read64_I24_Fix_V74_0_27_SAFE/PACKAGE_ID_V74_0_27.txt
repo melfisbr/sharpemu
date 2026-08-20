@@ -1,1 +1,0 @@
-SharpEmu Demons Souls RDNA2 Shader ISA Read64 + signed I24 Fix V74.0.27 SAFE

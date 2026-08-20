@@ -1,0 +1,2 @@
+C:\Users\Edpo\Documents\GitHub\sharpemu\.sharpemu-hotfix-backup\RADBinkEmbeddedAttractAudio_V72_4_3_2_31_7_18_20260816_140445
+NEW_FILE_EXISTED=False

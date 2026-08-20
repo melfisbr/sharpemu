@@ -1,2 +1,0 @@
-SharpEmu_V74_0_16_1_SAFE
-V74.0.16.1 structural DCC result-anchor repair

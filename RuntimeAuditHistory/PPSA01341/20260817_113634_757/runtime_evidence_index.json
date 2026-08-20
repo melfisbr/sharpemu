@@ -1,0 +1,32 @@
+[
+  {
+    "OriginalPath": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\logs\\demonssoul_ps5_2026- 8-17-11-36-40_0.log",
+    "CopiedPath": "runtime_evidence\\artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\logs\\demonssoul_ps5_2026- 8-17-11-36-40_0.log",
+    "Kind": "runtime_touched",
+    "OriginalSize": 2972,
+    "CopiedBytes": 2972,
+    "Truncated": false,
+    "Sha256": "6CB1A39256EA0B6984A904D533043AE635A02A8AC2D664C3AEC1B94381BA3E44",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\misc\\findWriteRepository.txt",
+    "CopiedPath": "runtime_evidence\\artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\misc\\findWriteRepository.txt",
+    "Kind": "runtime_touched",
+    "OriginalSize": 0,
+    "CopiedBytes": 0,
+    "Truncated": false,
+    "Sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+    "Error": ""
+  },
+  {
+    "OriginalPath": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\library_cache.json",
+    "CopiedPath": "runtime_evidence\\artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\library_cache.json",
+    "Kind": "static_context",
+    "OriginalSize": 2224,
+    "CopiedBytes": 2224,
+    "Truncated": false,
+    "Sha256": "B9AB7A998838357BEB18A20108FE53EF95B75A5F5FFA8B802748F3B8DDC36A9C",
+    "Error": ""
+  }
+]

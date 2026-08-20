@@ -1,0 +1,17 @@
+[
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\logs\\demonssoul_ps5_2026- 8-17-11- 6-26_0.log",
+    "Size": 2972,
+    "LastWriteUtc": "2026-08-17T14:07:20.504955Z"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\game_logs\\PPSA01341\\hostapp\\misc\\findWriteRepository.txt",
+    "Size": 0,
+    "LastWriteUtc": "2026-08-17T14:06:26.7139593Z"
+  },
+  {
+    "Path": "artifacts\\bin\\Debug\\net10.0\\win-x64\\user\\library_cache.json",
+    "Size": 2224,
+    "LastWriteUtc": "2026-08-17T14:06:18.7120131Z"
+  }
+]

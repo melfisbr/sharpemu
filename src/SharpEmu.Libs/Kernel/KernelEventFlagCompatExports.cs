@@ -3,6 +3,7 @@
 
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using SharpEmu.HLE;
 using SharpEmu.Libs.Fiber;
@@ -30,12 +31,38 @@ public static class KernelEventFlagCompatExports
     private static readonly bool _traceEventFlag = string.Equals(
         Environment.GetEnvironmentVariable("SHARPEMU_LOG_EVENT_FLAG"), "1", StringComparison.Ordinal);
 
+    // [V74.0.56.5.1][PS5SYNC_EVENT_PRODUCER_AUDIT]
+    // V56.4 proves the final e_entry stall is a real wait on the first
+    // PS5SyncEvent object (handle 0x2 in that run), not on the busy 0x21
+    // worker event. Track the real PS5SyncEvent lifecycle without changing
+    // bits, wake policy, return values, or wait semantics.
+    private static readonly bool _tracePs5SyncEventV7405651 = string.Equals(
+        Environment.GetEnvironmentVariable("SHARPEMU_TRACE_PS5SYNC_EVENT"),
+        "1",
+        StringComparison.Ordinal);
+    private static readonly int _ps5SyncSnapshotSecondsV7405651 =
+        int.TryParse(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_PS5SYNC_SNAPSHOT_SECONDS"),
+            out var parsedPs5SyncSnapshotSecondsV7405651)
+            ? Math.Max(1, parsedPs5SyncSnapshotSecondsV7405651)
+            : 5;
+    private static long _nextEventFlagCreateOrdinalV7405651;
+    private static long _primaryPs5SyncEventHandleV7405651;
+
     private sealed class EventFlagState
     {
         public required string Name { get; init; }
         public required uint Attributes { get; init; }
+        public required long CreateOrdinalV7405651 { get; init; }
         public ulong Bits { get; set; }
         public int WaitingThreads { get; set; }
+        public long WaitCountV7405651;
+        public long SetCountV7405651;
+        public long ClearCountV7405651;
+        public long PollCountV7405651;
+        public long CancelCountV7405651;
+        public long DeleteCountV7405651;
         public object Gate { get; } = new();
     }
 
@@ -71,17 +98,56 @@ public static class KernelEventFlagCompatExports
         }
 
         var handle = unchecked((ulong)Interlocked.Increment(ref _nextEventFlagHandle));
-        _eventFlags[handle] = new EventFlagState
+        var createOrdinalV7405651 =
+            Interlocked.Increment(ref _nextEventFlagCreateOrdinalV7405651);
+        var eventStateV7405651 = new EventFlagState
         {
             Name = name,
             Attributes = attributes,
+            CreateOrdinalV7405651 = createOrdinalV7405651,
             Bits = initialPattern,
         };
+        _eventFlags[handle] = eventStateV7405651;
 
         if (!ctx.TryWriteUInt64(outAddress, handle))
         {
             _eventFlags.TryRemove(handle, out _);
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
+        if (string.Equals(name, "PS5SyncEvent", StringComparison.Ordinal))
+        {
+            var previousPrimaryV740566 = Interlocked.CompareExchange(
+                ref _primaryPs5SyncEventHandleV7405651,
+                unchecked((long)handle),
+                0L);
+            var becamePrimaryV740566 = previousPrimaryV740566 == 0L;
+            TracePs5SyncLifecycleV7405651(
+                "create",
+                handle,
+                eventStateV7405651,
+                operationOrdinal: createOrdinalV7405651,
+                pattern: initialPattern,
+                bitsBefore: initialPattern,
+                bitsAfter: initialPattern,
+                returnRip: GetCurrentReturnRip(),
+                schedulerWakeCount: 0);
+
+            if (becamePrimaryV740566)
+            {
+                Console.Error.WriteLine(
+                    $"[V74.0.56.6][PS5SYNC_CREATE_PROVENANCE] " +
+                    $"handle=0x{handle:X16} out=0x{outAddress:X16} " +
+                    $"name_addr=0x{nameAddress:X16} attr=0x{attributes:X2} " +
+                    $"initial=0x{initialPattern:X16} " +
+                    $"r12=0x{ctx[CpuRegister.R12]:X16} " +
+                    $"r13=0x{ctx[CpuRegister.R13]:X16} " +
+                    $"r14=0x{ctx[CpuRegister.R14]:X16} " +
+                    $"r15=0x{ctx[CpuRegister.R15]:X16} " +
+                    $"rsp=0x{ctx[CpuRegister.Rsp]:X16} " +
+                    $"rbp=0x{ctx[CpuRegister.Rbp]:X16} " +
+                    $"frames={FormatFrameChain(ctx)}");
+            }
         }
 
         if (_traceEventFlag) TraceEventFlag($"create handle=0x{handle:X16} name='{name}' attr=0x{attributes:X2} bits=0x{initialPattern:X16}");
@@ -101,9 +167,30 @@ public static class KernelEventFlagCompatExports
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
         }
 
+        var operationOrdinalV7405651 =
+            Interlocked.Increment(ref state.DeleteCountV7405651);
+        ulong bitsV7405651;
         lock (state.Gate)
         {
+            bitsV7405651 = state.Bits;
             Monitor.PulseAll(state.Gate);
+        }
+
+        if (ShouldTracePs5SyncOperationV7405651(
+                handle,
+                state,
+                operationOrdinalV7405651))
+        {
+            TracePs5SyncLifecycleV7405651(
+                "delete",
+                handle,
+                state,
+                operationOrdinalV7405651,
+                pattern: 0,
+                bitsBefore: bitsV7405651,
+                bitsAfter: bitsV7405651,
+                returnRip: GetCurrentReturnRip(),
+                schedulerWakeCount: 0);
         }
 
         if (_traceEventFlag) TraceEventFlag($"delete handle=0x{handle:X16} name='{state.Name}'");
@@ -125,14 +212,39 @@ public static class KernelEventFlagCompatExports
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
         }
 
+        var operationOrdinalV7405651 =
+            Interlocked.Increment(ref state.SetCountV7405651);
+        ulong bitsBeforeV7405651;
+        ulong bitsAfterV7405651;
         lock (state.Gate)
         {
+            bitsBeforeV7405651 = state.Bits;
             state.Bits |= pattern;
+            bitsAfterV7405651 = state.Bits;
             Monitor.PulseAll(state.Gate);
             if (_traceEventFlag) TraceEventFlag($"set handle=0x{handle:X16} pattern=0x{pattern:X16} bits=0x{state.Bits:X16} ret=0x{returnRip:X16}");
         }
 
-        _ = GuestThreadExecution.Scheduler?.WakeBlockedThreads(GetEventFlagWakeKey(handle));
+        var schedulerWakeCountV7405651 =
+            GuestThreadExecution.Scheduler?.WakeBlockedThreads(
+                GetEventFlagWakeKey(handle)) ?? 0;
+        if (ShouldTracePs5SyncOperationV7405651(
+                handle,
+                state,
+                operationOrdinalV7405651))
+        {
+            TracePs5SyncLifecycleV7405651(
+                "set",
+                handle,
+                state,
+                operationOrdinalV7405651,
+                pattern,
+                bitsBeforeV7405651,
+                bitsAfterV7405651,
+                returnRip,
+                schedulerWakeCountV7405651);
+        }
+
         return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
     }
 
@@ -150,10 +262,33 @@ public static class KernelEventFlagCompatExports
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
         }
 
+        var operationOrdinalV7405651 =
+            Interlocked.Increment(ref state.ClearCountV7405651);
+        ulong bitsBeforeV7405651;
+        ulong bitsAfterV7405651;
         lock (state.Gate)
         {
+            bitsBeforeV7405651 = state.Bits;
             state.Bits &= pattern;
+            bitsAfterV7405651 = state.Bits;
             if (_traceEventFlag) TraceEventFlag($"clear handle=0x{handle:X16} mask=0x{pattern:X16} bits=0x{state.Bits:X16}");
+        }
+
+        if (ShouldTracePs5SyncOperationV7405651(
+                handle,
+                state,
+                operationOrdinalV7405651))
+        {
+            TracePs5SyncLifecycleV7405651(
+                "clear",
+                handle,
+                state,
+                operationOrdinalV7405651,
+                pattern,
+                bitsBeforeV7405651,
+                bitsAfterV7405651,
+                GetCurrentReturnRip(),
+                schedulerWakeCount: 0);
         }
 
         return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
@@ -181,20 +316,71 @@ public static class KernelEventFlagCompatExports
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
         }
 
+        var operationOrdinalV7405651 =
+            Interlocked.Increment(ref state.PollCountV7405651);
         lock (state.Gate)
         {
+            var bitsBeforeV7405651 = state.Bits;
             if (!TryWriteResultPattern(ctx, resultAddress, state.Bits))
             {
+                if (ShouldTracePs5SyncOperationV7405651(
+                        handle,
+                        state,
+                        operationOrdinalV7405651))
+                {
+                    TracePs5SyncLifecycleV7405651(
+                        "poll-memory-fault",
+                        handle,
+                        state,
+                        operationOrdinalV7405651,
+                        pattern,
+                        bitsBeforeV7405651,
+                        state.Bits,
+                        GetCurrentReturnRip(),
+                        schedulerWakeCount: 0);
+                }
                 return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
             }
 
             if (!IsSatisfied(state.Bits, pattern, waitMode))
             {
+                if (ShouldTracePs5SyncOperationV7405651(
+                        handle,
+                        state,
+                        operationOrdinalV7405651))
+                {
+                    TracePs5SyncLifecycleV7405651(
+                        "poll-busy",
+                        handle,
+                        state,
+                        operationOrdinalV7405651,
+                        pattern,
+                        bitsBeforeV7405651,
+                        state.Bits,
+                        GetCurrentReturnRip(),
+                        schedulerWakeCount: 0);
+                }
                 return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_BUSY);
             }
 
             ApplyClearMode(state, pattern, waitMode);
             if (_traceEventFlag) TraceEventFlag($"poll handle=0x{handle:X16} pattern=0x{pattern:X16} mode=0x{waitMode:X2} bits=0x{state.Bits:X16}");
+            if (ShouldTracePs5SyncOperationV7405651(
+                    handle,
+                    state,
+                    operationOrdinalV7405651))
+            {
+                TracePs5SyncLifecycleV7405651(
+                    "poll-ok",
+                    handle,
+                    state,
+                    operationOrdinalV7405651,
+                    pattern,
+                    bitsBeforeV7405651,
+                    state.Bits,
+                    GetCurrentReturnRip(),
+                    schedulerWakeCount: 0);
+            }
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
         }
     }
@@ -229,11 +415,76 @@ public static class KernelEventFlagCompatExports
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
         }
 
+        var waitOrdinalV7405651 =
+            Interlocked.Increment(ref state.WaitCountV7405651);
+        var tracePs5SyncWaitV7405651 =
+            ShouldTracePs5SyncOperationV7405651(
+                handle,
+                state,
+                waitOrdinalV7405651);
+        var primaryPs5SyncWaitV7405651 =
+            IsPrimaryPs5SyncEventV7405651(handle, state);
+        var waitStartTicksV7405651 = Stopwatch.GetTimestamp();
+        var snapshotIntervalTicksV7405651 =
+            (long)((double)_ps5SyncSnapshotSecondsV7405651 *
+                Stopwatch.Frequency);
+        var nextSnapshotTicksV7405651 =
+            primaryPs5SyncWaitV7405651 &&
+            !GuestThreadExecution.IsGuestThread
+                ? waitStartTicksV7405651 +
+                    snapshotIntervalTicksV7405651
+                : long.MaxValue;
+
+        if (tracePs5SyncWaitV7405651)
+        {
+            TracePs5SyncWaitV7405651(
+                "wait-enter",
+                handle,
+                state,
+                waitOrdinalV7405651,
+                pattern,
+                waitMode,
+                timeoutAddress,
+                timeoutUsec,
+                returnRip,
+                waitStartTicksV7405651);
+        }
+
+        if (primaryPs5SyncWaitV7405651)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.56.6][PS5SYNC_WAIT_PROVENANCE] " +
+                $"handle=0x{handle:X16} wait_n={waitOrdinalV7405651} " +
+                $"pattern=0x{pattern:X16} mode=0x{waitMode:X2} " +
+                $"rsp=0x{ctx[CpuRegister.Rsp]:X16} " +
+                $"rbp=0x{ctx[CpuRegister.Rbp]:X16} " +
+                $"r12=0x{ctx[CpuRegister.R12]:X16} " +
+                $"r13=0x{ctx[CpuRegister.R13]:X16} " +
+                $"r14=0x{ctx[CpuRegister.R14]:X16} " +
+                $"r15=0x{ctx[CpuRegister.R15]:X16} " +
+                $"frames={FormatFrameChain(ctx)} " +
+                $"{FormatGuestWaitObject(ctx)}");
+        }
+
         Monitor.Enter(state.Gate);
         try
         {
             if (TryCompleteSatisfiedWait(ctx, state, pattern, waitMode, resultAddress, out var immediateWaitResult))
             {
+                if (tracePs5SyncWaitV7405651)
+                {
+                    TracePs5SyncWaitV7405651(
+                        "wait-return-immediate",
+                        handle,
+                        state,
+                        waitOrdinalV7405651,
+                        pattern,
+                        waitMode,
+                        timeoutAddress,
+                        timeoutUsec,
+                        returnRip,
+                        waitStartTicksV7405651);
+                }
                 return SetReturn(ctx, immediateWaitResult);
             }
 
@@ -299,6 +550,20 @@ public static class KernelEventFlagCompatExports
                 var scheduler = GuestThreadExecution.Scheduler;
                 if (scheduler is null)
                 {
+                    if (tracePs5SyncWaitV7405651)
+                    {
+                        TracePs5SyncWaitV7405651(
+                            "wait-no-scheduler",
+                            handle,
+                            state,
+                            waitOrdinalV7405651,
+                            pattern,
+                            waitMode,
+                            timeoutAddress,
+                            timeoutUsec,
+                            returnRip,
+                            waitStartTicksV7405651);
+                    }
                     return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN);
                 }
 
@@ -313,6 +578,21 @@ public static class KernelEventFlagCompatExports
                         try
                         {
                             scheduler.Pump(ctx, "sceKernelWaitEventFlag");
+
+                            var nowTicksV7405651 = Stopwatch.GetTimestamp();
+                            if (primaryPs5SyncWaitV7405651 &&
+                                nowTicksV7405651 >= nextSnapshotTicksV7405651)
+                            {
+                                TracePs5SyncSchedulerSnapshotV7405651(
+                                    handle,
+                                    state.CreateOrdinalV7405651,
+                                    waitOrdinalV7405651,
+                                    waitStartTicksV7405651,
+                                    scheduler);
+                                nextSnapshotTicksV7405651 =
+                                    nowTicksV7405651 +
+                                    snapshotIntervalTicksV7405651;
+                            }
                         }
                         finally
                         {
@@ -324,6 +604,20 @@ public static class KernelEventFlagCompatExports
                             state.WaitingThreads = Math.Max(0, state.WaitingThreads - 1);
                             releaseWaiter = false;
                             if (_traceEventFlag) TraceEventFlag($"wait-wake handle=0x{handle:X16} pattern=0x{pattern:X16} bits=0x{state.Bits:X16} waiters={state.WaitingThreads} ret=0x{returnRip:X16}");
+                            if (tracePs5SyncWaitV7405651)
+                            {
+                                TracePs5SyncWaitV7405651(
+                                    "wait-return-pump",
+                                    handle,
+                                    state,
+                                    waitOrdinalV7405651,
+                                    pattern,
+                                    waitMode,
+                                    timeoutAddress,
+                                    timeoutUsec,
+                                    returnRip,
+                                    waitStartTicksV7405651);
+                            }
                             return SetReturn(ctx, pumpedWaitResult);
                         }
 
@@ -335,6 +629,20 @@ public static class KernelEventFlagCompatExports
                             _ = TryWriteUInt32(ctx, timeoutAddress, 0);
                             _ = TryWriteResultPattern(ctx, resultAddress, state.Bits);
                             if (_traceEventFlag) TraceEventFlag($"wait-timeout handle=0x{handle:X16} pattern=0x{pattern:X16} bits=0x{state.Bits:X16} ret=0x{returnRip:X16}");
+                            if (tracePs5SyncWaitV7405651)
+                            {
+                                TracePs5SyncWaitV7405651(
+                                    "wait-timeout",
+                                    handle,
+                                    state,
+                                    waitOrdinalV7405651,
+                                    pattern,
+                                    waitMode,
+                                    timeoutAddress,
+                                    timeoutUsec,
+                                    returnRip,
+                                    waitStartTicksV7405651);
+                            }
                             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_TIMED_OUT);
                         }
 
@@ -352,6 +660,20 @@ public static class KernelEventFlagCompatExports
 
             state.WaitingThreads++;
             if (_traceEventFlag) TraceEventFlag($"wait-block handle=0x{handle:X16} pattern=0x{pattern:X16} waiters={state.WaitingThreads} guest_thread=0x{currentGuestThread:X16} fiber=0x{currentFiber:X16} managed={managedThread} ret=0x{returnRip:X16}");
+            if (tracePs5SyncWaitV7405651)
+            {
+                TracePs5SyncWaitV7405651(
+                    "wait-cooperative-block",
+                    handle,
+                    state,
+                    waitOrdinalV7405651,
+                    pattern,
+                    waitMode,
+                    timeoutAddress,
+                    timeoutUsec,
+                    returnRip,
+                    waitStartTicksV7405651);
+            }
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
         }
         finally
@@ -375,8 +697,13 @@ public static class KernelEventFlagCompatExports
             return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND);
         }
 
+        var operationOrdinalV7405651 =
+            Interlocked.Increment(ref state.CancelCountV7405651);
+        ulong bitsBeforeV7405651;
+        ulong bitsAfterV7405651;
         lock (state.Gate)
         {
+            bitsBeforeV7405651 = state.Bits;
             if (waiterCountAddress != 0 &&
                 !TryWriteUInt32(ctx, waiterCountAddress, unchecked((uint)state.WaitingThreads)))
             {
@@ -384,11 +711,29 @@ public static class KernelEventFlagCompatExports
             }
 
             state.Bits = setPattern;
+            bitsAfterV7405651 = state.Bits;
             state.WaitingThreads = 0;
             Monitor.PulseAll(state.Gate);
             if (_traceEventFlag) TraceEventFlag(
                 $"cancel handle=0x{handle:X16} bits=0x{setPattern:X16} " +
                 $"guest_thread=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} ret=0x{GetCurrentReturnRip():X16}");
+        }
+
+        if (ShouldTracePs5SyncOperationV7405651(
+                handle,
+                state,
+                operationOrdinalV7405651))
+        {
+            TracePs5SyncLifecycleV7405651(
+                "cancel",
+                handle,
+                state,
+                operationOrdinalV7405651,
+                setPattern,
+                bitsBeforeV7405651,
+                bitsAfterV7405651,
+                GetCurrentReturnRip(),
+                schedulerWakeCount: 0);
         }
 
         return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
@@ -484,6 +829,147 @@ public static class KernelEventFlagCompatExports
             if (_traceEventFlag) TraceEventFlag(
                 $"wait-wake pattern=0x{pattern:X16} mode=0x{waitMode:X2} bits=0x{state.Bits:X16} waiters={state.WaitingThreads}");
             return true;
+        }
+    }
+
+    private static bool IsPs5SyncEventV7405651(EventFlagState state) =>
+        _tracePs5SyncEventV7405651 &&
+        string.Equals(
+            state.Name,
+            "PS5SyncEvent",
+            StringComparison.Ordinal);
+
+    private static bool IsPrimaryPs5SyncEventV7405651(
+        ulong handle,
+        EventFlagState state) =>
+        IsPs5SyncEventV7405651(state) &&
+        unchecked((long)handle) ==
+            Volatile.Read(ref _primaryPs5SyncEventHandleV7405651);
+
+    private static bool ShouldTracePs5SyncOperationV7405651(
+        ulong handle,
+        EventFlagState state,
+        long operationOrdinal)
+    {
+        if (!IsPs5SyncEventV7405651(state))
+        {
+            return false;
+        }
+
+        if (IsPrimaryPs5SyncEventV7405651(handle, state))
+        {
+            return true;
+        }
+
+        return operationOrdinal <= 16 ||
+            (operationOrdinal > 0 &&
+             (operationOrdinal & (operationOrdinal - 1)) == 0);
+    }
+
+    private static void TracePs5SyncLifecycleV7405651(
+        string evt,
+        ulong handle,
+        EventFlagState state,
+        long operationOrdinal,
+        ulong pattern,
+        ulong bitsBefore,
+        ulong bitsAfter,
+        ulong returnRip,
+        int schedulerWakeCount)
+    {
+        if (!IsPs5SyncEventV7405651(state))
+        {
+            return;
+        }
+
+        Console.Error.WriteLine(
+            $"[V74.0.56.5.1][PS5SYNC_LIFECYCLE] " +
+            $"ticks={Stopwatch.GetTimestamp()} event={evt} " +
+            $"handle=0x{handle:X16} " +
+            $"primary={(IsPrimaryPs5SyncEventV7405651(handle, state) ? 1 : 0)} " +
+            $"create_n={state.CreateOrdinalV7405651} op_n={operationOrdinal} " +
+            $"name='{state.Name}' attr=0x{state.Attributes:X2} " +
+            $"pattern=0x{pattern:X16} " +
+            $"bits_before=0x{bitsBefore:X16} " +
+            $"bits_after=0x{bitsAfter:X16} " +
+            $"waiters={state.WaitingThreads} " +
+            $"guest_thread=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} " +
+            $"fiber=0x{GuestThreadExecution.CurrentFiberAddress:X16} " +
+            $"managed={Environment.CurrentManagedThreadId} " +
+            $"scheduler_woken={schedulerWakeCount} " +
+            $"ret=0x{returnRip:X16}");
+    }
+
+    private static void TracePs5SyncWaitV7405651(
+        string evt,
+        ulong handle,
+        EventFlagState state,
+        long waitOrdinal,
+        ulong pattern,
+        uint waitMode,
+        ulong timeoutAddress,
+        uint timeoutUsec,
+        ulong returnRip,
+        long waitStartTicks)
+    {
+        if (!IsPs5SyncEventV7405651(state))
+        {
+            return;
+        }
+
+        var nowTicks = Stopwatch.GetTimestamp();
+        var elapsedMs =
+            (nowTicks - waitStartTicks) * 1000.0 /
+            Stopwatch.Frequency;
+        Console.Error.WriteLine(
+            $"[V74.0.56.5.1][PS5SYNC_WAIT] " +
+            $"ticks={nowTicks} event={evt} " +
+            $"handle=0x{handle:X16} " +
+            $"primary={(IsPrimaryPs5SyncEventV7405651(handle, state) ? 1 : 0)} " +
+            $"create_n={state.CreateOrdinalV7405651} wait_n={waitOrdinal} " +
+            $"pattern=0x{pattern:X16} mode=0x{waitMode:X2} " +
+            $"bits=0x{state.Bits:X16} waiters={state.WaitingThreads} " +
+            $"timeout_ptr=0x{timeoutAddress:X16} timeout_us={timeoutUsec} " +
+            $"guest_thread=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16} " +
+            $"fiber=0x{GuestThreadExecution.CurrentFiberAddress:X16} " +
+            $"managed={Environment.CurrentManagedThreadId} " +
+            $"elapsed_ms={elapsedMs:F3} ret=0x{returnRip:X16}");
+    }
+
+    private static void TracePs5SyncSchedulerSnapshotV7405651(
+        ulong handle,
+        long createOrdinal,
+        long waitOrdinal,
+        long waitStartTicks,
+        IGuestThreadScheduler scheduler)
+    {
+        if (!_tracePs5SyncEventV7405651)
+        {
+            return;
+        }
+
+        var nowTicks = Stopwatch.GetTimestamp();
+        var elapsedMs =
+            (nowTicks - waitStartTicks) * 1000.0 /
+            Stopwatch.Frequency;
+        var snapshots = scheduler.SnapshotThreads();
+        Console.Error.WriteLine(
+            $"[V74.0.56.5.1][PS5SYNC_SNAPSHOT] " +
+            $"ticks={nowTicks} handle=0x{handle:X16} " +
+            $"create_n={createOrdinal} wait_n={waitOrdinal} " +
+            $"elapsed_ms={elapsedMs:F3} threads={snapshots.Count}");
+
+        foreach (var snapshot in snapshots)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.56.5.1][PS5SYNC_THREAD] " +
+                $"ticks={nowTicks} wait_n={waitOrdinal} " +
+                $"handle=0x{snapshot.ThreadHandle:X16} " +
+                $"name='{snapshot.Name}' state={snapshot.State} " +
+                $"imports={snapshot.ImportCount} " +
+                $"nid={snapshot.LastImportNid ?? "none"} " +
+                $"ret=0x{snapshot.LastReturnRip:X16} " +
+                $"block='{snapshot.BlockReason ?? "none"}'");
         }
     }
 

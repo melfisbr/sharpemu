@@ -1,5 +1,0 @@
-﻿version=74.0.11.2
-collection_completed=True
-exit_code=
-memory_pressure_stop=False
-completed_utc=2026-08-15T18:11:59.8079327Z

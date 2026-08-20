@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Diagnostics;
@@ -19,6 +19,19 @@ internal interface IMediaFrameDecoder : IDisposable
     bool TryDecodeNextFrame(Span<byte> destination);
 }
 
+// SHARPEMU_BINK_NATIVE_PLAYBACK_CLOCK_V75_0_0
+internal interface IMediaPlaybackClockSource
+{
+    bool TryGetPlaybackSeconds(out double seconds);
+}
+
+internal interface IMediaFrameBufferPolicy
+{
+    int PreferredBufferCount { get; }
+
+    bool PrimeFirstFrameSynchronously { get; }
+}
+
 /// <summary>
 /// Keeps blocking codec work away from the Vulkan presentation thread and
 /// releases decoded frames according to the movie time base.
@@ -29,6 +42,8 @@ internal sealed class MediaFramePlayback : IDisposable
 
     private readonly object _gate = new();
     private readonly IMediaFrameDecoder _decoder;
+    private readonly IMediaPlaybackClockSource? _playbackClockSource;
+    private readonly IMediaFrameBufferPolicy? _bufferPolicy;
     private readonly Queue<byte[]> _freeBuffers = new();
     private readonly Queue<DecodedFrame> _decodedFrames = new();
     private readonly Thread _decoderThread;
@@ -48,6 +63,10 @@ internal sealed class MediaFramePlayback : IDisposable
     internal MediaFramePlayback(IMediaFrameDecoder decoder)
     {
         _decoder = decoder;
+        _playbackClockSource =
+            decoder as IMediaPlaybackClockSource;
+        _bufferPolicy =
+            decoder as IMediaFrameBufferPolicy;
         Width = decoder.Width;
         Height = decoder.Height;
         FramesPerSecondNumerator = decoder.FramesPerSecondNumerator;
@@ -60,11 +79,25 @@ internal sealed class MediaFramePlayback : IDisposable
         // SHARPEMU_MOVIE_CLOCK=audio still opts back into audio-clock pacing.
         var configuredClock = Environment.GetEnvironmentVariable("SHARPEMU_MOVIE_CLOCK");
         _followGuestAudioClock =
-            string.Equals(configuredClock, "audio", StringComparison.OrdinalIgnoreCase) ||
-            (string.IsNullOrWhiteSpace(configuredClock) && decoder is not NihavBink2Decoder);
+            _playbackClockSource is null &&
+            (string.Equals(
+                 configuredClock,
+                 "audio",
+                 StringComparison.OrdinalIgnoreCase) ||
+             (string.IsNullOrWhiteSpace(configuredClock) &&
+              decoder is not NihavBink2Decoder));
 
         var frameBytes = checked((int)((ulong)Width * Height * 4));
-        for (var index = 0; index < BufferCount; index++)
+        var bufferCount = Math.Clamp(
+            _bufferPolicy?.PreferredBufferCount ?? BufferCount,
+            2,
+            8);
+
+        Console.Error.WriteLine(
+            "[BINK-NATIVE][V75.0.0] playback_buffers " +
+            $"decoder={decoder.GetType().Name} count={bufferCount}");
+
+        for (var index = 0; index < bufferCount; index++)
         {
             _freeBuffers.Enqueue(GC.AllocateUninitializedArray<byte>(frameBytes));
         }
@@ -73,7 +106,9 @@ internal sealed class MediaFramePlayback : IDisposable
         // Nihav TryOpen already waits for the streaming process to produce a 
         // complete first frame. Publish one frame synchronously before the 
         // presenter can observe an empty playback queue. 
-        if (decoder is NihavBink2Decoder && _freeBuffers.Count > 0) 
+        if ((decoder is NihavBink2Decoder ||
+             _bufferPolicy?.PrimeFirstFrameSynchronously == true) &&
+            _freeBuffers.Count > 0) 
         { 
             var firstBuffer = _freeBuffers.Dequeue(); 
             try 
@@ -137,7 +172,7 @@ internal sealed class MediaFramePlayback : IDisposable
             {
                 return (
                     _playbackClockStarted
-                        ? Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds
+                        ? CurrentPlaybackSecondsLocked()
                         : 0,
                     _currentFrameIndex);
             }
@@ -237,7 +272,7 @@ internal sealed class MediaFramePlayback : IDisposable
     /// <summary>
     /// Seconds of playback elapsed on the movie's time base. Falls back to wall
     /// clock whenever guest audio is not flowing: a movie whose audio never
-    /// starts — or stops early — must still finish rather than hang on a clock
+    /// starts â€” or stops early â€” must still finish rather than hang on a clock
     /// that will never advance again.
     /// </summary>
     private double CurrentPlaybackSecondsLocked()
@@ -245,6 +280,14 @@ internal sealed class MediaFramePlayback : IDisposable
         if (!_playbackClockStarted)
         {
             return 0;
+        }
+        if (_playbackClockSource is not null &&
+            _playbackClockSource.TryGetPlaybackSeconds(
+                out var sourceSeconds) &&
+            double.IsFinite(sourceSeconds) &&
+            sourceSeconds >= 0)
+        {
+            return sourceSeconds;
         }
 
         var wallSeconds = Stopwatch.GetElapsedTime(_playbackStartTimestamp).TotalSeconds;
@@ -341,7 +384,7 @@ internal sealed class MediaFramePlayback : IDisposable
                     // Frames are pulled once per guest flip, so a title running
                     // well under the movie's frame rate cannot drain a queue
                     // this shallow fast enough and the movie stretches past its
-                    // real duration — audio finishes while the last picture sits
+                    // real duration â€” audio finishes while the last picture sits
                     // on screen and the next movie starts late. Once the clock
                     // has passed a queued frame it can never be shown, so retire
                     // it in favour of this newer one. Only superseded frames are
@@ -401,3 +444,4 @@ internal sealed class MediaFramePlayback : IDisposable
 
     private readonly record struct DecodedFrame(long Index, byte[] Pixels);
 }
+

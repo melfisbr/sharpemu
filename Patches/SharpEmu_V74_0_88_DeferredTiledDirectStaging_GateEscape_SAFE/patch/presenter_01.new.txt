@@ -1,0 +1,9 @@
+    // clear, or any other race), the presenter re-reads the texels itself
+    // instead of showing a fallback pattern.
+    private static volatile SharpEmu.HLE.ICpuMemory? _guestMemory;
+    // SHARPEMU_V74_0_88_DIRECT_GUEST_STAGING_TRACE
+    private static long _directGuestStagingTraceCountV74088;
+    private static long _directGuestStagingFallbackTraceCountV74088;
+
+    internal static void AttachGuestMemory(SharpEmu.HLE.ICpuMemory memory) =>
+        _guestMemory = memory;
