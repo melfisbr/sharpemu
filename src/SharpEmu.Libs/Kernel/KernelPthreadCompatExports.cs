@@ -1444,10 +1444,10 @@ public static class KernelPthreadCompatExports
 
             if (state.TryReleaseUncontended(currentThreadId))
             {
-                if (state.QueuedWaiterCount != 0)
-                {
-                    WakeFirstMutexWaiter(state);
-                }
+                // Always wake the first waiter after release, regardless of recursion count.
+                // If there are waiters but owner becomes 0 (e.g. single-owner unlock), this
+                // wakes a waiter instead of leaving them hanging forever in WaitForHostMutexLock.
+                WakeFirstMutexWaiter(state);
 
                 // If we successfully released the mutex, return immediately with success
                 return (int)OrbisGen2Result.ORBIS_GEN2_OK;
@@ -1482,14 +1482,75 @@ public static class KernelPthreadCompatExports
                 // such a mutex (OwnerThreadId == 0 && Waiters.Count == 0), so every
                 // later locker — including the game's main thread — then queues
                 // behind a head that never advances and the process wedges.
-                if (state.Waiters.First is { } headNode &&
-                    TryGrantMutexWaiterLocked(state, headNode.Value))
+                PthreadMutexWaiter? nextWaiterToWake = null;
+
+                // Try to grant the mutex to the head waiter if there's a queue.
+                // If this fails (e.g., waiter already granted but race-conditionally
+                // no longer first), we must still clear any spurious waiters to avoid
+                // leaving the mutex in an inconsistent "free but queued" state that
+                // deadlocks future lockers who will queue behind a head that never advances.
+                if (state.Waiters.First is { } headNode)
                 {
-                    nextWaiter = headNode.Value;
-                    if (!nextWaiter.Cooperative)
+                    bool granted = TryGrantMutexWaiterLocked(state, headNode.Value);
+
+                    if (granted)
                     {
-                        nextWaiter.HostSignal!.Set();
+                        nextWaiterToWake = headNode.Value;
+                        if (!nextWaiterToWake.Cooperative)
+                        {
+                            nextWaiterToWake.HostSignal!.Set();
+                        }
+
+                        // TryGrantMutexWaiterLocked already removed the waiter from the queue
+                        // and incremented the owner count. No additional removal needed.
                     }
+                    else if (state.OwnerThreadId == 0 && state.Waiters.Count > 0)
+                    {
+                        // Grant failed but we have waiters and no owner. This indicates
+                        // a waiter that was woken but couldn't re-acquire the mutex
+                        // (race condition or lost wakeup). We must drain these waiters
+                        // to avoid leaving the mutex in an inconsistent state.
+                        Debug.Assert(state.OwnerThreadId == 0, "Owner should be cleared");
+
+                        // Drain spurious waiters - remove from head until we find one that
+                        // can advance or queue is empty. After grant failed, headNode may
+                        // no longer be valid, so re-evaluate the new head.
+                        while (true)
+                        {
+                            if (state.Waiters.Count == 0)
+                            {
+                                // Queue is empty - nothing to drain
+                                break;
+                            }
+
+                            var currentHead = state.Waiters.First;
+                            if (!ReferenceEquals(currentHead, headNode))
+                            {
+                                // Head changed since grant attempt - this waiter might be able to advance now
+                                // or we should continue draining. Grant failed previously so drain all.
+                                break;
+                            }
+
+                            var waiterToDrain = currentHead.Value;
+
+                            // Skip if already granted (another thread grabbed it)
+                            if (Volatile.Read(ref waiterToDrain.Granted) != 0)
+                            {
+                                state.Waiters.RemoveFirst();
+                                headNode = null; // Clear head reference to force re-evaluation
+                            }
+                            else
+                            {
+                                // Waiter can advance, stop draining
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (nextWaiterToWake is { Cooperative: true })
+                {
+                    _ = GuestThreadExecution.Scheduler?.WakeBlockedThreads(nextWaiterToWake.WakeKey, 1);
                 }
             }
         }
@@ -2103,10 +2164,14 @@ public static class KernelPthreadCompatExports
             state.Waiters++;
             TracePthreadCond("wait-enter", condAddress, mutexAddress, state, timed, (int)OrbisGen2Result.ORBIS_GEN2_OK);
 
+            // Remove from cond queue before unlock to prevent waiter inconsistency.
+            // The waiter will be re-queued in CompleteCondWaiter when the mutex is reacquired.
+            RemoveCondWaiterLocked(state, waiter);
+            state.Waiters = Math.Max(0, state.Waiters - 1);
+
             var unlockResult = PthreadMutexUnlockCore(ctx, mutexAddress, requireOwner: true);
             if (unlockResult != (int)OrbisGen2Result.ORBIS_GEN2_OK)
             {
-                RemoveCondWaiterLocked(state, waiter);
                 TracePthreadCond("wait-unlock-fail", condAddress, mutexAddress, state, timed, unlockResult);
                 return unlockResult;
             }
@@ -2334,19 +2399,24 @@ public static class KernelPthreadCompatExports
         PthreadMutexWaiter? nextWaiter;
         lock (state.SyncRoot)
         {
-            if (state.OwnerThreadId != 0)
+            // Don't wake if there's no waiter at head of queue.
+            nextWaiter = state.Waiters.First?.Value;
+            if (nextWaiter is null)
             {
                 return;
             }
 
-            nextWaiter = state.Waiters.First?.Value;
+            // Wake the waiter regardless of owner state. Owner might be 0 after unlock,
+            // or the waiter might already have been granted ownership by another path.
             if (nextWaiter is { Cooperative: false })
             {
                 nextWaiter.HostSignal!.Set();
             }
         }
 
-        if (nextWaiter is { Cooperative: true })
+        // Double-check waiter still exists before waking cooperative thread.
+        // Prevents stale wake signals for threads that were already woken/granted.
+        if (nextWaiter is not null && nextWaiter is { Cooperative: true })
         {
             _ = GuestThreadExecution.Scheduler?.WakeBlockedThreads(nextWaiter.WakeKey, 1);
         }

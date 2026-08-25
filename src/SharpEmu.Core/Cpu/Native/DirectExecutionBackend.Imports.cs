@@ -2355,6 +2355,9 @@ public sealed partial class DirectExecutionBackend
 			"a8uLzYY--tM" or // sceAmprAprCommandBufferConstructor
 			"Qs1xtplKo0U" or // sceAmprAprCommandBufferDestructor
 			"GuchCTefuZw" or // sceAmprCommandBufferDestructor
+			"NpMatchingSystemInitialize" or // Np matching system init stub
+			"NpMatchingSystemGetFriendsInfoListByUserType" or // Np matching get friends by type stub
+			"NpMatchingSystemGetFriendsInfoListByStatus" or // Np matching get friends by status stub
 			"N-FSPA4S3nI" or // sceAmprCommandBufferSetBuffer
 			"baQO9ez2gL4" or // sceAmprCommandBufferReset
 			"ULvXMDz56po" or // sceAmprCommandBufferClearBuffer
@@ -2499,6 +2502,10 @@ public sealed partial class DirectExecutionBackend
 		// parked in the import stub even after the HLE export itself has returned.
 		// The normal path also preserves import-call bookkeeping required by wakes.
 		return nid is
+			"2Z+PpY6CaJg" or // pthread_mutex_unlock
+			"EgmLo6EWgso" or // scePthreadRwlockUnlock
+			"+L98PIbGttk" or // pthread_rwlock_unlock
+
 			"8aI7R7WaOlc" or // sceAmprCommandBufferConstructor
 			"zgXifHT9ErY" or // sceVideoOutIsFlipPending
 			"V++UgBtQhn0" or // sceAgcGetDataPacketPayloadAddress

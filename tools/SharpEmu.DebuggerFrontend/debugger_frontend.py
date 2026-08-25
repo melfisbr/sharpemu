@@ -126,7 +126,6 @@ def analyze_debug_stop(stop: dict[str, Any]) -> dict[str, Any] | None:
             "kind": kind,
             "category": category,
         }
-
     if category == "condition":
         title = "Condition wait is not sleeping or waking correctly"
         cause = "The condition wait is returning into the guest retry loop instead of atomically releasing its mutex and parking, or its signal/broadcast path never wakes the waiter."
