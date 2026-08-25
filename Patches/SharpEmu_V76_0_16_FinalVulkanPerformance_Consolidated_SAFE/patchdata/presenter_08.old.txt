@@ -1,0 +1,7 @@
+                        : Interlocked.Increment(ref _graphicsPhysicalSubmitCountV1131);
+                    long switchCountV1131 = Volatile.Read(
+                        ref _physicalLaneSwitchWaitCountV1131);
+                    if (physicalLaneSwitchV1131)
+                    {
+                        switchCountV1131 = Interlocked.Increment(
+                            ref _physicalLaneSwitchWaitCountV1131);

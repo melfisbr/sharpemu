@@ -1,0 +1,34 @@
+        var interactiveRadUiV111 =
+            mode == MovieMode.Rad &&
+            IsDemonSoulsUiBinkCompositePathV740841(hostPath) &&
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_UI_BINK_RAD_INTERACTIVE"),
+                "0",
+                StringComparison.Ordinal);
+
+        if (interactiveRadUiV111)
+        {
+            Console.Error.WriteLine(
+                "[V74.0.118.3][UI_BINK_RAD_INTERACTIVE_ROUTE] " +
+                $"file='{Path.GetFileName(hostPath)}' backend=official-rad-external " +
+                "guest_execution=live guest_input=live transition_owner=guest " +
+                "hard_gate=False composition=clipped-child");
+        }
+        else if (mode == MovieMode.Rad &&
+                 IsDemonSoulsUiBinkCompositePathV740841(hostPath) &&
+                 !string.Equals(
+                     Environment.GetEnvironmentVariable(
+                         "SHARPEMU_DS_UI_BINK_INTERNAL"),
+                     "0",
+                     StringComparison.Ordinal))
+        {
+            mode = MovieMode.Nihav;
+            var n = Interlocked.Increment(
+                ref _v740841UiBinkInternalCount);
+            Console.Error.WriteLine(
+                "[V74.0.84.1][UI_BINK_INTERNAL] " +
+                $"count={n} file='{Path.GetFileName(hostPath)}' " +
+                "mode=nihav guest_hle_gate=False guest_gpu_live=True " +
+                "clock=guest-composite-pump");
+        }

@@ -1,0 +1,10 @@
+{
+    "version":  "V74.0.120.0",
+    "timestamp":  "2026-08-23T21:20:29.4368552-03:00",
+    "phase":  5,
+    "status":  "ANALYSIS_COMPLETED",
+    "summary":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_120_0_SUMMARY_20260823_212028.txt",
+    "result_zip":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_120_0_RESULT_20260823_212028.zip",
+    "runtime_log":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_120_0_RUNTIME_20260823_211545.log",
+    "assessment":  "GLOBAL_RESOURCE_PHASE_STILL_DOMINANT"
+}

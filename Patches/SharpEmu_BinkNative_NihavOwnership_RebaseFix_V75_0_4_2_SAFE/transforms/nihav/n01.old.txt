@@ -1,0 +1,6 @@
+    private const int MaxTraceLength = 4096;
+    // [V72.4.3.2.15][RAW_PGMYUV_TRUTH]
+    private static int _v7243215RawTruthSerial;
+
+    private readonly string _moviePath;
+    private readonly string _toolPath;

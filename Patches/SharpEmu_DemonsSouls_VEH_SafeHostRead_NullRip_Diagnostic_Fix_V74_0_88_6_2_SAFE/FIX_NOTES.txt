@@ -1,9 +1,0 @@
-V74.0.88.6.2
-- Fixes V88.6.1 build errors CS0214/CS0233.
-- Marks TryReadHostQword itself as an unsafe method.
-- Required because its injected safe-read body calls VirtualQuery(void*, ...)
-  and sizeof(MEMORY_BASIC_INFORMATION64).
-- Does not make VectoredHandler unsafe and does not alter its exception policy.
-- Preserves VirtualQuery + MEM_COMMIT + readable-protection + qword-boundary checks.
-- RUN_4 explicitly verifies unsafe_method_declaration=True.
-- V88.6.1 SAFE rollback means no manual rollback is required before this package.

@@ -1,0 +1,22 @@
+        private uint EmitAtomic(
+            SpirvOp op,
+            uint type,
+            uint pointer,
+            uint scope,
+            uint semantics,
+            Func<uint> value,
+            Func<uint> comparator,
+            RdnaAtomicSpaceV7609 space = RdnaAtomicSpaceV7609.StorageBuffer)
+        {
+            if (op is SpirvOp.AtomicIIncrement or SpirvOp.AtomicIDecrement)
+            {
+                // V76.0.9: AMD INC/DEC consume DATA as a wrap/clamp bound.
+                // SPIR-V OpAtomicIIncrement/IDecrement ignore that operand, so
+                // use the CAS-loop helper that implements the RDNA semantics.
+                return EmitRdnaBoundedAtomicV7609(
+                    op,
+                    type,
+                    pointer,
+                    value(),
+                    space);
+            }

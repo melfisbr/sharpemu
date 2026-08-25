@@ -1,0 +1,8 @@
+
+
+
+        if (ResolveMode() != MovieMode.Rad ||
+
+            !string.Equals(
+
+                Path.GetFileName(hostPath),

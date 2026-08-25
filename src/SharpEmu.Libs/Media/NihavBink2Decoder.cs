@@ -21,7 +21,7 @@ namespace SharpEmu.Libs.Media;
 /// each slice before moving to the next one. Slice decoding bounds temporary
 /// disk usage instead of allowing a whole 4K movie to be dumped at once.
 /// </summary>
-internal sealed class NihavBink2Decoder : IMediaFrameDecoder
+internal sealed class NihavBink2Decoder : IMediaFrameDecoder, IMediaFramePixelLayoutSource
 {
     private const int HeaderProbeLength = 48;
     private const int DecoderTimeoutMilliseconds = 120_000;
@@ -31,6 +31,16 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
     private const int MaxTraceLength = 4096;
     // [V72.4.3.2.15][RAW_PGMYUV_TRUTH]
     private static int _v7243215RawTruthSerial;
+    // SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1
+    // The host bridge raises an exclusive NativeRad ownership lease only after
+    // the DLL has actually opened a movie. NIHAV checks that lease here so a
+    // stale/legacy direct call cannot create a second decoder for the same
+    // active movie. Standalone/debug Nihav remains usable when no NativeRad
+    // movie owns the bridge.
+    private static int _v75041NativeOwnerRejectSerial;
+
+    private static bool NativeRadOwnsBinkV75041() =>
+        HostMovieBridge.IsNativeRadExclusiveOwnerActiveV75041;
 
     private readonly string _moviePath;
     private readonly string _toolPath;
@@ -39,6 +49,8 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
     private readonly uint _sourceHeight;
     private readonly uint _frameCount;
     private readonly bool _trace;
+    // SHARPEMU_V74_0_105_UI_BINK_DIRECT_YUV
+    private readonly bool _directUiYuvV74105;
     private readonly bool _swapUv;
     private readonly bool _fullRange;
     private readonly bool _singlePass;
@@ -119,6 +131,12 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
     // two contiguous planar blocks. Repack once into reusable I420 storage so
     // both the LUT converter and optional FFmpeg converter consume true planes.
     private byte[]? _pgmPlanarBuffer;
+
+    // SHARPEMU_V74_0_109_DIRECT_YUV_CHROMA_REPAIR
+    // Reusable planar scratch for repairing NIHAV chroma after 4K->1080p
+    // downscale without reintroducing a YUV->RGB->YUV round-trip.
+    private byte[]? _v74109DirectChromaRepairBuffer;
+
     private bool? _detectedFullRange;
     private long _readTicks;
     private long _convertTicks;
@@ -159,6 +177,12 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
             Environment.GetEnvironmentVariable("SHARPEMU_LOG_BINK2"),
             "1",
             StringComparison.Ordinal);
+        _directUiYuvV74105 =
+            HostMovieBridge.IsDemonSoulsUiBinkCompositePathV740841(moviePath) &&
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_DS_UI_BINK_DIRECT_YUV"),
+                "0",
+                StringComparison.Ordinal);
         _swapUv = string.Equals(
             Environment.GetEnvironmentVariable("SHARPEMU_NIHAV_UV_SWAP"),
             "1",
@@ -246,6 +270,11 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
 
     public uint Height { get; }
 
+    public MediaFramePixelLayout PixelLayout =>
+        _directUiYuvV74105
+            ? MediaFramePixelLayout.Nv12
+            : MediaFramePixelLayout.Bgra32;
+
     public uint FramesPerSecondNumerator { get; }
 
     public uint FramesPerSecondDenominator { get; }
@@ -285,6 +314,25 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
         out NihavBink2Decoder? decoder)
     {
         decoder = null;
+
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(path))
+        {
+            return false;
+        }
+
+        if (NativeRadOwnsBinkV75041())
+        {
+            var n = Interlocked.Increment(ref _v75041NativeOwnerRejectSerial);
+            if (n <= 16 || (n % 256) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[BINK-NATIVE][V75.0.4.1] nihav_suppressed " +
+                    $"count={n} file='{Path.GetFileName(path)}' " +
+                    "owner=native-rad reason=exclusive-native-owner");
+            }
+            return false;
+        }
+
         if (!TryReadHeader(
                 path,
                 out var sourceWidth,
@@ -311,8 +359,22 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
         // timing or frame count.
         var effectiveMaximumWidth = maximumWidth;
         var effectiveMaximumHeight = maximumHeight;
+
+        // SHARPEMU_V74_0_95_1_UI_BINK_DECODE_CAP
+        // Guest UI movies need more source detail than the boot-video path, but
+        // must not expand to the guest 4K plane on the CPU. Select a dedicated
+        // cap by path; the presenter owns the final Vulkan scale.
+        var uiBinkV740951 =
+            HostMovieBridge.IsDemonSoulsUiBinkCompositePathV740841(path);
+        var maxWidthVariableV740951 = uiBinkV740951
+            ? "SHARPEMU_DS_UI_BINK_OUTPUT_MAX_WIDTH"
+            : "SHARPEMU_BINK_OUTPUT_MAX_WIDTH";
+        var maxHeightVariableV740951 = uiBinkV740951
+            ? "SHARPEMU_DS_UI_BINK_OUTPUT_MAX_HEIGHT"
+            : "SHARPEMU_BINK_OUTPUT_MAX_HEIGHT";
+
         if (uint.TryParse(
-                Environment.GetEnvironmentVariable("SHARPEMU_BINK_OUTPUT_MAX_WIDTH"),
+                Environment.GetEnvironmentVariable(maxWidthVariableV740951),
                 out var configuredMaxWidth) &&
             configuredMaxWidth >= 320)
         {
@@ -321,7 +383,7 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
                 configuredMaxWidth);
         }
         if (uint.TryParse(
-                Environment.GetEnvironmentVariable("SHARPEMU_BINK_OUTPUT_MAX_HEIGHT"),
+                Environment.GetEnvironmentVariable(maxHeightVariableV740951),
                 out var configuredMaxHeight) &&
             configuredMaxHeight >= 180)
         {
@@ -410,7 +472,12 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
             Volatile.Read(ref _disposed) != 0,
             this);
 
-        var requiredBytes = checked((int)((ulong)Width * Height * 4));
+        // SHARPEMU_V74_0_108_2_DIRECT_YUV_OUTPUT_BUFFER_CONTRACT
+        // MediaFramePlayback sizes its ring from PixelLayout. Keep the decoder's
+        // destination contract identical: NV12 is 1.5 bytes/pixel, BGRA is 4.
+        var requiredBytes = PixelLayout == MediaFramePixelLayout.Nv12
+            ? checked((int)((ulong)Width * Height * 3 / 2))
+            : checked((int)((ulong)Width * Height * 4));
         if (destination.Length < requiredBytes)
         {
             throw new InvalidOperationException(
@@ -558,11 +625,23 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
                 "3" => ProcessPriorityClass.High,
                 "2" => ProcessPriorityClass.AboveNormal,
                 "1" => ProcessPriorityClass.Normal,
-                _ => ProcessPriorityClass.BelowNormal,
+                // SHARPEMU_V74_0_100_1_NIHAV_PRODUCER_PRIORITY
+                // The title loop feeds the live guest compositor. BelowNormal
+                // let the 4K producer fall to ~4 FPS while the consumer waited
+                // about 243 ms per frame. AboveNormal is the new safe default;
+                // explicit 0 restores BelowNormal.
+                "0" => ProcessPriorityClass.BelowNormal,
+                _ => ProcessPriorityClass.AboveNormal,
             };
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (
+            exception is InvalidOperationException or
+            System.ComponentModel.Win32Exception or
+            NotSupportedException)
         {
+            Console.Error.WriteLine(
+                "[LOADER][WARN] bink2.nihav_priority_failed " +
+                $"type={exception.GetType().Name} message='{exception.Message}'");
         }
 
         // V72.4.3.2.29 NIHAV_DEDICATED_CPU_AFFINITY_APPLY
@@ -619,7 +698,11 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
 
             active = Math.Min(active, 63);
 
-            var configured = 2;
+            // V74.0.100.1: NihAV may fan out decode/scale work internally. Two
+            // inherited logical CPUs were insufficient on a 24-thread host.
+            // Reserve six on larger machines, while retaining two on compact
+            // hosts and honoring the existing explicit override.
+            var configured = active >= 12 ? 6 : Math.Min(active, 2);
             var raw =
                 Environment.GetEnvironmentVariable(
                     "SHARPEMU_NIHAV_DEDICATED_LOGICAL_COUNT");
@@ -689,14 +772,15 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
                 "logo_intro_loop.bk2",
                 StringComparison.OrdinalIgnoreCase);
         var target = titleLoopFastStartV74083
-            ? 1
+            ? ResolveTitleLoopStreamingPrefetchFramesV741001()
             : ResolveStreamingStartupPrefetchFrames();
 
         if (titleLoopFastStartV74083)
         {
             Console.Error.WriteLine(
-                "[V74.0.83][TITLE_LOOP_PREFETCH] " +
-                "file='logo_intro_loop.bk2' target=1 mode=fast-restart");
+                "[V74.0.100.1][TITLE_LOOP_RESERVOIR] " +
+                $"file='logo_intro_loop.bk2' target={target} " +
+                "mode=producer-reservoir");
         }
         var deadline = Stopwatch.GetTimestamp() +
             (long)(Stopwatch.Frequency * ResolveStreamingStartupPrefetchSeconds());
@@ -864,6 +948,19 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
                 out var frames)
             ? Math.Clamp(frames, 1, 60)
             : 12;
+    }
+
+    private static int ResolveTitleLoopStreamingPrefetchFramesV741001()
+    {
+        var configured = Environment.GetEnvironmentVariable(
+            "SHARPEMU_NIHAV_TITLE_LOOP_PREFETCH_FRAMES");
+        return int.TryParse(
+                configured,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var frames)
+            ? Math.Clamp(frames, 1, 90)
+            : 30;
     }
 
     private static double ResolveStreamingStartupPrefetchSeconds()
@@ -1548,7 +1645,9 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
 
     private byte[]? ReadFrameOwned(string path)
     {
-        var requiredBytes = checked((int)((ulong)Width * Height * 4));
+        var requiredBytes = PixelLayout == MediaFramePixelLayout.Nv12
+            ? checked((int)((ulong)Width * Height * 3 / 2))
+            : checked((int)((ulong)Width * Height * 4));
         var output = GC.AllocateUninitializedArray<byte>(requiredBytes);
         return TryReadFrame(path, output)
             ? output
@@ -1583,6 +1682,14 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
 
         if (magic == "P6")
         {
+            if (_directUiYuvV74105)
+            {
+                Console.Error.WriteLine(
+                    "[V74.0.105][UI_BINK_DIRECT_YUV] " +
+                    $"file='{Path.GetFileName(_moviePath)}' action=reject-rgb-source");
+                return false;
+            }
+
             var sourceHeight = storedHeight;
             var required = checked(width * sourceHeight * 3);
             if (payloadOffset + required > fileBytes.Length)
@@ -1656,6 +1763,65 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
         // Center-sample luma and box-filter the whole chroma footprint. For the
         // 4K->640x360 path the 3x3 chroma footprint is explicitly unrolled to remove nested-loop overhead.
         // Keep the V72.4.3.2.11 path as an environment-controlled fallback.
+        // SHARPEMU_V74_0_105_UI_BINK_DIRECT_YUV
+        // NIHAV already produced YUV420. Downscale directly into NV12 and let
+        // the guest's own Bink shader perform its original color conversion.
+        // No RGB conversion or second RGB->YUV pass occurs.
+        if (_directUiYuvV74105)
+        {
+            if (chromaWidth * 2 != visibleWidth ||
+                chromaHeight * 2 != visibleHeight ||
+                (Width & 1) != 0 ||
+                (Height & 1) != 0)
+            {
+                Console.Error.WriteLine(
+                    "[V74.0.105][UI_BINK_DIRECT_YUV] " +
+                    $"file='{Path.GetFileName(_moviePath)}' action=reject-layout " +
+                    $"source={visibleWidth}x{visibleHeight} output={Width}x{Height}");
+                return false;
+            }
+
+            var directStartV74105 = Stopwatch.GetTimestamp();
+            ConvertPackedPgmYuvToNv12V74105(
+                payload,
+                visibleWidth,
+                visibleHeight,
+                chromaWidth,
+                chromaHeight,
+                checked((int)Width),
+                checked((int)Height),
+                destination);
+
+            // SHARPEMU_V74_0_110_DIRECT_YUV_REFERENCE_COLOR
+            // Direct NV12 must reproduce the reference-calibrated chroma that
+            // made the earlier BGRA path visually correct. V105/V109 bypassed
+            // that Q14 calibration and only deblocked U/V, leaving the title
+            // loop with the strong green cast seen in runtime screenshots.
+            // Keep the direct YUV path, but calibrate U/V in-place at 1080p.
+            ApplyDirectNv12ReferenceColorV74110(
+                destination,
+                checked((int)Width),
+                checked((int)Height));
+
+            _convertTicks += Stopwatch.GetTimestamp() - directStartV74105;
+            _perfFrames++;
+
+            var directCountV74105 = Interlocked.Increment(
+                ref _v74105DirectYuvTraceCount);
+            if (directCountV74105 <= 16 ||
+                (directCountV74105 & (directCountV74105 - 1)) == 0)
+            {
+                var frameBytesV74105 = checked(
+                    (int)((ulong)Width * Height * 3 / 2));
+                Console.Error.WriteLine(
+                    "[V74.0.105][UI_BINK_DIRECT_YUV] " +
+                    $"count={directCountV74105} file='{Path.GetFileName(_moviePath)}' " +
+                    $"source={visibleWidth}x{visibleHeight} output={Width}x{Height} " +
+                    $"bytes={frameBytesV74105} bgra_roundtrip=False");
+            }
+            return true;
+        }
+
         var explicitFfmpegColor =
             string.Equals(
                 Environment.GetEnvironmentVariable(
@@ -1806,6 +1972,315 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder
         _convertTicks += Stopwatch.GetTimestamp() - yuvConvertStart;
         _perfFrames++;
         return true;
+    }
+
+    // SHARPEMU_V74_0_110_DIRECT_YUV_REFERENCE_COLOR
+    private static long _v74110DirectReferenceColorTraceCount;
+
+    private void ApplyDirectNv12ReferenceColorV74110(
+        Span<byte> destination,
+        int width,
+        int height)
+    {
+        if (width <= 0 || height <= 0 ||
+            (width & 1) != 0 || (height & 1) != 0)
+        {
+            return;
+        }
+
+        var legacyDeblockSetting =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_DS_UI_BINK_LEGACY_CHROMA_REPAIR");
+        var legacyDeblock =
+            !string.Equals(
+                legacyDeblockSetting,
+                "0",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                legacyDeblockSetting,
+                "false",
+                StringComparison.OrdinalIgnoreCase);
+        if (legacyDeblock)
+        {
+            RepairDirectNv12ChromaV74109(destination, width, height);
+        }
+
+        var calibrationSetting =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_REFERENCE_COLOR_CALIBRATION");
+        var referenceCalibration =
+            !string.Equals(
+                calibrationSetting,
+                "0",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(
+                calibrationSetting,
+                "false",
+                StringComparison.OrdinalIgnoreCase);
+
+        var yBytes = checked(width * height);
+        var chromaWidth = width / 2;
+        var chromaHeight = height / 2;
+        var uvBytes = checked(chromaWidth * chromaHeight * 2);
+        if (destination.Length < checked(yBytes + uvBytes))
+        {
+            return;
+        }
+
+        if (referenceCalibration)
+        {
+            var yPlane = destination[..yBytes];
+            var uv = destination.Slice(yBytes, uvBytes);
+            for (var chromaY = 0; chromaY < chromaHeight; chromaY++)
+            {
+                var lumaY = chromaY * 2;
+                var lumaRow0 = lumaY * width;
+                var lumaRow1 = lumaRow0 + width;
+                var uvRow = chromaY * chromaWidth * 2;
+                for (var chromaX = 0; chromaX < chromaWidth; chromaX++)
+                {
+                    var lumaX = chromaX * 2;
+                    var yy = (
+                        yPlane[lumaRow0 + lumaX] +
+                        yPlane[lumaRow0 + lumaX + 1] +
+                        yPlane[lumaRow1 + lumaX] +
+                        yPlane[lumaRow1 + lumaX + 1] + 2) >> 2;
+
+                    var uvOffset = uvRow + chromaX * 2;
+                    var cbValue = uv[uvOffset] - 128;
+                    var crValue = uv[uvOffset + 1] - 128;
+
+                    // V72.4.3.2.17 reference transform, retained exactly in
+                    // Q14 integer form but applied directly in the NV12 domain:
+                    // Cb' = 0.735107 Cb - 0.893982 Cr - 0.046509 Y
+                    // Cr' = -0.133484 Cb + 0.504089 Cr + 0.048767 Y
+                    var cbAccumulator =
+                        12044 * cbValue -
+                        14647 * crValue -
+                        762 * yy;
+                    var crAccumulator =
+                        -2187 * cbValue +
+                        8259 * crValue +
+                        799 * yy;
+
+                    cbValue =
+                        cbAccumulator >= 0
+                            ? (cbAccumulator + 8192) >> 14
+                            : -(((-cbAccumulator) + 8192) >> 14);
+                    crValue =
+                        crAccumulator >= 0
+                            ? (crAccumulator + 8192) >> 14
+                            : -(((-crAccumulator) + 8192) >> 14);
+
+                    uv[uvOffset] =
+                        (byte)(Math.Clamp(cbValue, -128, 127) + 128);
+                    uv[uvOffset + 1] =
+                        (byte)(Math.Clamp(crValue, -128, 127) + 128);
+                }
+            }
+        }
+
+        var trace = Interlocked.Increment(
+            ref _v74110DirectReferenceColorTraceCount);
+        if (trace <= 16 || (trace & (trace - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                "[V74.0.110][DIRECT_YUV_REFERENCE_COLOR] " +
+                $"count={trace} file='{Path.GetFileName(_moviePath)}' " +
+                $"size={width}x{height} matrix=BT709 range=full " +
+                $"q14={referenceCalibration} legacy_deblock={legacyDeblock} " +
+                "uv_order=UV luma_rewrite=False bgra_roundtrip=False");
+        }
+    }
+
+    // SHARPEMU_V74_0_109_DIRECT_YUV_CHROMA_REPAIR
+    private static long _v74109DirectChromaRepairTraceCount;
+
+    private void RepairDirectNv12ChromaV74109(
+        Span<byte> destination,
+        int width,
+        int height)
+    {
+        if (width <= 0 || height <= 0 ||
+            (width & 1) != 0 || (height & 1) != 0)
+        {
+            return;
+        }
+
+        var yBytes = checked(width * height);
+        var chromaWidth = width / 2;
+        var chromaHeight = height / 2;
+        var planeBytes = checked(chromaWidth * chromaHeight);
+        if (destination.Length < checked(yBytes + planeBytes * 2))
+        {
+            return;
+        }
+
+        var scratchBytes = checked(planeBytes * 2);
+        if (_v74109DirectChromaRepairBuffer is null ||
+            _v74109DirectChromaRepairBuffer.Length < scratchBytes)
+        {
+            _v74109DirectChromaRepairBuffer =
+                GC.AllocateUninitializedArray<byte>(scratchBytes);
+        }
+
+        var uPlane = _v74109DirectChromaRepairBuffer.AsSpan(0, planeBytes);
+        var vPlane = _v74109DirectChromaRepairBuffer.AsSpan(planeBytes, planeBytes);
+        var uv = destination.Slice(yBytes, planeBytes * 2);
+        for (var index = 0; index < planeBytes; index++)
+        {
+            uPlane[index] = uv[index * 2];
+            vPlane[index] = uv[index * 2 + 1];
+        }
+
+        BinkChromaRepairV7243227.RepairInPlace(
+            uPlane,
+            vPlane,
+            chromaWidth,
+            chromaHeight,
+            _moviePath);
+
+        for (var index = 0; index < planeBytes; index++)
+        {
+            uv[index * 2] = uPlane[index];
+            uv[index * 2 + 1] = vPlane[index];
+        }
+
+        var trace = Interlocked.Increment(
+            ref _v74109DirectChromaRepairTraceCount);
+        if (trace <= 16 || (trace & (trace - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                "[V74.0.109][DIRECT_YUV_CHROMA_REPAIR] " +
+                $"count={trace} file='{Path.GetFileName(_moviePath)}' " +
+                $"size={width}x{height} chroma={chromaWidth}x{chromaHeight} " +
+                "luma_untouched=True bgra_roundtrip=False");
+        }
+    }
+
+    // SHARPEMU_V74_0_105_UI_BINK_DIRECT_YUV
+    private static long _v74105DirectYuvTraceCount;
+
+    private static void ConvertPackedPgmYuvToNv12V74105(
+        ReadOnlySpan<byte> payload,
+        int sourceWidth,
+        int sourceHeight,
+        int sourceChromaWidth,
+        int sourceChromaHeight,
+        int targetWidth,
+        int targetHeight,
+        Span<byte> destination)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0 ||
+            sourceChromaWidth * 2 != sourceWidth ||
+            sourceChromaHeight * 2 != sourceHeight ||
+            targetWidth <= 0 || targetHeight <= 0 ||
+            (targetWidth & 1) != 0 || (targetHeight & 1) != 0)
+        {
+            destination.Clear();
+            return;
+        }
+
+        var sourceYBytes = checked(sourceWidth * sourceHeight);
+        var requiredPayload = checked(
+            sourceYBytes + sourceWidth * sourceChromaHeight);
+        var targetYBytes = checked(targetWidth * targetHeight);
+        var targetChromaWidth = targetWidth / 2;
+        var targetChromaHeight = targetHeight / 2;
+        var targetUvBytes = checked(targetChromaWidth * targetChromaHeight * 2);
+        if (payload.Length < requiredPayload ||
+            destination.Length < checked(targetYBytes + targetUvBytes))
+        {
+            destination.Clear();
+            return;
+        }
+
+        var outY = destination[..targetYBytes];
+        var outUv = destination.Slice(targetYBytes, targetUvBytes);
+
+        // 3840x2160 -> 1920x1080 is the normal Demon's Souls path. Use an
+        // explicit 2x2 box kernel so quality is retained without the generic
+        // nested-loop/division overhead.
+        if (sourceWidth == targetWidth * 2 &&
+            sourceHeight == targetHeight * 2)
+        {
+            for (var ty = 0; ty < targetHeight; ty++)
+            {
+                var sy = ty * 2;
+                var row0 = sy * sourceWidth;
+                var row1 = row0 + sourceWidth;
+                var dstRow = ty * targetWidth;
+                for (var tx = 0; tx < targetWidth; tx++)
+                {
+                    var sx = tx * 2;
+                    var sum = payload[row0 + sx] + payload[row0 + sx + 1] +
+                              payload[row1 + sx] + payload[row1 + sx + 1];
+                    outY[dstRow + tx] = (byte)((sum + 2) >> 2);
+                }
+            }
+
+            // Source PGMYUV chroma rows are [U...][V...]. The source chroma
+            // is 1920x1080 and target chroma 960x540, also an exact 2x2 box.
+            for (var ty = 0; ty < targetChromaHeight; ty++)
+            {
+                var sy = ty * 2;
+                var packedRow0 = sourceYBytes + sy * sourceWidth;
+                var packedRow1 = packedRow0 + sourceWidth;
+                var dstRow = ty * targetChromaWidth * 2;
+                for (var tx = 0; tx < targetChromaWidth; tx++)
+                {
+                    var sx = tx * 2;
+                    var u = payload[packedRow0 + sx] +
+                            payload[packedRow0 + sx + 1] +
+                            payload[packedRow1 + sx] +
+                            payload[packedRow1 + sx + 1];
+                    var v0 = packedRow0 + sourceChromaWidth + sx;
+                    var v1 = packedRow1 + sourceChromaWidth + sx;
+                    var v = payload[v0] + payload[v0 + 1] +
+                            payload[v1] + payload[v1 + 1];
+                    var dst = dstRow + tx * 2;
+                    outUv[dst] = (byte)((u + 2) >> 2);
+                    outUv[dst + 1] = (byte)((v + 2) >> 2);
+                }
+            }
+            return;
+        }
+
+        // Generic nearest mapping is retained for non-2x UI assets. It avoids
+        // any RGB round-trip and therefore preserves the original YUV values.
+        for (var ty = 0; ty < targetHeight; ty++)
+        {
+            var sy = Math.Min(
+                sourceHeight - 1,
+                (int)((long)ty * sourceHeight / targetHeight));
+            var srcRow = sy * sourceWidth;
+            var dstRow = ty * targetWidth;
+            for (var tx = 0; tx < targetWidth; tx++)
+            {
+                var sx = Math.Min(
+                    sourceWidth - 1,
+                    (int)((long)tx * sourceWidth / targetWidth));
+                outY[dstRow + tx] = payload[srcRow + sx];
+            }
+        }
+
+        for (var ty = 0; ty < targetChromaHeight; ty++)
+        {
+            var sy = Math.Min(
+                sourceChromaHeight - 1,
+                (int)((long)ty * sourceChromaHeight / targetChromaHeight));
+            var packedRow = sourceYBytes + sy * sourceWidth;
+            var dstRow = ty * targetChromaWidth * 2;
+            for (var tx = 0; tx < targetChromaWidth; tx++)
+            {
+                var sx = Math.Min(
+                    sourceChromaWidth - 1,
+                    (int)((long)tx * sourceChromaWidth / targetChromaWidth));
+                var dst = dstRow + tx * 2;
+                outUv[dst] = payload[packedRow + sx];
+                outUv[dst + 1] = payload[packedRow + sourceChromaWidth + sx];
+            }
+        }
     }
 
     // V72.4.3.2.13 PACKED_PGMYUV_BOX

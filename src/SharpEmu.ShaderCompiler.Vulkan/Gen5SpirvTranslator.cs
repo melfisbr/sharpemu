@@ -190,6 +190,12 @@ public static partial class Gen5SpirvTranslator
         private readonly IReadOnlyList<Gen5PixelOutputBinding> _pixelOutputBindings;
         private readonly uint _waveLaneCount;
         private readonly bool _emulateWave64;
+        // V76.0.4: a compute workgroup can contain more than one logical PS5
+        // wave64. Keep the V76.0.3 single-wave barrier path, but identify
+        // multi-wave workgroups separately so wave collectives can rendezvous
+        // per 64-lane guest wave instead of across the whole workgroup.
+        private readonly bool _multiWave64Bridge;
+        private readonly uint _guestWaveCount;
         // KytyPS5 a38c8fe analogue: these are immutable properties of the
         // decoded program. Scan the instruction stream once at context creation
         // instead of repeatedly walking it while declaring capabilities,
@@ -320,6 +326,18 @@ public static partial class Gen5SpirvTranslator
         private uint _waveMaskScratch;
         private uint _waveMaskScratchElementPointer;
         private uint _waveBroadcastScratch;
+        private uint _waveLaneScratch;
+        private uint _waveLaneScratchElementPointer;
+        // V76.0.4 multi-wave wave64 rendezvous. These arrays have one slot
+        // (or two mask slots) per logical 64-lane guest wave in the workgroup.
+        private uint _wave64RendezvousState;
+        private uint _wave64RendezvousStateElementPointer;
+        private uint _wave64RendezvousEpoch;
+        private uint _wave64ReadlaneScratch;
+        private uint _wave64ReadlaneScratchElementPointer;
+        private uint _wave64MaskLowScratch;
+        private uint _wave64MaskHighScratch;
+        private uint _wave64MaskScratchElementPointer;
         private bool _waveScratchInLds;
         private uint _glsl;
 
@@ -385,10 +403,21 @@ public static partial class Gen5SpirvTranslator
             _evaluation = evaluation;
             _pixelOutputBindings = pixelOutputBindings;
             _waveLaneCount = waveLaneCount == 64 ? 64u : 32u;
+            var localInvocationCount =
+                (ulong)localSizeX * localSizeY * localSizeZ;
             _emulateWave64 =
                 stage == Gen5SpirvStage.Compute &&
                 _waveLaneCount == 64 &&
-                (ulong)localSizeX * localSizeY * localSizeZ == 64;
+                localInvocationCount == 64;
+            _multiWave64Bridge =
+                stage == Gen5SpirvStage.Compute &&
+                _waveLaneCount == 64 &&
+                localInvocationCount > 64 &&
+                (localInvocationCount % 64) == 0 &&
+                localInvocationCount <= 1024;
+            _guestWaveCount = _multiWave64Bridge
+                ? checked((uint)(localInvocationCount / 64))
+                : 0u;
             var immutableFeatures = AnalyzeImmutableProgramFeatures(
                 state.Program.Instructions);
             _usesLds = immutableFeatures.UsesLds;
@@ -503,6 +532,9 @@ public static partial class Gen5SpirvTranslator
                 }
 
                 DeclareModule();
+                // V76.0.9: declare bounded RDNA atomic INC/DEC helper functions
+                // before main(), preserving the DATA clamp operand semantics.
+                DeclareRdnaAtomicCompatV7609();
                 var blocks = BuildBasicBlocks(_state.Program.Instructions);
                 if (blocks.Count == 0)
                 {
@@ -543,6 +575,7 @@ public static partial class Gen5SpirvTranslator
                     _module.AddStatement(SpirvOp.Return);
                     _module.AddLabel();
                 }
+                EmitInitializeMultiWave64BridgeV7604();
                 EmitInitialState();
 
                 var loopHeader = _module.AllocateId();
@@ -919,6 +952,7 @@ public static partial class Gen5SpirvTranslator
             DeclareImages();
             DeclareLds();
             DeclareWave64Scratch();
+            DeclareMultiWave64ScratchV7604();
             DeclareStageInterface();
             DeclareComputeDispatchLimit();
         }
@@ -956,14 +990,33 @@ public static partial class Gen5SpirvTranslator
                 return;
             }
 
+            // V76.0.3 / RPCS-style guest semantics:
+            // a PS5 wave64 is one logical 64-lane execution unit even when
+            // the host exposes 32-lane Vulkan subgroups (notably NVIDIA).
+            // The existing mask/readfirstlane bridge only covered masks and
+            // one broadcast scalar. V_READLANE_B32 still used a native
+            // subgroup broadcast and therefore could never read guest lanes
+            // 32..63 across the host subgroup boundary. Keep the existing
+            // single-wave safety rule (_emulateWave64 is enabled only for a
+            // 64-invocation compute workgroup) and add a 64-dword lane rendezvous.
+            _waveLaneScratchElementPointer =
+                _module.TypePointer(SpirvStorageClass.Workgroup, _uintType);
+            var laneArrayType = _module.TypeArray(_uintType, 64);
+            var laneArrayPointer =
+                _module.TypePointer(SpirvStorageClass.Workgroup, laneArrayType);
+            _waveLaneScratch = _module.AddGlobalVariable(
+                laneArrayPointer,
+                SpirvStorageClass.Workgroup);
+            _module.AddName(_waveLaneScratch, "wave64LaneScratch");
+            _interfaces.Add(_waveLaneScratch);
+
             // Metal exposes 32 KiB of threadgroup memory on the Apple GPUs we
             // target. Some PS5 compute shaders legitimately request all of it,
-            // so allocating another workgroup variable for the wave64 bridge
-            // makes pipeline creation fail. Reuse the final three dwords of the
-            // existing LDS allocation in that case. The translator already
-            // bounds guest LDS accesses to this fixed allocation; keeping the
-            // bridge inside it preserves the host limit and still provides the
-            // cross-subgroup rendezvous needed to model one 64-lane guest wave.
+            // so allocating another workgroup variable for the mask/readfirst
+            // bridge can make pipeline creation fail. Reuse the final three
+            // dwords of the existing LDS allocation in that case. The separate
+            // 64-dword readlane scratch above is required only for V_READLANE
+            // correctness and is intentionally not aliased with guest LDS.
             if (_lds != 0)
             {
                 _waveScratchInLds = true;
@@ -989,6 +1042,63 @@ public static partial class Gen5SpirvTranslator
                 SpirvStorageClass.Workgroup);
             _module.AddName(_waveBroadcastScratch, "wave64BroadcastScratch");
             _interfaces.Add(_waveBroadcastScratch);
+        }
+
+        private void DeclareMultiWave64ScratchV7604()
+        {
+            if (!_multiWave64Bridge || !UsesSubgroupOperations())
+            {
+                return;
+            }
+
+            // V76.0.4: multiple guest wave64s can share one Vulkan workgroup.
+            // A Workgroup-wide ControlBarrier is not valid for guest wave
+            // collectives because different guest waves may take different
+            // scalar control-flow paths. Allocate one rendezvous state per
+            // guest wave and synchronize only the native subgroup(s) that
+            // belong to that logical wave.
+            _wave64RendezvousStateElementPointer =
+                _module.TypePointer(SpirvStorageClass.Workgroup, _uintType);
+            var perWaveArray = _module.TypeArray(_uintType, _guestWaveCount);
+            var perWavePointer =
+                _module.TypePointer(SpirvStorageClass.Workgroup, perWaveArray);
+
+            _wave64RendezvousState = _module.AddGlobalVariable(
+                perWavePointer,
+                SpirvStorageClass.Workgroup);
+            _module.AddName(_wave64RendezvousState, "wave64RendezvousStateV7604");
+            _interfaces.Add(_wave64RendezvousState);
+
+            _wave64ReadlaneScratchElementPointer =
+                _wave64RendezvousStateElementPointer;
+            _wave64ReadlaneScratch = _module.AddGlobalVariable(
+                perWavePointer,
+                SpirvStorageClass.Workgroup);
+            _module.AddName(_wave64ReadlaneScratch, "wave64ReadlaneValueV7604");
+            _interfaces.Add(_wave64ReadlaneScratch);
+
+            _wave64MaskScratchElementPointer =
+                _wave64RendezvousStateElementPointer;
+            _wave64MaskLowScratch = _module.AddGlobalVariable(
+                perWavePointer,
+                SpirvStorageClass.Workgroup);
+            _wave64MaskHighScratch = _module.AddGlobalVariable(
+                perWavePointer,
+                SpirvStorageClass.Workgroup);
+            _module.AddName(_wave64MaskLowScratch, "wave64MaskLowV7604");
+            _module.AddName(_wave64MaskHighScratch, "wave64MaskHighV7604");
+            _interfaces.Add(_wave64MaskLowScratch);
+            _interfaces.Add(_wave64MaskHighScratch);
+
+            // Private means one dynamic rendezvous epoch per invocation. The
+            // epoch is monotonically increasing, so the shared state never
+            // needs to be reset between guest wave operations.
+            _wave64RendezvousEpoch = _module.AddGlobalVariable(
+                _privateUintPointer,
+                SpirvStorageClass.Private,
+                UInt(0));
+            _module.AddName(_wave64RendezvousEpoch, "wave64RendezvousEpochV7604");
+            _interfaces.Add(_wave64RendezvousEpoch);
         }
 
         private void DeclareLds()
@@ -1268,7 +1378,7 @@ public static partial class Gen5SpirvTranslator
                     (uint)SpirvBuiltIn.SubgroupLocalInvocationId);
                 _interfaces.Add(_subgroupInvocationIdInput);
 
-                if (_emulateWave64)
+                if (_emulateWave64 || _multiWave64Bridge)
                 {
                     _subgroupSizeInput = _module.AddGlobalVariable(
                         subgroupPointer,
@@ -1557,6 +1667,64 @@ public static partial class Gen5SpirvTranslator
 
                 _interfaces.Add(variable);
             }
+        }
+
+        private void EmitInitializeMultiWave64BridgeV7604()
+        {
+            if (!_multiWave64Bridge || _wave64RendezvousState == 0)
+            {
+                return;
+            }
+
+            // All physical Vulkan invocations enter main(), including excess
+            // invocations in a partially populated final dispatch group. This
+            // is the one safe point where a Workgroup-wide barrier is used:
+            // before the guest PC dispatcher can diverge. Guest lane 0 of each
+            // logical wave owns initialization of that wave's counters/scratch.
+            var lane = GuestWaveLane();
+            var waveIndex = GuestWaveIndexV7604();
+            EmitConditional(
+                _module.AddInstruction(
+                    SpirvOp.IEqual,
+                    _boolType,
+                    lane,
+                    UInt(0)),
+                () =>
+                {
+                    EmitAtomic(
+                        SpirvOp.AtomicExchange,
+                        _uintType,
+                        Wave64RendezvousStatePointerV7604(waveIndex),
+                        2,
+                        0x108,
+                        () => UInt(0),
+                        () => UInt(0));
+                    EmitAtomic(
+                        SpirvOp.AtomicExchange,
+                        _uintType,
+                        Wave64MaskLowPointerV7604(waveIndex),
+                        2,
+                        0x108,
+                        () => UInt(0),
+                        () => UInt(0));
+                    EmitAtomic(
+                        SpirvOp.AtomicExchange,
+                        _uintType,
+                        Wave64MaskHighPointerV7604(waveIndex),
+                        2,
+                        0x108,
+                        () => UInt(0),
+                        () => UInt(0));
+                    Store(Wave64ReadlanePointerV7604(waveIndex), UInt(0));
+                });
+
+            var workgroup = UInt(2);
+            _module.AddStatement(
+                SpirvOp.ControlBarrier,
+                workgroup,
+                workgroup,
+                UInt(0x108));
+            Store(_wave64RendezvousEpoch, UInt(0));
         }
 
         private void EmitInitialState()
@@ -2136,11 +2304,29 @@ public static partial class Gen5SpirvTranslator
                 Store(_scc, comparison);
                 return true;
             }
+            if (TryEmitScalarSchedulingNopV7610(instruction, out error))
+            {
+                return true;
+            }
+
             if (instruction.Opcode is
                 "SNop" or
                 "SWaitcnt" or
+                // V76.0.10: S_CLAUSE is a hardware scheduling hint. SPIR-V/Vulkan
+                // does not expose guest wave clause scheduling, so preserving the
+                // instruction stream means treating it as host-irrelevant.
+                "SClause" or
+                // V76.0.10: dependency-scoreboard waits serialize hazards that are
+                // represented explicitly by SPIR-V SSA/data dependencies. They do
+                // not imply a guest memory barrier (unlike S_BARRIER).
+                "SWaitcntDepctr" or
                 "SInstPrefetch" or
                 "STtraceData" or
+                // SHARPEMU_V74_0_104_RDNA2_S_TRAP_COMPAT
+                // Guest trap-handler side effects are not representable in
+                // SPIR-V here; preserve shader execution instead of failing
+                // translation on the legal RDNA2 S_TRAP opcode.
+                "STrap" or
                 // NGG shaders bracket their exports with s_sendmsg
                 // (GS_ALLOC_REQ/DEALLOC) to reserve hardware export space;
                 // exports are translated directly, so the message is moot.
@@ -2152,16 +2338,7 @@ public static partial class Gen5SpirvTranslator
 
             if (instruction.Opcode == "SBarrier")
             {
-                if (_stage == Gen5SpirvStage.Compute)
-                {
-                    var workgroup = UInt(2);
-                    var semantics = UInt(0x108);
-                    _module.AddStatement(
-                        SpirvOp.ControlBarrier,
-                        workgroup,
-                        workgroup,
-                        semantics);
-                }
+                EmitStageBarrierV7617();
                 return true;
             }
 
@@ -2225,9 +2402,28 @@ public static partial class Gen5SpirvTranslator
             out string error)
         {
             error = string.Empty;
-            if (_lds == 0 ||
-                _ldsElementPointer == 0 ||
-                instruction.Control is not Gen5DataShareControl control)
+            if (instruction.Control is not Gen5DataShareControl control)
+            {
+                error = "invalid LDS instruction";
+                return false;
+            }
+
+            // V76.0.10: DS_SWIZZLE_B32 is a lane-permute instruction. It
+            // uses the DS encoding but does not read or write LDS memory, so
+            // it must remain valid even when the shader allocated no LDS.
+            if (instruction.Opcode == "DsSwizzleB32")
+            {
+                return TryEmitDsSwizzleB32V7610(instruction, control, out error);
+            }
+
+            // V76.0.25: RDNA2 DS_PERMUTE/DS_BPERMUTE use the LDS routing
+            // fabric without touching LDS memory and are legal with zero LDS.
+            if (instruction.Opcode is "DsPermuteB32" or "DsBpermuteB32")
+            {
+                return TryEmitDsPermuteB32V7625(instruction, control, out error);
+            }
+
+            if (_lds == 0 || _ldsElementPointer == 0)
             {
                 error = "invalid LDS instruction";
                 return false;
@@ -2247,32 +2443,25 @@ public static partial class Gen5SpirvTranslator
                 // LDS_Addr = M0[15:0] + {OFFSET1,OFFSET0} + TID_in_wave * 4.
                 case "DsStoreAddtidB32":
                 {
-                    if (_stage != Gen5SpirvStage.Compute ||
-                        _localInvocationIdInput == 0 ||
+                    if (_subgroupInvocationIdInput == 0 ||
                         instruction.Sources.Count < 1)
                     {
-                        error = "DS_STORE_ADDTID_B32 requires compute LocalInvocationId and DATA0";
+                        error = "DS_STORE_ADDTID_B32 requires wave lane and DATA0";
                         return false;
                     }
 
-                    var localId = Load(_uvec3Type, _localInvocationIdInput);
-                    var localX = _module.AddInstruction(
-                        SpirvOp.CompositeExtract, _uintType, localId, 0);
-                    var localY = _module.AddInstruction(
-                        SpirvOp.CompositeExtract, _uintType, localId, 1);
-                    var localZ = _module.AddInstruction(
-                        SpirvOp.CompositeExtract, _uintType, localId, 2);
-                    var yz = IAdd(
-                        localY,
-                        _module.AddInstruction(
-                            SpirvOp.IMul, _uintType, localZ, UInt(_localSizeY)));
-                    var linearLocalId = IAdd(
-                        localX,
-                        _module.AddInstruction(
-                            SpirvOp.IMul, _uintType, yz, UInt(_localSizeX)));
-                    var threadId = BitwiseAnd(
-                        linearLocalId,
-                        UInt(_waveLaneCount - 1));
+                    // SHARPEMU_V74_0_105_GRAPHICS_DS_ADDTID
+                    // SHARPEMU_V74_0_110_GRAPHICS_DS_ADDTID_REBASE
+                    // RDNA2 defines ADDTID from TID-in-wave. Pixel/vertex
+                    // programs have a real subgroup lane too; rejecting them
+                    // as non-compute dropped two Character Creation pipelines.
+                    if (_stage != Gen5SpirvStage.Compute)
+                    {
+                        Console.Error.WriteLine(
+                            "[V74.0.110][GRAPHICS_DS_ADDTID] " +
+                            $"stage={_stage} opcode=DsStoreAddtidB32 lowering=wave-lane");
+                    }
+                    var threadId = GuestWaveLane();
                     var m0 = BitwiseAnd(LoadS(124), UInt(0xFFFF));
                     var address = IAdd(
                         m0,
@@ -2287,32 +2476,20 @@ public static partial class Gen5SpirvTranslator
                 // LDS_Addr = M0[15:0] + {OFFSET1,OFFSET0} + TID_in_wave * 4.
                 case "DsReadAddtidB32":
                 {
-                    if (_stage != Gen5SpirvStage.Compute ||
-                        _localInvocationIdInput == 0 ||
+                    if (_subgroupInvocationIdInput == 0 ||
                         instruction.Destinations.Count < 1)
                     {
-                        error = "DS_READ_ADDTID_B32 requires compute LocalInvocationId and VDST";
+                        error = "DS_READ_ADDTID_B32 requires wave lane and VDST";
                         return false;
                     }
 
-                    var localId = Load(_uvec3Type, _localInvocationIdInput);
-                    var localX = _module.AddInstruction(
-                        SpirvOp.CompositeExtract, _uintType, localId, 0);
-                    var localY = _module.AddInstruction(
-                        SpirvOp.CompositeExtract, _uintType, localId, 1);
-                    var localZ = _module.AddInstruction(
-                        SpirvOp.CompositeExtract, _uintType, localId, 2);
-                    var yz = IAdd(
-                        localY,
-                        _module.AddInstruction(
-                            SpirvOp.IMul, _uintType, localZ, UInt(_localSizeY)));
-                    var linearLocalId = IAdd(
-                        localX,
-                        _module.AddInstruction(
-                            SpirvOp.IMul, _uintType, yz, UInt(_localSizeX)));
-                    var threadId = BitwiseAnd(
-                        linearLocalId,
-                        UInt(_waveLaneCount - 1));
+                    if (_stage != Gen5SpirvStage.Compute)
+                    {
+                        Console.Error.WriteLine(
+                            "[V74.0.110][GRAPHICS_DS_ADDTID] " +
+                            $"stage={_stage} opcode=DsReadAddtidB32 lowering=wave-lane");
+                    }
+                    var threadId = GuestWaveLane();
                     var m0 = BitwiseAnd(LoadS(124), UInt(0xFFFF));
                     var address = IAdd(
                         m0,
@@ -2549,7 +2726,14 @@ public static partial class Gen5SpirvTranslator
                         return TryEmitDataShareAtomic(instruction, control, out error);
                     }
 
-                    error = $"unsupported LDS opcode {instruction.Opcode}";
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported LDS opcode {instruction.Opcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
                     return false;
             }
         }
@@ -2627,11 +2811,18 @@ public static partial class Gen5SpirvTranslator
                 "DsXorB32" or "DsXorRtnB32" => SpirvOp.AtomicXor,
                 "DsWrxchgRtnB32" => SpirvOp.AtomicExchange,
                 "DsCmpstB32" or "DsCmpstRtnB32" => SpirvOp.AtomicCompareExchange,
-                _ => SpirvOp.Nop,
+                _ => MapExtraLdsAtomicV7617(instruction.Opcode),
             };
             if (atomicOp == SpirvOp.Nop)
             {
-                error = $"unsupported LDS opcode {instruction.Opcode}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported LDS opcode {instruction.Opcode}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -2649,7 +2840,8 @@ public static partial class Gen5SpirvTranslator
                     value: () => GetRawSource(
                         instruction,
                         atomicOp == SpirvOp.AtomicCompareExchange ? 2 : 1),
-                    comparator: () => GetRawSource(instruction, 1));
+                    comparator: () => GetRawSource(instruction, 1),
+                    space: RdnaAtomicSpaceV7609.Workgroup);
                 if (instruction.Destinations.Count > 0)
                 {
                     StoreV(instruction.Destinations[0].Value, original);
@@ -2660,10 +2852,15 @@ public static partial class Gen5SpirvTranslator
         }
 
         // Maps the AMD atomic-op name suffix shared by buffer/image atomics to a SPIR-V opcode.
-        // Inc/Dec approximate the AMD wrap-clamp semantics (MEM = tmp >= DATA ? 0 : tmp + 1),
-        // which is exact for the common 0xFFFFFFFF clamp operand.
+        // INC/DEC are identified with the native SPIR-V op names here, but EmitAtomic
+        // redirects them through the V76.0.9 bounded CAS helper so DATA remains semantic.
         private static bool TryGetAtomicOp(string name, out SpirvOp op)
         {
+            if (TryGetAtomicOpV7617(name, out op))
+            {
+                return true;
+            }
+
             op = name switch
             {
                 "Swap" => SpirvOp.AtomicExchange,
@@ -2691,16 +2888,20 @@ public static partial class Gen5SpirvTranslator
             uint scope,
             uint semantics,
             Func<uint> value,
-            Func<uint> comparator)
+            Func<uint> comparator,
+            RdnaAtomicSpaceV7609 space = RdnaAtomicSpaceV7609.StorageBuffer)
         {
             if (op is SpirvOp.AtomicIIncrement or SpirvOp.AtomicIDecrement)
             {
-                return _module.AddInstruction(
+                // V76.0.9: AMD INC/DEC consume DATA as a wrap/clamp bound.
+                // SPIR-V OpAtomicIIncrement/IDecrement ignore that operand, so
+                // use the CAS-loop helper that implements the RDNA semantics.
+                return EmitRdnaBoundedAtomicV7609(
                     op,
                     type,
                     pointer,
-                    UInt(scope),
-                    UInt(semantics));
+                    value(),
+                    space);
             }
 
             if (op == SpirvOp.AtomicCompareExchange)
@@ -2877,21 +3078,35 @@ public static partial class Gen5SpirvTranslator
             byteAddress = ApplyGuestBufferByteBias(bindingIndex, byteAddress);
             var dwordAddress = ShiftRightLogical(byteAddress, UInt(2));
 
-            if (memoryOpcode is "GlobalAtomicAdd" or "GlobalAtomicUMax")
+            if (memoryOpcode.StartsWith("GlobalAtomic", StringComparison.Ordinal))
             {
+                if (!TryGetAtomicOp(
+                        memoryOpcode["GlobalAtomic".Length..],
+                        out var atomicOp))
+                {
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported global-memory opcode {memoryOpcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
+                    return false;
+                }
+
                 EmitExecConditional(() =>
                 {
                     EmitConditional(IsBufferWordInRange(bindingIndex, dwordAddress), () =>
                     {
-                        var original = _module.AddInstruction(
-                            memoryOpcode == "GlobalAtomicAdd"
-                                ? SpirvOp.AtomicIAdd
-                                : SpirvOp.AtomicUMax,
+                        var original = EmitAtomic(
+                            atomicOp,
                             _uintType,
                             BufferWordPointer(bindingIndex, dwordAddress),
-                            UInt(1),
-                            UInt(0x48),
-                            LoadV(control.VectorData));
+                            scope: 1,
+                            semantics: 0x48,
+                            value: () => LoadV(control.VectorData),
+                            comparator: () => LoadV(control.VectorData + 1));
                         if (control.Glc)
                         {
                             StoreV(control.VectorData, original);
@@ -3013,7 +3228,14 @@ public static partial class Gen5SpirvTranslator
             {
                 if (!TryGetAtomicOp(instruction.Opcode["BufferAtomic".Length..], out var atomicOp))
                 {
-                    error = $"unsupported buffer opcode {instruction.Opcode}";
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported buffer opcode {instruction.Opcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
                     return false;
                 }
 
@@ -3040,8 +3262,26 @@ public static partial class Gen5SpirvTranslator
                 return true;
             }
 
+            if (instruction.Opcode.StartsWith(
+                    "TBufferStoreFormat",
+                    StringComparison.Ordinal) ||
+                instruction.Opcode.StartsWith(
+                    "BufferStoreFormat",
+                    StringComparison.Ordinal))
+            {
+                // V76.0.8 semantic carry-forward: both MTBUF and MUBUF format
+                // stores use the RDNA2 typed conversion helper. MTBUF gets
+                // FORMAT from the instruction; MUBUF gets FORMAT/dst_sel from
+                // the SRD.
+                EmitExecConditional(() =>
+                    EmitBufferFormatStoreV7608(
+                        bindingIndex,
+                        byteAddress,
+                        control.ScalarResource,
+                        control));
+                return true;
+            }
             if (instruction.Opcode.StartsWith("BufferStoreDword", StringComparison.Ordinal) ||
-                instruction.Opcode.StartsWith("BufferStoreFormat", StringComparison.Ordinal) ||
                 instruction.Opcode.StartsWith("BufferStoreByte", StringComparison.Ordinal) ||
                 instruction.Opcode.StartsWith("BufferStoreShort", StringComparison.Ordinal))
             {
@@ -3099,7 +3339,14 @@ public static partial class Gen5SpirvTranslator
             if (!instruction.Opcode.StartsWith("BufferLoad", StringComparison.Ordinal) &&
                 !instruction.Opcode.StartsWith("TBufferLoad", StringComparison.Ordinal))
             {
-                error = $"unsupported buffer opcode {instruction.Opcode}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported buffer opcode {instruction.Opcode}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -4169,7 +4416,14 @@ public static partial class Gen5SpirvTranslator
                 if (resource.ComponentKind == ImageComponentKind.Float ||
                     !TryGetAtomicOp(instruction.Opcode["ImageAtomic".Length..], out var atomicOp))
                 {
-                    error = $"unsupported storage image opcode {instruction.Opcode}";
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported storage image opcode {instruction.Opcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
                     return false;
                 }
 
@@ -4203,7 +4457,8 @@ public static partial class Gen5SpirvTranslator
                         scope: 1,
                         semantics: 0x808,
                         value: () => LoadData(image.VectorData),
-                        comparator: () => LoadData(image.VectorData + 1));
+                        comparator: () => LoadData(image.VectorData + 1),
+                        space: RdnaAtomicSpaceV7609.Image);
                     if (image.Glc)
                     {
                         StoreV(
@@ -4218,7 +4473,14 @@ public static partial class Gen5SpirvTranslator
             if (resource.IsStorage &&
                 instruction.Opcode is not ("ImageLoad" or "ImageLoadMip"))
             {
-                error = $"unsupported storage image opcode {instruction.Opcode}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported storage image opcode {instruction.Opcode}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -4580,7 +4842,14 @@ public static partial class Gen5SpirvTranslator
             }
             else
             {
-                error = $"unsupported image opcode {instruction.Opcode}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported image opcode {instruction.Opcode}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -6325,7 +6594,7 @@ public static partial class Gen5SpirvTranslator
         private uint SubgroupAny(uint condition) =>
             _subgroupInvocationIdInput == 0
                 ? condition
-                : _emulateWave64
+                : (_emulateWave64 || _multiWave64Bridge)
                     ? IsNotZero64(BooleanToWaveMask(condition))
                 : _module.AddInstruction(
                     SpirvOp.GroupNonUniformAny,
@@ -6369,7 +6638,7 @@ public static partial class Gen5SpirvTranslator
                     SpirvOp.UConvert,
                     _ulongType,
                     maskedLane));
-            return _emulateWave64
+            return (_stage == Gen5SpirvStage.Compute && _waveLaneCount == 64)
                 ? shifted
                 : _module.AddInstruction(
                     SpirvOp.Select,
@@ -6399,6 +6668,11 @@ public static partial class Gen5SpirvTranslator
             if (_subgroupInvocationIdInput == 0)
             {
                 return BooleanToLaneMask(condition);
+            }
+
+            if (_multiWave64Bridge)
+            {
+                return BooleanToMultiWave64MaskV7604(condition);
             }
 
             var ballot = _module.AddInstruction(
@@ -6482,6 +6756,321 @@ public static partial class Gen5SpirvTranslator
                 widened);
         }
 
+        private uint GuestWaveIndexV7604()
+        {
+            if (_localInvocationIndexInput == 0)
+            {
+                return UInt(0);
+            }
+
+            return ShiftRightLogical(
+                Load(_uintType, _localInvocationIndexInput),
+                UInt(6));
+        }
+
+        private uint Wave64RendezvousStatePointerV7604(uint waveIndex) =>
+            _module.AddInstruction(
+                SpirvOp.AccessChain,
+                _wave64RendezvousStateElementPointer,
+                _wave64RendezvousState,
+                waveIndex);
+
+        private uint Wave64ReadlanePointerV7604(uint waveIndex) =>
+            _module.AddInstruction(
+                SpirvOp.AccessChain,
+                _wave64ReadlaneScratchElementPointer,
+                _wave64ReadlaneScratch,
+                waveIndex);
+
+        private uint Wave64MaskLowPointerV7604(uint waveIndex) =>
+            _module.AddInstruction(
+                SpirvOp.AccessChain,
+                _wave64MaskScratchElementPointer,
+                _wave64MaskLowScratch,
+                waveIndex);
+
+        private uint Wave64MaskHighPointerV7604(uint waveIndex) =>
+            _module.AddInstruction(
+                SpirvOp.AccessChain,
+                _wave64MaskScratchElementPointer,
+                _wave64MaskHighScratch,
+                waveIndex);
+
+        private void EmitSubgroupWorkgroupMemoryBarrierV7604()
+        {
+            // Synchronize the invocations of one native subgroup before its
+            // leader publishes arrival for the logical guest-wave rendezvous.
+            _module.AddStatement(
+                SpirvOp.ControlBarrier,
+                UInt(3), // Subgroup execution scope
+                UInt(3), // Subgroup memory scope
+                UInt(0x108)); // AcquireRelease | WorkgroupMemory
+        }
+
+        private void EmitSpinAtomicAtLeastV7604(uint pointer, uint target)
+        {
+            var loopHeader = _module.AllocateId();
+            var loopContinue = _module.AllocateId();
+            var loopMerge = _module.AllocateId();
+
+            _module.AddStatement(SpirvOp.Branch, loopHeader);
+            _module.AddLabel(loopHeader);
+            _module.AddStatement(
+                SpirvOp.LoopMerge,
+                loopMerge,
+                loopContinue,
+                0);
+
+            // SPIR-V has no AtomicLoad opcode in the compact builder used by
+            // SharpEmu. AtomicIAdd(+0) is an atomic read-modify-write whose
+            // returned old value gives us an acquire load without changing the
+            // rendezvous counter.
+            var observed = EmitAtomic(
+                SpirvOp.AtomicIAdd,
+                _uintType,
+                pointer,
+                2,      // Workgroup scope
+                0x102,  // Acquire | WorkgroupMemory
+                () => UInt(0),
+                () => UInt(0));
+            var reached = _module.AddInstruction(
+                SpirvOp.UGreaterThanEqual,
+                _boolType,
+                observed,
+                target);
+            _module.AddStatement(
+                SpirvOp.BranchConditional,
+                reached,
+                loopMerge,
+                loopContinue);
+
+            _module.AddLabel(loopContinue);
+            _module.AddStatement(SpirvOp.Branch, loopHeader);
+            _module.AddLabel(loopMerge);
+        }
+
+        private void EmitWave64RendezvousV7604()
+        {
+            if (!_multiWave64Bridge || _wave64RendezvousState == 0)
+            {
+                return;
+            }
+
+            // V76.0.4 OFW/RDNA2 correctness path. A PS5 wave64 is the
+            // synchronization domain; the Vulkan workgroup is not. A 512-thread
+            // workgroup contains eight independent guest waves and a 1024-thread
+            // workgroup contains sixteen. On the RTX 5060 Ti each guest wave is
+            // split into two subgroup32 fragments, so a native subgroup barrier
+            // cannot implement cross-lane SGPR/VGPR operations.
+            //
+            // Every one of the 64 logical guest lanes contributes one AcqRel
+            // atomic arrival to that wave's own monotonically increasing epoch.
+            // Waiting for epoch*64 gives a true per-wave rendezvous without ever
+            // waiting for another guest wave in the same workgroup. This is more
+            // conservative than a two-subgroup-leader optimization, but it
+            // preserves PS5 wave semantics independently of host subgroup width.
+            var statePointer = Wave64RendezvousStatePointerV7604(
+                GuestWaveIndexV7604());
+
+            EmitAtomic(
+                SpirvOp.AtomicIAdd,
+                _uintType,
+                statePointer,
+                2,      // Workgroup scope: shared scratch lives in Workgroup.
+                0x108,  // AcquireRelease | WorkgroupMemory.
+                () => UInt(1),
+                () => UInt(0));
+
+            var epoch = IAdd(
+                Load(_uintType, _wave64RendezvousEpoch),
+                UInt(1));
+            Store(_wave64RendezvousEpoch, epoch);
+            var target = _module.AddInstruction(
+                SpirvOp.IMul,
+                _uintType,
+                epoch,
+                UInt(64));
+            EmitSpinAtomicAtLeastV7604(statePointer, target);
+        }
+
+        private uint BroadcastGuestWaveLaneV7604(uint value, uint guestLaneSelect)
+        {
+            var waveIndex = GuestWaveIndexV7604();
+            var laneSelect = BitwiseAnd(guestLaneSelect, UInt(63));
+            var isTargetLane = _module.AddInstruction(
+                SpirvOp.IEqual,
+                _boolType,
+                GuestWaveLane(),
+                laneSelect);
+            EmitConditional(
+                isTargetLane,
+                () => Store(Wave64ReadlanePointerV7604(waveIndex), value));
+
+            // Rendezvous 1 publishes the selected lane's value to all native
+            // subgroup fragments of this guest wave. Rendezvous 2 prevents the
+            // next dynamic READLANE/READFIRSTLANE from overwriting the slot
+            // before every invocation consumed it.
+            EmitWave64RendezvousV7604();
+            var result = Load(
+                _uintType,
+                Wave64ReadlanePointerV7604(waveIndex));
+            EmitWave64RendezvousV7604();
+            return result;
+        }
+
+        private uint BooleanToMultiWave64MaskV7604(uint condition)
+        {
+            var waveIndex = GuestWaveIndexV7604();
+            var lowPointer = Wave64MaskLowPointerV7604(waveIndex);
+            var highPointer = Wave64MaskHighPointerV7604(waveIndex);
+            var lane = GuestWaveLane();
+
+            // Lane 0 owns clearing this wave's accumulator. The first
+            // rendezvous makes the zero visible before subgroup leaders OR in
+            // their ballot fragments.
+            EmitConditional(
+                _module.AddInstruction(
+                    SpirvOp.IEqual,
+                    _boolType,
+                    lane,
+                    UInt(0)),
+                () =>
+                {
+                    EmitAtomic(
+                        SpirvOp.AtomicExchange,
+                        _uintType,
+                        lowPointer,
+                        2,
+                        0x108,
+                        () => UInt(0),
+                        () => UInt(0));
+                    EmitAtomic(
+                        SpirvOp.AtomicExchange,
+                        _uintType,
+                        highPointer,
+                        2,
+                        0x108,
+                        () => UInt(0),
+                        () => UInt(0));
+                });
+            EmitWave64RendezvousV7604();
+
+            var ballot = _module.AddInstruction(
+                SpirvOp.GroupNonUniformBallot,
+                _uvec4Type,
+                UInt(3),
+                condition);
+            var ballotLow = _module.AddInstruction(
+                SpirvOp.CompositeExtract,
+                _uintType,
+                ballot,
+                0);
+            var ballotHigh = _module.AddInstruction(
+                SpirvOp.CompositeExtract,
+                _uintType,
+                ballot,
+                1);
+
+            var subgroupLane = Load(_uintType, _subgroupInvocationIdInput);
+            var isLeader = _module.AddInstruction(
+                SpirvOp.IEqual,
+                _boolType,
+                subgroupLane,
+                UInt(0));
+            EmitConditional(
+                isLeader,
+                () =>
+                {
+                    var subgroupSize = Load(_uintType, _subgroupSizeInput);
+                    var native64 = _module.AddInstruction(
+                        SpirvOp.UGreaterThanEqual,
+                        _boolType,
+                        subgroupSize,
+                        UInt(64));
+
+                    // Native subgroup64 already returns the two 32-bit ballot
+                    // words that make the guest wave mask.
+                    EmitConditional(
+                        native64,
+                        () =>
+                        {
+                            EmitAtomic(
+                                SpirvOp.AtomicOr,
+                                _uintType,
+                                lowPointer,
+                                2,
+                                0x108,
+                                () => ballotLow,
+                                () => UInt(0));
+                            EmitAtomic(
+                                SpirvOp.AtomicOr,
+                                _uintType,
+                                highPointer,
+                                2,
+                                0x108,
+                                () => ballotHigh,
+                                () => UInt(0));
+                        });
+
+                    // For subgroup32/16/8, ballot word 0 is shifted into its
+                    // guest-wave position and atomically merged into low/high.
+                    EmitConditional(
+                        LogicalNot(native64),
+                        () =>
+                        {
+                            var subgroupBase = _module.AddInstruction(
+                                SpirvOp.ISub,
+                                _uintType,
+                                lane,
+                                subgroupLane);
+                            var shift = BitwiseAnd(subgroupBase, UInt(31));
+                            var fragment = ShiftLeftLogical(ballotLow, shift);
+                            var highHalf = _module.AddInstruction(
+                                SpirvOp.UGreaterThanEqual,
+                                _boolType,
+                                subgroupBase,
+                                UInt(32));
+                            EmitConditional(
+                                highHalf,
+                                () => EmitAtomic(
+                                    SpirvOp.AtomicOr,
+                                    _uintType,
+                                    highPointer,
+                                    2,
+                                    0x108,
+                                    () => fragment,
+                                    () => UInt(0)));
+                            EmitConditional(
+                                LogicalNot(highHalf),
+                                () => EmitAtomic(
+                                    SpirvOp.AtomicOr,
+                                    _uintType,
+                                    lowPointer,
+                                    2,
+                                    0x108,
+                                    () => fragment,
+                                    () => UInt(0)));
+                        });
+                });
+
+            EmitWave64RendezvousV7604();
+            var lowMask = Load(_uintType, lowPointer);
+            var highMask = Load(_uintType, highPointer);
+            var combined = BitwiseOr64(
+                _module.AddInstruction(
+                    SpirvOp.UConvert,
+                    _ulongType,
+                    lowMask),
+                ShiftLeftLogical64(
+                    _module.AddInstruction(
+                        SpirvOp.UConvert,
+                        _ulongType,
+                        highMask),
+                    _module.Constant64(_ulongType, 32)));
+            EmitWave64RendezvousV7604();
+            return combined;
+        }
+
         private uint WaveMaskScratchPointer(uint index) =>
             _module.AddInstruction(
                 SpirvOp.AccessChain,
@@ -6497,6 +7086,13 @@ public static partial class Gen5SpirvTranslator
                     _lds,
                     UInt(LdsDwordCount - 1))
                 : _waveBroadcastScratch;
+
+        private uint WaveLaneScratchPointer(uint guestLane) =>
+            _module.AddInstruction(
+                SpirvOp.AccessChain,
+                _waveLaneScratchElementPointer,
+                _waveLaneScratch,
+                BitwiseAnd(guestLane, UInt(63)));
 
         private void EmitWave64Barrier()
         {
@@ -6571,16 +7167,22 @@ public static partial class Gen5SpirvTranslator
             var usesSubgroupBroadcast = false;
             var usesWaveControl = false;
             var usesMbcnt = false;
+            var usesDsAddtid = false;
 
             foreach (var instruction in instructions)
             {
-                usesLds |= instruction.Control is Gen5DataShareControl;
+                usesLds |= instruction.Control is Gen5DataShareControl &&
+                    instruction.Opcode != "DsSwizzleB32" &&
+                    instruction.Opcode != "DsPermuteB32" &&
+                    instruction.Opcode != "DsBpermuteB32";
                 usesSubgroupShuffle |=
                     instruction.Control is Gen5DppControl or Gen5Dpp8Control ||
                     instruction.Opcode is
                         "VPermlane16B32" or
                         "VPermlanex16B32" or
-                        "VReadlaneB32";
+                        "VReadlaneB32" or
+                        "DsPermuteB32" or
+                        "DsBpermuteB32";
                 usesSubgroupBroadcast |=
                     instruction.Opcode == "VReadfirstlaneB32";
                 usesWaveControl |=
@@ -6593,6 +7195,12 @@ public static partial class Gen5SpirvTranslator
                 usesMbcnt |= instruction.Opcode is
                     "VMbcntLoU32B32" or
                     "VMbcntHiU32B32";
+                // SHARPEMU_V74_0_105_GRAPHICS_DS_ADDTID
+                // ADDTID addresses use TID-in-wave in every shader stage, not
+                // compute LocalInvocationId specifically.
+                usesDsAddtid |= instruction.Opcode is
+                    "DsStoreAddtidB32" or
+                    "DsReadAddtidB32";
             }
 
             return new ImmutableProgramFeatures(
@@ -6603,7 +7211,8 @@ public static partial class Gen5SpirvTranslator
                 usesSubgroupShuffle ||
                     usesSubgroupBroadcast ||
                     usesWaveControl ||
-                    usesMbcnt);
+                    usesMbcnt ||
+                    usesDsAddtid);
         }
 
         private bool UsesLds() => _usesLds;

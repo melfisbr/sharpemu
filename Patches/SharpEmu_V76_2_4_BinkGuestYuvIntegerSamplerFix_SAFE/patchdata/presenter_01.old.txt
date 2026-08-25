@@ -1,0 +1,8 @@
+        private TextureResource GetOrCreateGuestBinkNeutralYuvV7602(
+            GuestDrawTexture texture)
+        {
+            var key = (
+                texture.Format,
+                texture.NumberType,
+                texture.DstSelect,
+                texture.Sampler);

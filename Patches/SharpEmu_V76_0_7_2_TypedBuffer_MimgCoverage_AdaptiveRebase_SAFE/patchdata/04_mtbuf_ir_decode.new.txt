@@ -1,0 +1,60 @@
+            case Gen5ShaderEncoding.Mtbuf:
+            {
+                var extra = words[1];
+                var vectorAddress = extra & 0xFF;
+                var vectorData = (extra >> 8) & 0xFF;
+                var scalarResource = ((extra >> 16) & 0x1F) * 4;
+                var scalarOffset = (extra >> 24) & 0xFF;
+                var componentCount = opcode switch
+                {
+                    "TBufferLoadFormatX" or
+                    "TBufferStoreFormatX" or
+                    "TBufferLoadFormatD16X" or
+                    "TBufferStoreFormatD16X" => 1u,
+                    "TBufferLoadFormatXy" or
+                    "TBufferStoreFormatXy" or
+                    "TBufferLoadFormatD16Xy" or
+                    "TBufferStoreFormatD16Xy" => 2u,
+                    "TBufferLoadFormatXyz" or
+                    "TBufferStoreFormatXyz" or
+                    "TBufferLoadFormatD16Xyz" or
+                    "TBufferStoreFormatD16Xyz" => 3u,
+                    "TBufferLoadFormatXyzw" or
+                    "TBufferStoreFormatXyzw" or
+                    "TBufferLoadFormatD16Xyzw" or
+                    "TBufferStoreFormatD16Xyzw" => 4u,
+                    _ => 0u,
+                };
+                var d16 = opcode.Contains("D16", StringComparison.Ordinal);
+                var dwordCount = d16
+                    ? (componentCount + 1u) / 2u
+                    : componentCount;
+                sources =
+                [
+                    Gen5Operand.Vector(vectorAddress),
+                    Gen5Operand.Scalar(scalarResource),
+                    Gen5Operand.Source(scalarOffset, literal),
+                ];
+                destinations = opcode.StartsWith(
+                        "TBufferStore",
+                        StringComparison.Ordinal)
+                    ? []
+                    : Enumerable
+                        .Range((int)vectorData, checked((int)dwordCount))
+                        .Select(index => Gen5Operand.Vector((uint)index))
+                        .ToArray();
+                control = new Gen5BufferMemoryControl(
+                    dwordCount,
+                    vectorAddress,
+                    vectorData,
+                    scalarResource,
+                    (int)(word & 0xFFF),
+                    ((word >> 13) & 1) != 0,
+                    ((word >> 12) & 1) != 0,
+                    ((word >> 14) & 1) != 0,
+                    ((extra >> 22) & 1) != 0,
+                    componentCount,
+                    (word >> 19) & 0x7F,
+                    d16);
+                break;
+            }

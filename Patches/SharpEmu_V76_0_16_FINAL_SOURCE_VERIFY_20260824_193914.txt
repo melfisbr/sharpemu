@@ -1,0 +1,7 @@
+﻿Tag=V76.0.16-FINAL-VULKAN-PERFORMANCE-CONSOLIDATED
+Status=SOURCE_VERIFY_PASSED
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+V76.0.14=Applied
+V76.0.15=Applied
+V76.0.16=Applied
+RemainingFunctionalPackages=0

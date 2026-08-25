@@ -1,0 +1,1 @@
+FFmpeg runtime source is the local SharpEmu.CLI.csproj FetchFfmpegRuntime target pinned by the fork to FfmpegRuntimeTag=3b502d4 / ffmpeg-windows-x64.zip. V75.0.4.8 reuses existing plugins DLLs when already installed. No Git source mutation is performed.

@@ -1,0 +1,7 @@
+            HostMovieBridge.BinkGuestCompletionShim binkCompletionShim = default;
+            var observedBinkMovie = false;
+            var useBinkCompletionShim = access == FileAccess.Read &&
+                HostMovieBridge.TryTakeOverGuestMovie(
+                    hostPath,
+                    out binkCompletionShim,
+                    out observedBinkMovie);

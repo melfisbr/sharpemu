@@ -1,0 +1,26 @@
+{
+  "package": "V75.0.1",
+  "design": "runtime-loaded x64 bink2 adapter -> existing SharpEmu stable ABI",
+  "source_mutation": false,
+  "required_exports": [
+    "BinkOpen",
+    "BinkClose",
+    "BinkWait",
+    "BinkDoFrame",
+    "BinkCopyToBuffer",
+    "BinkNextFrame"
+  ],
+  "optional_exports": [
+    "BinkGetError"
+  ],
+  "audio_capability": false,
+  "default_surface": 5,
+  "copy_all": "0x80000000",
+  "managed_backend_markers": [
+    "ExpectedAbiVersion = 0x0001_0000",
+    "MovieMode.NativeRad",
+    "AttachRadNativeMovieLocked",
+    "IMediaFrameBufferPolicy"
+  ],
+  "marcussacana_repo_binaries_bundled": false
+}

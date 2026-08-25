@@ -1,0 +1,10 @@
+            public DescriptorSet DescriptorSet;
+            public DescriptorSetLeaseV11716? DescriptorLeaseV11716;
+            public TextureResource[] Textures = [];
+            // V76.0.15: guest render targets written by this resource bundle.
+            // Used only for cross-queue hazard tracking; lifetime remains owned
+            // by the existing guest-image caches.
+            public GuestImageResource[] QueueHazardImagesV7615 = [];
+            // V76.0.13: presentation-side A/V telemetry only for draws that
+            // actually bound a current-session guest Bink Y/UV producer.
+            public bool UsesGuestBinkYuvV7613;

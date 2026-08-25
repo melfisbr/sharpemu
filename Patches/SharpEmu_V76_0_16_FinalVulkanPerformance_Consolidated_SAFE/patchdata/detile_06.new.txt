@@ -1,0 +1,9 @@
+        }
+        finally
+        {
+            // V76.0.14: host-visible detile buffers stay persistently mapped.
+            // They return to the pool only after the submission fence retires,
+            // so CPU writes cannot race an in-flight GPU read.
+
+            // SHARPEMU_V74_0_94_5_DETILE_GUEST_UPLOAD_TIMING
+            if (totalBytes >= 8UL * 1024UL * 1024UL)

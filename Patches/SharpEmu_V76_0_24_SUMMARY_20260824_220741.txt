@@ -1,0 +1,12 @@
+﻿Tag=V76.0.24-BINK-GUEST-YUV-NORMALIZED-SAMPLE-VIEW
+Status=BUILD_PASSED
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_24_PREVIOUS_FILES_20260824_220741.zip
+DebugBuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_24_DEBUG_BUILD_20260824_220741.log
+ReleaseBuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_24_RELEASE_BUILD_20260824_220741.log
+Bink2Owner=guest-hard-enforced
+StorageWriteView=UINT
+SampleReadView=UNORM-compatible-alias
+CpuCopy=0
+HostDecoder=0
+A/B=SHARPEMU_BINK_YUV_NORMALIZED_SAMPLE_VIEW

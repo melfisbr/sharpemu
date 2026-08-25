@@ -1,0 +1,11 @@
+                }
+                if (_dualPhysicalQueueEnabledV1131)
+                {
+                    CommitCrossQueueAccessV7615(
+                        physicalComputeQueueV1131,
+                        physicalSignalValueV1131,
+                        resources,
+                        referencedResources);
+                    _hasPhysicalSubmitV1131 = true;
+                    _lastPhysicalSubmitWasComputeV1131 = physicalComputeQueueV1131;
+                    var laneSubmitCountV1131 = physicalComputeQueueV1131

@@ -1,0 +1,4 @@
+            if (notifyBinkClose)
+            {
+                HostMovieBridge.NotifyGuestMovieClosed(observedBinkPath!);
+            }

@@ -1,0 +1,13 @@
+﻿baseline=V117.14_after_V11715_rollback
+includes_v11716_descriptor_cache=1
+resident_shader_id=1
+exact_spirv_content_guard=1
+resident_shader_module=1
+direct_pipeline_fastpath=1
+max_resident_shaders=4096
+vkimage_change=0
+buffer_content_change=0
+queue_change=0
+submit_change=0
+barrier_change=0
+target_fps=60

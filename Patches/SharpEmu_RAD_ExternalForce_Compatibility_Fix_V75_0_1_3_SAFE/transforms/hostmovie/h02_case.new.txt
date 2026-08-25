@@ -1,0 +1,18 @@
+            // SHARPEMU_BINK_NATIVE_RAD_MODE_V75_0_0
+            // SHARPEMU_V75_0_1_3_NATIVE_RAD_CASE_EXTERNALIZED
+            // Defensive compatibility path: even if a future/legacy caller
+            // produces NativeRad directly, never enter the SDK adapter.
+            case MovieMode.NativeRad:
+                Console.Error.WriteLine(
+                    "[V75.0.1.3][RAD_EXTERNAL_FORCE_CASE] " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    "requested=native-rad resolved=external-rad");
+                if (!AttachRadMovieLocked(hostPath))
+                {
+                    Console.Error.WriteLine(
+                        "[LOADER][ERROR] bink2.external_rad_attach_failed " +
+                        $"file='{Path.GetFileName(hostPath)}' " +
+                        "source=v75.0.1.3-native-case-externalized");
+                }
+                return;
+

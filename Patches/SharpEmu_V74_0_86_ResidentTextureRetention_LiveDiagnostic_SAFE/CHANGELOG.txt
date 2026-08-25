@@ -1,6 +1,0 @@
-V74.0.86
-- 3072 MiB default standalone Vulkan texture cache (env override preserved).
-- 10s default large texture snapshot reuse window (env override preserved).
-- Release producer-side large texture/array CPU bridge snapshots after resident cache confirmation.
-- Live runtime diagnostic log: log is written continuously instead of only after process exit.
-- Preserves V81.2 Vulkan boundaries and V85 aggressive PM4/RELEASE behavior.

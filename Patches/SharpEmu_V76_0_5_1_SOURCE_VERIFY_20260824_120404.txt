@@ -1,0 +1,4 @@
+﻿Tag=V76.0.5.1-GEN5-VULKAN-ADAPTIVE-REBASE
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+BackendAndNewPayloadHashes=PASSED
+AdaptiveMarkers=PASSED

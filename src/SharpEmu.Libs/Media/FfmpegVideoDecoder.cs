@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Buffers;
+using System.Collections.Generic;
 using FFmpeg.AutoGen;
 using SharpEmu.HLE.Host;
 
@@ -13,12 +14,22 @@ namespace SharpEmu.Libs.Media;
 /// libraries published by github.com/sharpemu/ffmpeg-core -- no native C
 /// bridge of our own to build. See docs/bink2-bridge.md.
 /// </summary>
-internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
+internal sealed unsafe class FfmpegVideoDecoder :
+    IMediaFrameDecoder,
+    IMediaPresentationAware,
+    IMediaFrameBufferPolicy
 {
+    // SHARPEMU_BINK_FFMPEG_INPROCESS_V75_0_4_5
     private const int OutputAudioChannels = 2;
     private const int OutputAudioBytesPerSample = sizeof(short);
+    private const int MaximumPrerollAudioSeconds = 2;
 
     private readonly object _decodeGate = new();
+    private readonly string _moviePath;
+    private readonly bool _ownsBinkLifecycle;
+    private readonly Queue<byte[]> _prerollAudio = new();
+    private int _prerollAudioBytes;
+    private int _presentationStarted;
     private AVFormatContext* _formatContext;
     private AVCodecContext* _codecContext;
     private AVCodecContext* _audioCodecContext;
@@ -48,7 +59,15 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
 
     public uint FramesPerSecondDenominator { get; }
 
+    internal bool EmbeddedAudioActive =>
+        _audioCodecContext is not null && _audioStream is not null && !_audioFailed;
+
+    public int PreferredBufferCount => 3;
+
+    public bool PrimeFirstFrameSynchronously => true;
+
     private FfmpegVideoDecoder(
+        string moviePath,
         AVFormatContext* formatContext,
         AVCodecContext* codecContext,
         int videoStreamIndex,
@@ -61,6 +80,16 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
         uint framesPerSecondNumerator,
         uint framesPerSecondDenominator)
     {
+        _moviePath = moviePath;
+        _ownsBinkLifecycle = string.Equals(
+            Path.GetExtension(moviePath),
+            ".bk2",
+            StringComparison.OrdinalIgnoreCase);
+        if (_ownsBinkLifecycle)
+        {
+            BinkHostPlaybackAssist.NotifyHostMovieDecoderStarted(moviePath);
+        }
+
         _formatContext = formatContext;
         _codecContext = codecContext;
         _videoStreamIndex = videoStreamIndex;
@@ -87,6 +116,11 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
         out FfmpegVideoDecoder? source)
     {
         source = null;
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(path))
+        {
+            return false;
+        }
+
         EnsureRootPathInitialized();
 
         AVFormatContext* formatContext = null;
@@ -160,7 +194,8 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
                 try
                 {
                     audioStream = HostPlatform.Current.Audio.OpenStereoPcm16Stream(
-                        checked((uint)audioOutputSampleRate));
+                        checked((uint)audioOutputSampleRate),
+                        maxQueuedPcmBytes: 256 * 1024);
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or
                                                      ArgumentOutOfRangeException)
@@ -194,6 +229,7 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
             }
 
             source = new FfmpegVideoDecoder(
+                path,
                 formatContext,
                 codecContext,
                 videoStreamIndex,
@@ -540,7 +576,13 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
 
                     var convertedBytes = checked(
                         convertedSamples * OutputAudioChannels * OutputAudioBytesPerSample);
-                    return _audioStream.Submit(buffer.AsSpan(0, convertedBytes));
+                    var pcm = buffer.AsSpan(0, convertedBytes);
+                    if (Volatile.Read(ref _presentationStarted) == 0)
+                    {
+                        return QueuePrerollAudio(pcm);
+                    }
+
+                    return _audioStream.Submit(pcm);
                 }
             }
             finally
@@ -554,6 +596,71 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
             {
                 ffmpeg.av_channel_layout_uninit(&inputLayout);
             }
+        }
+    }
+
+    private bool QueuePrerollAudio(ReadOnlySpan<byte> pcm)
+    {
+        if (_audioStream is null || pcm.IsEmpty)
+        {
+            return true;
+        }
+
+        var maximumBytes = checked(
+            Math.Max(1, _audioOutputSampleRate) *
+            OutputAudioChannels *
+            OutputAudioBytesPerSample *
+            MaximumPrerollAudioSeconds);
+
+        if (_prerollAudioBytes + pcm.Length > maximumBytes)
+        {
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.5] preroll_audio_bound " +
+                $"file='{Path.GetFileName(_moviePath)}' " +
+                $"queued={_prerollAudioBytes} incoming={pcm.Length} max={maximumBytes}");
+            return true;
+        }
+
+        var copy = pcm.ToArray();
+        _prerollAudio.Enqueue(copy);
+        _prerollAudioBytes += copy.Length;
+        return true;
+    }
+
+    public void NotifyPresentationStarted()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        lock (_decodeGate)
+        {
+            if (_presentationStarted != 0 || Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            _presentationStarted = 1;
+            BinkHostAudioBridgeV7241.NotifyPresentationStarted(_moviePath);
+
+            while (_audioStream is not null && _prerollAudio.TryDequeue(out var pcm))
+            {
+                _prerollAudioBytes -= pcm.Length;
+                if (!_audioStream.Submit(pcm))
+                {
+                    DisableAudio("preroll submission failed");
+                    break;
+                }
+            }
+
+            _prerollAudio.Clear();
+            _prerollAudioBytes = 0;
+
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.5] first_visible_frame " +
+                $"file='{Path.GetFileName(_moviePath)}' " +
+                $"embedded_audio={EmbeddedAudioActive} backend=ffmpeg-core-inprocess");
         }
     }
 
@@ -619,6 +726,8 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
         }
 
         _audioFailed = true;
+        _prerollAudio.Clear();
+        _prerollAudioBytes = 0;
         Console.Error.WriteLine($"[LOADER][WARN] Bink audio disabled: {reason}.");
         FreeAudioResampler();
         _audioStream?.Dispose();
@@ -655,6 +764,8 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
 
         lock (_decodeGate)
         {
+            _prerollAudio.Clear();
+            _prerollAudioBytes = 0;
             FreeAudioResampler();
             _audioStream?.Dispose();
             _audioStream = null;
@@ -706,6 +817,11 @@ internal sealed unsafe class FfmpegVideoDecoder : IMediaFrameDecoder
                 ffmpeg.avformat_close_input(&formatContext);
                 _formatContext = null;
             }
+        }
+
+        if (_ownsBinkLifecycle)
+        {
+            BinkHostPlaybackAssist.NotifyHostMovieDecoderStopped(_moviePath);
         }
     }
 }

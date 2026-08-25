@@ -1,0 +1,6 @@
+                        $"pipeline={(resources.Pipeline.Handle != 0 ? 1 : 0)}");
+                }
+
+                resources.TransientRenderPass = transientRenderPass;
+                resources.TransientFramebuffer = transientFramebuffer;
+                transientRenderPass = default;

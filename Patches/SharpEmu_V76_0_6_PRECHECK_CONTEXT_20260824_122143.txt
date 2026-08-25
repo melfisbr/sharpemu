@@ -1,0 +1,6 @@
+﻿Tag=V76.0.6-GEN5-INDIRECT-SHADER-CONTROL
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+State=Ready
+Prerequisite=V76.0.5.1 verified
+TranslatorHash=86cbd104a5fa27667cbdfc95da16ce1cb548dd3b596cff0fa92bd279d5258142
+EvaluatorHash=41094f3d2dd92bcfe47cddc5f4ecbb9cddabc9cd0f54c68ec651410402991b54

@@ -1,0 +1,63 @@
+V119.0 EXECUTION GRAPH ARCHITECTURE
+===================================
+
+CONTROL PLANE
+  PM4 decode remains ordered.
+  Same-queue FIFO remains exact.
+  Cross-queue dependency remains guest label/wait driven.
+  No WAIT is synthesized as satisfied.
+
+WAITER PLANE
+  Producer WRITE_DATA/RELEASE already latches exact addresses in GpuWaitRegistry.
+  MonitorGpuWaits now requests the latched fast drain when that evidence exists.
+  No latch -> unchanged full scan, preserving direct CPU writes and retry semantics.
+
+SHADER PLANE
+  Existing AGC structural shader cache remains canonical.
+  New single-flight gate serializes only identical cache misses.
+  Existing V118 ShaderId/VkShaderModule/pipeline maps remain.
+  New reference hot path avoids SequenceEqual when the same immutable SPIR-V array returns.
+  New-array same-address case still validates every byte before reuse.
+
+RESOURCE PLANE
+  V117.15 VkImage alias is forbidden.
+  Read-only deferred shader globals may use mapped DEVICE_LOCAL memory only when Vulkan exposes
+  a compatible HOST_VISIBLE|HOST_COHERENT|DEVICE_LOCAL memory type.
+  Otherwise exact V117.12 staging->device-local behavior remains.
+  ReBAR and ordinary host allocations have distinct pool keys.
+
+RAM / RETENTION
+  GPU resident shader ceiling: 1024.
+  V117.13 global residency tracker: disabled.
+  Queue and payload RAM caps unchanged.
+
+SUBMISSION PLANE
+  One physical VkQueue.
+  Existing barriers.
+  Existing command-buffer and fence retirement.
+  No broad compute batching.
+  No closed-group submit.
+  No dual queue.
+
+RPCS3 LESSONS ADAPTED
+  Adopt:
+    program/shader identity cache
+    bounded compiler work
+    adaptive/event-driven scheduling
+    ReBAR-aware upload/resource strategy
+  Do not copy yet:
+    shader interpreter fallback
+    asynchronous transfer queue
+    FIFO command reordering/flattening
+  Reason:
+    those require stronger compatibility/synchronization contracts than SharpEmu currently has.
+
+SUCCESS CRITERIA
+  DeviceLost = 0
+  REBAR_GLOBAL_DIRECT count > 0 when compatible memory exists
+  resident reference_hits >> byte_compare_hits
+  wait_fast grows
+  render profile identifies dominant CPU self-time
+  private/alloc2s trend down
+  producer_complete trend down
+  FPS/DRAWS trend up

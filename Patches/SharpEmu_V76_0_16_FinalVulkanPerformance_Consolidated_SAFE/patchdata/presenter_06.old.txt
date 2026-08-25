@@ -1,0 +1,9 @@
+                        physicalSignalValueV1131 = ++_graphicsQueueSignalValueV1131;
+                        physicalSignalSemaphoreV1131 =
+                            _graphicsQueueTimelineSemaphoreV1131;
+                        if (physicalLaneSwitchV1131)
+                        {
+                            physicalWaitValueV1131 = _computeQueueSignalValueV1131;
+                            physicalWaitSemaphoreV1131 =
+                                _computeQueueTimelineSemaphoreV1131;
+                        }

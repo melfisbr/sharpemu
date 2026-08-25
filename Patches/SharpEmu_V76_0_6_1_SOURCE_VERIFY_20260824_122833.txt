@@ -1,0 +1,8 @@
+﻿Tag=V76.0.6.1-GEN5-INDIRECT-SHADER-CONTROL-BUILDFIX
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+PrerequisiteV76051=PASSED
+IndirectControlMarkers=PASSED
+ScalarEvaluatorMarkers=PASSED
+TranslatorHash=a4eaa7853ea6d34dda3f5d0b2aa1f40681d2f374f3b8efd07b585597e2a7f3db
+EvaluatorHash=a3d475e18ca3a866bbb086275fc19b874750456690d887826ffae6e3774e0f3d
+HelperHash=2c395d530bffd6a9a998bda73210d13eb8de9fd1a2c75fe14a20486b2e3a5520

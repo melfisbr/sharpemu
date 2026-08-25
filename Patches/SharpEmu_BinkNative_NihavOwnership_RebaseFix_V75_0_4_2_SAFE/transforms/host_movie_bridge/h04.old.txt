@@ -1,0 +1,7 @@
+                        {
+                            AttachMovieLocked(
+                                completedPath,
+                                MovieMode.Nihav);
+
+                            Console.Error.WriteLine(
+                                "[V74.0.81][TITLE_LOOP_RESTART] " +

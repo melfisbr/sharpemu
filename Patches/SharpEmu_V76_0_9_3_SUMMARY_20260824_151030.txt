@@ -1,0 +1,10 @@
+﻿Tag=V76.0.9.3-COMPUTE-ATOMICS-PARTIAL-GROUPS-SEMANTIC-AUDIT
+Status=BUILD_PASSED
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+InitialState=ReadyAdaptive
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_9_3_PREVIOUS_FILES_20260824_151030.zip
+BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_9_3_BUILD_20260824_151030.log
+ApplyMode=adaptive-in-place-with-v7608-prerequisite-repair
+AtomicIncDec=bounded CAS with DATA clamp for LDS/buffer/global/image
+FlatGlobalAtomics=32-bit family 0x30..0x3D supported
+PartialThreadGroups=exact thread limits through existing compute push-constant guard

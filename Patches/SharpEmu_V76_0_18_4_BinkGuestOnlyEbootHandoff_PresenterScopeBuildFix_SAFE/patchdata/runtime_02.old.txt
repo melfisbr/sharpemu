@@ -1,0 +1,10 @@
+    /// <summary>
+    /// True for normal SharpEmu execution. An explicit opt-in is still required
+    /// to reach any legacy host-decoder path.
+    /// </summary>
+    internal static bool Enabled =>
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_ALLOW_HOST_DECODER"),
+            "1",
+            StringComparison.Ordinal);

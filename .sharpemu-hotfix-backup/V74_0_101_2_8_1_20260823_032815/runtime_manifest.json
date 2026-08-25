@@ -1,0 +1,47 @@
+﻿[
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\upscalers\\SharpEmu.VulkanUpscaler.Native.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\01_SharpEmu.VulkanUpscaler.Native.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\nvngx_dlss.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\02_nvngx_dlss.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\NvLowLatencyVk.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\03_NvLowLatencyVk.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\nvngx_dlssg.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\04_nvngx_dlssg.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\sl.common.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\05_sl.common.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\sl.dlss_g.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\06_sl.dlss_g.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\sl.interposer.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\07_sl.interposer.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\sl.pcl.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\08_sl.pcl.dll"
+    },
+    {
+        "target":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\artifacts\\bin\\Release\\net10.0\\win-x64\\sl.reflex.dll",
+        "had_original":  true,
+        "backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\.sharpemu-hotfix-backup\\V74_0_101_2_8_1_20260823_032815\\09_sl.reflex.dll"
+    }
+]

@@ -1,0 +1,7 @@
+
+        resources.Tiled = RentBuffer(totalTiledBytes, hostVisible: true);
+        if (!UploadGuestTextureSlicesV74088(
+                resources.Tiled.Memory,
+                guestMemory,
+                guestBaseAddress,
+                guestSliceStride,

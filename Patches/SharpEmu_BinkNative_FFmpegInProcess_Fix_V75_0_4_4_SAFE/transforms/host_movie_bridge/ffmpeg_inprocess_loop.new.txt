@@ -1,0 +1,12 @@
+        if (restartMode == MovieMode.NativeRad)
+        {
+            if (TryOpenPreferredNativeRadDecoderV75044(
+                    hostPath,
+                    out var nativeSource,
+                    out _,
+                    out _) &&
+                nativeSource is not null)
+            {
+                source = nativeSource;
+            }
+        }

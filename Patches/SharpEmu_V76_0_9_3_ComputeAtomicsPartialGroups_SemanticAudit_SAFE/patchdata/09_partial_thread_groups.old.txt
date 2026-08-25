@@ -1,0 +1,35 @@
+        if ((initiator & partialThreadGroupEnabled) != 0)
+        {
+            var partialSizeX = GetComputePartialSize(state.ShRegisters, ComputeNumThreadX);
+            var partialSizeY = GetComputePartialSize(state.ShRegisters, ComputeNumThreadY);
+            var partialSizeZ = GetComputePartialSize(state.ShRegisters, ComputeNumThreadZ);
+            if (partialSizeX == 0 || partialSizeX > localSizeX ||
+                partialSizeY == 0 || partialSizeY > localSizeY ||
+                partialSizeZ == 0 || partialSizeZ > localSizeZ)
+            {
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    $"invalid-partial-size({partialSizeX}x{partialSizeY}x{partialSizeZ}/" +
+                    $"{localSizeX}x{localSizeY}x{localSizeZ})");
+            }
+
+            if (partialSizeX != localSizeX ||
+                partialSizeY != localSizeY ||
+                partialSizeZ != localSizeZ)
+            {
+                return RejectComputeDispatch(
+                    dimensionsAddress,
+                    initiator,
+                    dispatchSource,
+                    dispatchEndX,
+                    dispatchEndY,
+                    dispatchEndZ,
+                    $"unrepresentable-partial-group({partialSizeX}x{partialSizeY}x{partialSizeZ}/" +
+                    $"{localSizeX}x{localSizeY}x{localSizeZ})");
+            }
+        }

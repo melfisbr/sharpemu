@@ -1,0 +1,23 @@
+        }
+    }
+
+    private static void UploadBytes(Allocation allocation, ReadOnlySpan<byte> data)
+    {
+        if (allocation.Mapped == 0 || (ulong)data.Length > allocation.Capacity)
+        {
+            throw new InvalidOperationException("Detile host allocation is not persistently mapped.");
+        }
+        data.CopyTo(new Span<byte>((void*)allocation.Mapped, data.Length));
+    }
+
+    private static void UploadUInts(Allocation allocation, uint[] data)
+    {
+        var byteCount = (ulong)data.Length * sizeof(uint);
+        if (allocation.Mapped == 0 || byteCount > allocation.Capacity)
+        {
+            throw new InvalidOperationException("Detile term allocation is not persistently mapped.");
+        }
+        data.AsSpan().CopyTo(new Span<uint>((void*)allocation.Mapped, data.Length));
+    }
+
+    private void WriteDescriptors(

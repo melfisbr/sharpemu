@@ -1,9 +1,0 @@
-V74.0.88
-- Internal SDL/Vulkan PS-style IME overlay; no PowerShell, no WinForms, no external window.
-- Keyboard input: A-Z/0-9/Space/Backspace/Enter/Escape/arrows.
-- Gamepad input: D-pad, Cross, Circle, Square, Options.
-- UI Bink NumberType=4 support with typed R8Uint/R8G8Uint host plane images.
-- Single-plane Y/UV bootstrap scoped to Demon's Souls UI Binks.
-- Guest-owned UI Bink EOF rewind/loop.
-- Preserves V74.0.84.2.1 frame ownership/sticky planes and V74.0.86 typed DCC guard.
-- Does not fabricate a character mesh. The actual preview remains guest-rendered from game assets.

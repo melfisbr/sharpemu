@@ -1,0 +1,7 @@
+            out nint mapped)
+        {
+            var size = (ulong)Math.Max(data.Length, sizeof(uint));
+            var capacity = BitOperations.RoundUpToPowerOf2(size);
+            var key = new VulkanHostBufferPoolKey(usage, capacity);
+
+            VulkanHostBufferAllocation allocation;

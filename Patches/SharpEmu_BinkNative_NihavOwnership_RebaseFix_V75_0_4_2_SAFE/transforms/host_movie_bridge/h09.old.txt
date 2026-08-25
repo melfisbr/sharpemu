@@ -1,0 +1,6 @@
+            info.Width + "x" + info.Height + " @ " +
+            info.FramesPerSecondNumerator + "/" + info.FramesPerSecondDenominator + " fps.");
+        return true;
+    }
+
+    private static MovieMode ResolveMode()

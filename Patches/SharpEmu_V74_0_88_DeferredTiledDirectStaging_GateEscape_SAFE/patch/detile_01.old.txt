@@ -1,6 +1,0 @@
-        return true;
-    }
-
-    public void Retire(Transients transients)
-    {
-        if (_disposed || transients is null || !transients.Rented)

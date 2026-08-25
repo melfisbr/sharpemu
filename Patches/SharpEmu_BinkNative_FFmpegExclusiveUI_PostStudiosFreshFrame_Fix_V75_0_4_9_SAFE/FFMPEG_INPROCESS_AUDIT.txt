@@ -1,0 +1,1 @@
+V75.0.4.8 retains the V75.0.4.5 FFmpeg-core in-process A/V decoder and adds exclusive native-rad routing for fullscreen and UI BK2 assets. See EXCLUSIVE_ROUTE_AUDIT.txt.

@@ -1,7 +1,0 @@
-V74.0.88.4
-- Runner-only revision; no SharpEmu source patch.
-- Fixes Windows PowerShell NativeCommandError on normal SharpEmu stderr.
-- cmd.exe owns native 2>&1 redirection.
-- Keeps ErrorActionPreference=Stop for real script failures.
-- Keeps live AutoFlush runtime log in Patches.
-- Requires and preserves V74.0.88.3 source baseline.

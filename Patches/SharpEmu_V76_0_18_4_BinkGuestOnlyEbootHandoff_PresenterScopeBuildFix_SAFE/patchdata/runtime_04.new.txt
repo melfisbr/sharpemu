@@ -1,0 +1,6 @@
+        Console.Error.WriteLine(
+            "[BINK-GUEST][V76.0.18] hard_guest_only=True host_decoder=False " +
+            "ffmpeg_bink=False nihav_bink=False rad_host=False " +
+            "header_shim=False frame_injection=False host_audio=False " +
+            $"legacy_host_override_ignored={(legacyHostOverrideRequested ? 1 : 0)} " +
+            "eboot_handoff=guest-close-no-black");

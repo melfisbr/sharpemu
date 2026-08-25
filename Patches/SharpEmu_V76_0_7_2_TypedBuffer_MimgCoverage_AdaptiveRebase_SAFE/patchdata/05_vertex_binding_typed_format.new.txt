@@ -1,0 +1,28 @@
+        var bindingOffset = unchecked((uint)control.OffsetBytes + scalarOffset);
+        var bindingDataFormat = descriptor.DataFormat;
+        var bindingNumberFormat = descriptor.NumberFormat;
+        if (control.TypedFormat is { } typedFormat)
+        {
+            if (!Gfx10UnifiedFormat.TryDecode(
+                    typedFormat,
+                    out bindingDataFormat,
+                    out bindingNumberFormat))
+            {
+                return false;
+            }
+        }
+
+        binding = new Gen5VertexInputBinding(
+            instruction.Pc,
+            location,
+            control.ComponentCount,
+            bindingDataFormat,
+            bindingNumberFormat,
+            descriptor.BaseAddress,
+            bindingStride,
+            bindingOffset,
+            Data: [],
+            DataLength: desiredDataLength,
+            DataPooled: false);
+        return true;
+    }

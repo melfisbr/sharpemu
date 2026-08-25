@@ -1,0 +1,7 @@
+        };
+        Check(_vk.AllocateMemory(_device, &allocateInfo, null, out var memory), "vkAllocateMemory(detile)");
+        Check(_vk.BindBufferMemory(_device, buffer, memory, 0), "vkBindBufferMemory(detile)");
+        var allocation = new Allocation(buffer, memory, size, hostVisible);
+        _allAllocations.Add(allocation);
+        return allocation;
+    }

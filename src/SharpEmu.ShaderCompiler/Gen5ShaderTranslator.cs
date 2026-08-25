@@ -109,6 +109,140 @@ public static class Gen5ShaderTranslator
         public Dictionary<ulong, Gen5ShaderMetadata?> Metadata { get; } = new();
     }
 
+    // SHARPEMU_V74_0_117_9_SHADER_FRONTEND_HOTPATH
+    // Same-thread dispatch trains revisit the same decoded program thousands of
+    // times. Keep one thread-local program/metadata entry ahead of the shared
+    // dictionary lock. Program and metadata memory identities are deliberately
+    // separate so a same virtual address in another guest memory cannot reuse
+    // stale metadata. Decode keys and generated shader bytes are unchanged.
+    [ThreadStatic] private static object? _v1179HotProgramMemory;
+    [ThreadStatic] private static ulong _v1179HotProgramAddress;
+    [ThreadStatic] private static Gen5ShaderProgram? _v1179HotProgram;
+    [ThreadStatic] private static object? _v1179HotMetadataMemory;
+    [ThreadStatic] private static ulong _v1179HotMetadataAddress;
+    [ThreadStatic] private static Gen5ShaderMetadata? _v1179HotMetadata;
+    [ThreadStatic] private static bool _v1179HotMetadataKnown;
+
+    public static long V1179ProgramHotHits;
+    public static long V1179ProgramSharedLookups;
+    public static long V1179MetadataHotHits;
+    public static long V1179MetadataSharedLookups;
+
+    // SHARPEMU_V74_0_117_10_SHADER_THREAD_CACHE_L2
+    // V117.9 proved a one-entry L1 only catches ~25% of repeated decodes.
+    // Keep a 256-slot per-thread direct-mapped L2 ahead of the shared cache
+    // lock. Entries remain keyed by guest-memory identity + exact address.
+    // SHARPEMU_V74_0_117_11_SHADER_THREAD_CACHE_L2_SCALE
+    // V117.10 measured only 35.73% L1+L2 locality with 256 direct-mapped slots.
+    // Increase capacity only; cache key, decoded program, metadata and shared
+    // authoritative fallback remain unchanged.
+    private const int V11710ThreadCacheSlots = 4096;
+    [ThreadStatic] private static ShaderThreadCacheV11710? _v11710ThreadCache;
+
+    private sealed class ShaderThreadCacheV11710
+    {
+        internal object? Memory;
+        internal readonly ulong[] ProgramAddresses = new ulong[V11710ThreadCacheSlots];
+        internal readonly Gen5ShaderProgram?[] Programs = new Gen5ShaderProgram?[V11710ThreadCacheSlots];
+        internal readonly ulong[] MetadataAddresses = new ulong[V11710ThreadCacheSlots];
+        internal readonly Gen5ShaderMetadata?[] Metadata = new Gen5ShaderMetadata?[V11710ThreadCacheSlots];
+        internal readonly bool[] MetadataKnown = new bool[V11710ThreadCacheSlots];
+
+        internal void Reset(object memory)
+        {
+            Memory = memory;
+            Array.Clear(ProgramAddresses, 0, ProgramAddresses.Length);
+            Array.Clear(Programs, 0, Programs.Length);
+            Array.Clear(MetadataAddresses, 0, MetadataAddresses.Length);
+            Array.Clear(Metadata, 0, Metadata.Length);
+            Array.Clear(MetadataKnown, 0, MetadataKnown.Length);
+        }
+    }
+
+    public static long V11710ProgramL2Hits;
+    public static long V11710ProgramL2Misses;
+    public static long V11710MetadataL2Hits;
+    public static long V11710MetadataL2Misses;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetV11710ThreadCacheSlot(ulong address)
+    {
+        var mixed = address ^ (address >> 17) ^ (address >> 33);
+        return (int)(mixed & (V11710ThreadCacheSlots - 1));
+    }
+
+    private static ShaderThreadCacheV11710 GetV11710ThreadCache(object memory)
+    {
+        var cache = _v11710ThreadCache ??= new ShaderThreadCacheV11710();
+        if (!ReferenceEquals(cache.Memory, memory))
+        {
+            cache.Reset(memory);
+        }
+
+        return cache;
+    }
+
+    private static bool TryGetProgramV11710(
+        object memory,
+        ulong address,
+        out Gen5ShaderProgram? program)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        program = cache.Programs[slot];
+        if (program is not null && cache.ProgramAddresses[slot] == address)
+        {
+            Interlocked.Increment(ref V11710ProgramL2Hits);
+            return true;
+        }
+
+        Interlocked.Increment(ref V11710ProgramL2Misses);
+        program = null;
+        return false;
+    }
+
+    private static void PutProgramV11710(
+        object memory,
+        ulong address,
+        Gen5ShaderProgram program)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        cache.ProgramAddresses[slot] = address;
+        cache.Programs[slot] = program;
+    }
+
+    private static bool TryGetMetadataV11710(
+        object memory,
+        ulong address,
+        out Gen5ShaderMetadata? metadata)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        if (cache.MetadataKnown[slot] && cache.MetadataAddresses[slot] == address)
+        {
+            Interlocked.Increment(ref V11710MetadataL2Hits);
+            metadata = cache.Metadata[slot];
+            return true;
+        }
+
+        Interlocked.Increment(ref V11710MetadataL2Misses);
+        metadata = null;
+        return false;
+    }
+
+    private static void PutMetadataV11710(
+        object memory,
+        ulong address,
+        Gen5ShaderMetadata? metadata)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        cache.MetadataAddresses[slot] = address;
+        cache.Metadata[slot] = metadata;
+        cache.MetadataKnown[slot] = true;
+    }
+
     private static readonly uint[] FullscreenBarycentricEs =
     [
         0xBFA00001, 0x7E000000, 0x7E000000, 0x7E000000,
@@ -216,9 +350,24 @@ public static class Gen5ShaderTranslator
         error = string.Empty;
         var cache = _decodeCaches.GetValue(ctx.Memory, static _ => new ShaderDecodeCache());
         Gen5ShaderProgram? program;
-        lock (cache.Gate)
+        if (ReferenceEquals(_v1179HotProgramMemory, ctx.Memory) &&
+            _v1179HotProgramAddress == shaderAddress &&
+            _v1179HotProgram is not null)
         {
-            cache.Programs.TryGetValue(shaderAddress, out program);
+            program = _v1179HotProgram;
+            Interlocked.Increment(ref V1179ProgramHotHits);
+        }
+        else if (TryGetProgramV11710(ctx.Memory, shaderAddress, out program))
+        {
+            // V117.10 L2 hit: avoid the shared ShaderDecodeCache gate.
+        }
+        else
+        {
+            Interlocked.Increment(ref V1179ProgramSharedLookups);
+            lock (cache.Gate)
+            {
+                cache.Programs.TryGetValue(shaderAddress, out program);
+            }
         }
 
         if (program is null)
@@ -237,13 +386,37 @@ public static class Gen5ShaderTranslator
             }
         }
 
+        _v1179HotProgramMemory = ctx.Memory;
+        _v1179HotProgramAddress = shaderAddress;
+        _v1179HotProgram = program;
+        PutProgramV11710(ctx.Memory, shaderAddress, program);
+
         Gen5ShaderMetadata? metadata = null;
         if (shaderHeaderAddress != 0)
         {
             var metadataCached = false;
-            lock (cache.Gate)
+            if (ReferenceEquals(_v1179HotMetadataMemory, ctx.Memory) &&
+                _v1179HotMetadataKnown &&
+                _v1179HotMetadataAddress == shaderHeaderAddress)
             {
-                metadataCached = cache.Metadata.TryGetValue(shaderHeaderAddress, out metadata);
+                metadata = _v1179HotMetadata;
+                metadataCached = true;
+                Interlocked.Increment(ref V1179MetadataHotHits);
+            }
+            else if (TryGetMetadataV11710(
+                         ctx.Memory,
+                         shaderHeaderAddress,
+                         out metadata))
+            {
+                metadataCached = true;
+            }
+            else
+            {
+                Interlocked.Increment(ref V1179MetadataSharedLookups);
+                lock (cache.Gate)
+                {
+                    metadataCached = cache.Metadata.TryGetValue(shaderHeaderAddress, out metadata);
+                }
             }
 
             if (!metadataCached)
@@ -264,6 +437,12 @@ public static class Gen5ShaderTranslator
                     }
                 }
             }
+
+            _v1179HotMetadataMemory = ctx.Memory;
+            _v1179HotMetadataAddress = shaderHeaderAddress;
+            _v1179HotMetadata = metadata;
+            _v1179HotMetadataKnown = true;
+            PutMetadataV11710(ctx.Memory, shaderHeaderAddress, metadata);
         }
 
         if (!TryGetUserSgprCount(
@@ -886,6 +1065,12 @@ public static class Gen5ShaderTranslator
             0x0A => "SBarrier",
             0x0C => "SWaitcnt",
             0x10 => "SSendmsg",
+            // SHARPEMU_V74_0_104_RDNA2_S_TRAP_COMPAT
+            // RDNA2 SOPP opcode 0x12 is S_TRAP. The PS5 guest trap-handler
+            // state is not modeled by the host shader backends, but rejecting
+            // the whole shader is worse than preserving execution as a
+            // compatibility no-op (matching other host-irrelevant SOPP ops).
+            0x12 => "STrap",
             0x16 => "STtraceData",
             0x20 => "SInstPrefetch",
             0x21 => "SClause",
@@ -1354,6 +1539,10 @@ public static class Gen5ShaderTranslator
             0xB0 => "DsStoreAddtidB32",
             // GFX10/RDNA2 paired ADDTID LDS load.
             0xB1 => "DsReadAddtidB32",
+            // V76.0.25: RDNA2 half-wave cross-lane data-share operations.
+            // They route through LDS hardware but do not access LDS memory.
+            0xB2 => "DsPermuteB32",
+            0xB3 => "DsBpermuteB32",
             0xDE => "DsWriteB96",
             0xDF => "DsWriteB128",
             0xFE => "DsReadB96",
@@ -1388,7 +1577,13 @@ public static class Gen5ShaderTranslator
         out uint sizeDwords,
         out string error)
     {
-        var opcode = (word >> 16) & 0x7;
+        // V76.0.7 / GFX10 MTBUF: OP is four bits. OP[2:0] lives in the
+        // first dword while OP[3] is bit 53 (bit 21 of the second dword).
+        // The previous three-bit decode aliased every D16 load onto a
+        // non-D16 store opcode.
+        var opcode =
+            ((word >> 16) & 0x7) |
+            (((extra >> 21) & 0x1) << 3);
         name = opcode switch
         {
             0x00 => "TBufferLoadFormatX",
@@ -1399,11 +1594,21 @@ public static class Gen5ShaderTranslator
             0x05 => "TBufferStoreFormatXy",
             0x06 => "TBufferStoreFormatXyz",
             0x07 => "TBufferStoreFormatXyzw",
+            0x08 => "TBufferLoadFormatD16X",
+            0x09 => "TBufferLoadFormatD16Xy",
+            0x0A => "TBufferLoadFormatD16Xyz",
+            0x0B => "TBufferLoadFormatD16Xyzw",
+            0x0C => "TBufferStoreFormatD16X",
+            0x0D => "TBufferStoreFormatD16Xy",
+            0x0E => "TBufferStoreFormatD16Xyz",
+            0x0F => "TBufferStoreFormatD16Xyzw",
             _ => string.Empty,
         };
         sizeDwords = (extra >> 24) == 0xFF ? 3u : 2u;
-        error = string.Empty;
-        return true;
+        return FinishDecode(
+            name,
+            $"unknown-mtbuf op=0x{opcode:X1} word=0x{word:X8} extra=0x{extra:X8}",
+            out error);
     }
 
     private static bool DecodeMubuf(
@@ -1413,7 +1618,10 @@ public static class Gen5ShaderTranslator
         out uint sizeDwords,
         out string error)
     {
-        var opcode = (word >> 18) & 0x7F;
+        // V76.0.8 / GFX10 MUBUF: OP is eight bits (word[25:18]).
+        // The previous seven-bit mask aliased BUFFER_*_FORMAT_D16 0x80..0x87
+        // onto the non-D16 0x00..0x07 family.
+        var opcode = (word >> 18) & 0xFF;
         name = opcode switch
         {
             0x00 => "BufferLoadFormatX",
@@ -1459,6 +1667,14 @@ public static class Gen5ShaderTranslator
             0x3B => "BufferAtomicXor",
             0x3C => "BufferAtomicInc",
             0x3D => "BufferAtomicDec",
+            0x80 => "BufferLoadFormatD16X",
+            0x81 => "BufferLoadFormatD16Xy",
+            0x82 => "BufferLoadFormatD16Xyz",
+            0x83 => "BufferLoadFormatD16Xyzw",
+            0x84 => "BufferStoreFormatD16X",
+            0x85 => "BufferStoreFormatD16Xy",
+            0x86 => "BufferStoreFormatD16Xyz",
+            0x87 => "BufferStoreFormatD16Xyzw",
             _ => $"MubufRaw{opcode:X2}",
         };
         sizeDwords = (extra >> 24) == 0xFF ? 3u : 2u;
@@ -1506,8 +1722,20 @@ public static class Gen5ShaderTranslator
             0x23 => "LoadSbyteD16Hi",
             0x24 => "LoadShortD16",
             0x25 => "LoadShortD16Hi",
+            // V76.0.9: complete the 32-bit FLAT/GLOBAL atomic family.
+            0x30 => "AtomicSwap",
+            0x31 => "AtomicCmpswap",
             0x32 => "AtomicAdd",
+            0x33 => "AtomicSub",
+            0x35 => "AtomicSmin",
+            0x36 => "AtomicUmin",
+            0x37 => "AtomicSmax",
             0x38 => "AtomicUMax",
+            0x39 => "AtomicAnd",
+            0x3A => "AtomicOr",
+            0x3B => "AtomicXor",
+            0x3C => "AtomicInc",
+            0x3D => "AtomicDec",
             _ => string.Empty,
         };
         name = prefix.Length != 0 && suffix.Length != 0
@@ -1593,15 +1821,29 @@ public static class Gen5ShaderTranslator
             0x1A => "ImageAtomicXor",
             0x1B => "ImageAtomicInc",
             0x1C => "ImageAtomicDec",
+            // V76.0.7: complete the non-LOD-clamp GFX10 SAMPLE family.
+            // *_CL forms require SPIR-V MinLod plus Vulkan
+            // shaderResourceMinLod feature plumbing and remain explicit gaps.
             0x20 => "ImageSample",
             0x22 => "ImageSampleD",
             0x24 => "ImageSampleL",
             0x25 => "ImageSampleB",
             0x27 => "ImageSampleLz",
+            0x28 => "ImageSampleC",
+            0x2A => "ImageSampleCD",
+            0x2C => "ImageSampleCL",
+            0x2D => "ImageSampleCB",
             0x2F => "ImageSampleCLz",
             0x30 => "ImageSampleO",
+            0x32 => "ImageSampleDO",
             0x34 => "ImageSampleLO",
+            0x35 => "ImageSampleBO",
             0x37 => "ImageSampleLzO",
+            0x38 => "ImageSampleCO",
+            0x3A => "ImageSampleCDO",
+            0x3C => "ImageSampleCLO",
+            0x3D => "ImageSampleCBO",
+            0x3F => "ImageSampleCLzO",
             0x40 => "ImageGather4",
             0x47 => "ImageGather4Lz",
             0x48 => "ImageGather4C",
@@ -2202,6 +2444,10 @@ public static class Gen5ShaderTranslator
                         Gen5Operand.Vector(vectorData1),
                     ],
                     "DsSwizzleB32" => [Gen5Operand.Vector(vectorData0)],
+                    "DsPermuteB32" or "DsBpermuteB32" => [
+                        Gen5Operand.Vector(vectorAddress),
+                        Gen5Operand.Vector(vectorData0),
+                    ],
                     // DS_CMPST operand order is reversed vs buffer/image cmpswap:
                     // DATA0 holds the comparator, DATA1 holds the new value.
                     "DsCmpstB32" or "DsCmpstRtnB32" => [
@@ -2217,7 +2463,8 @@ public static class Gen5ShaderTranslator
                 };
                 destinations = opcode switch
                 {
-                    "DsReadB32" or "DsReadAddtidB32" or "DsSwizzleB32" => [
+                    "DsReadB32" or "DsReadAddtidB32" or "DsSwizzleB32" or
+                        "DsPermuteB32" or "DsBpermuteB32" => [
                         Gen5Operand.Vector(vectorDestination),
                     ],
                     "DsReadB64" => [
@@ -2289,8 +2536,19 @@ public static class Gen5ShaderTranslator
                     "GlobalStoreShort" or
                     "GlobalStoreShortD16Hi" or
                     "GlobalStoreDword" or
+                    "GlobalAtomicSwap" or
                     "GlobalAtomicAdd" or
-                    "GlobalAtomicUMax" => 1u,
+                    "GlobalAtomicSub" or
+                    "GlobalAtomicSmin" or
+                    "GlobalAtomicUmin" or
+                    "GlobalAtomicSmax" or
+                    "GlobalAtomicUMax" or
+                    "GlobalAtomicAnd" or
+                    "GlobalAtomicOr" or
+                    "GlobalAtomicXor" or
+                    "GlobalAtomicInc" or
+                    "GlobalAtomicDec" => 1u,
+                    "GlobalAtomicCmpswap" => 2u,
                     "GlobalLoadDword" => 1u,
                     "GlobalLoadDwordx2" => 2u,
                     "GlobalLoadDwordx3" => 3u,
@@ -2337,52 +2595,71 @@ public static class Gen5ShaderTranslator
                 var vectorData = (extra >> 8) & 0xFF;
                 var scalarResource = ((extra >> 16) & 0x1F) * 4;
                 var scalarOffset = (extra >> 24) & 0xFF;
-                var dwordCount = opcode switch
+                var componentCount = opcode switch
                 {
-                    "BufferLoadFormatX" => 1u,
-                    "BufferLoadFormatXy" => 2u,
-                    "BufferLoadFormatXyz" => 3u,
-                    "BufferLoadFormatXyzw" => 4u,
-                    "BufferStoreFormatX" => 1u,
-                    "BufferStoreFormatXy" => 2u,
-                    "BufferStoreFormatXyz" => 3u,
-                    "BufferStoreFormatXyzw" => 4u,
-                    "BufferLoadUbyte" or
-                    "BufferLoadSbyte" or
-                    "BufferLoadUshort" or
-                    "BufferLoadSshort" or
-                    "BufferStoreByte" or
-                    "BufferStoreByteD16Hi" or
-                    "BufferStoreShort" or
-                    "BufferStoreShortD16Hi" or
-                    "BufferLoadUbyteD16" or
-                    "BufferLoadUbyteD16Hi" or
-                    "BufferLoadSbyteD16" or
-                    "BufferLoadSbyteD16Hi" or
-                    "BufferLoadShortD16" or
-                    "BufferLoadShortD16Hi" => 1u,
-                    "BufferLoadDword" => 1u,
-                    "BufferLoadDwordx2" => 2u,
-                    "BufferLoadDwordx3" => 3u,
-                    "BufferLoadDwordx4" => 4u,
-                    "BufferStoreDword" => 1u,
-                    "BufferStoreDwordx2" => 2u,
-                    "BufferStoreDwordx3" => 3u,
-                    "BufferStoreDwordx4" => 4u,
-                    "BufferAtomicCmpswap" => 2u,
-                    _ when opcode.StartsWith("BufferAtomic", StringComparison.Ordinal) => 1u,
+                    "BufferLoadFormatX" or
+                    "BufferStoreFormatX" or
+                    "BufferLoadFormatD16X" or
+                    "BufferStoreFormatD16X" => 1u,
+                    "BufferLoadFormatXy" or
+                    "BufferStoreFormatXy" or
+                    "BufferLoadFormatD16Xy" or
+                    "BufferStoreFormatD16Xy" => 2u,
+                    "BufferLoadFormatXyz" or
+                    "BufferStoreFormatXyz" or
+                    "BufferLoadFormatD16Xyz" or
+                    "BufferStoreFormatD16Xyz" => 3u,
+                    "BufferLoadFormatXyzw" or
+                    "BufferStoreFormatXyzw" or
+                    "BufferLoadFormatD16Xyzw" or
+                    "BufferStoreFormatD16Xyzw" => 4u,
                     _ => 0u,
                 };
+                var formatD16 = opcode.Contains("FormatD16", StringComparison.Ordinal);
+                var dwordCount = componentCount != 0
+                    ? formatD16
+                        ? (componentCount + 1u) / 2u
+                        : componentCount
+                    : opcode switch
+                    {
+                        "BufferLoadUbyte" or
+                        "BufferLoadSbyte" or
+                        "BufferLoadUshort" or
+                        "BufferLoadSshort" or
+                        "BufferStoreByte" or
+                        "BufferStoreByteD16Hi" or
+                        "BufferStoreShort" or
+                        "BufferStoreShortD16Hi" or
+                        "BufferLoadUbyteD16" or
+                        "BufferLoadUbyteD16Hi" or
+                        "BufferLoadSbyteD16" or
+                        "BufferLoadSbyteD16Hi" or
+                        "BufferLoadShortD16" or
+                        "BufferLoadShortD16Hi" => 1u,
+                        "BufferLoadDword" => 1u,
+                        "BufferLoadDwordx2" => 2u,
+                        "BufferLoadDwordx3" => 3u,
+                        "BufferLoadDwordx4" => 4u,
+                        "BufferStoreDword" => 1u,
+                        "BufferStoreDwordx2" => 2u,
+                        "BufferStoreDwordx3" => 3u,
+                        "BufferStoreDwordx4" => 4u,
+                        "BufferAtomicCmpswap" => 2u,
+                        _ when opcode.StartsWith("BufferAtomic", StringComparison.Ordinal) => 1u,
+                        _ => 0u,
+                    };
                 sources =
                 [
                     Gen5Operand.Vector(vectorAddress),
                     Gen5Operand.Scalar(scalarResource),
                     Gen5Operand.Source(scalarOffset, literal),
                 ];
-                destinations = Enumerable
-                    .Range((int)vectorData, checked((int)dwordCount))
-                    .Select(index => Gen5Operand.Vector((uint)index))
-                    .ToArray();
+                destinations = opcode.StartsWith("BufferStore", StringComparison.Ordinal)
+                    ? []
+                    : Enumerable
+                        .Range((int)vectorData, checked((int)dwordCount))
+                        .Select(index => Gen5Operand.Vector((uint)index))
+                        .ToArray();
                 control = new Gen5BufferMemoryControl(
                     dwordCount,
                     vectorAddress,
@@ -2392,7 +2669,10 @@ public static class Gen5ShaderTranslator
                     ((word >> 13) & 1) != 0,
                     ((word >> 12) & 1) != 0,
                     ((word >> 14) & 1) != 0,
-                    ((extra >> 22) & 1) != 0);
+                    ((extra >> 22) & 1) != 0,
+                    componentCount,
+                    null,
+                    formatD16);
                 break;
             }
             case Gen5ShaderEncoding.Mtbuf:
@@ -2402,24 +2682,44 @@ public static class Gen5ShaderTranslator
                 var vectorData = (extra >> 8) & 0xFF;
                 var scalarResource = ((extra >> 16) & 0x1F) * 4;
                 var scalarOffset = (extra >> 24) & 0xFF;
-                var dwordCount = opcode switch
+                var componentCount = opcode switch
                 {
-                    "TBufferLoadFormatX" => 1u,
-                    "TBufferLoadFormatXy" => 2u,
-                    "TBufferLoadFormatXyz" => 3u,
-                    "TBufferLoadFormatXyzw" => 4u,
+                    "TBufferLoadFormatX" or
+                    "TBufferStoreFormatX" or
+                    "TBufferLoadFormatD16X" or
+                    "TBufferStoreFormatD16X" => 1u,
+                    "TBufferLoadFormatXy" or
+                    "TBufferStoreFormatXy" or
+                    "TBufferLoadFormatD16Xy" or
+                    "TBufferStoreFormatD16Xy" => 2u,
+                    "TBufferLoadFormatXyz" or
+                    "TBufferStoreFormatXyz" or
+                    "TBufferLoadFormatD16Xyz" or
+                    "TBufferStoreFormatD16Xyz" => 3u,
+                    "TBufferLoadFormatXyzw" or
+                    "TBufferStoreFormatXyzw" or
+                    "TBufferLoadFormatD16Xyzw" or
+                    "TBufferStoreFormatD16Xyzw" => 4u,
                     _ => 0u,
                 };
+                var d16 = opcode.Contains("D16", StringComparison.Ordinal);
+                var dwordCount = d16
+                    ? (componentCount + 1u) / 2u
+                    : componentCount;
                 sources =
                 [
                     Gen5Operand.Vector(vectorAddress),
                     Gen5Operand.Scalar(scalarResource),
                     Gen5Operand.Source(scalarOffset, literal),
                 ];
-                destinations = Enumerable
-                    .Range((int)vectorData, checked((int)dwordCount))
-                    .Select(index => Gen5Operand.Vector((uint)index))
-                    .ToArray();
+                destinations = opcode.StartsWith(
+                        "TBufferStore",
+                        StringComparison.Ordinal)
+                    ? []
+                    : Enumerable
+                        .Range((int)vectorData, checked((int)dwordCount))
+                        .Select(index => Gen5Operand.Vector((uint)index))
+                        .ToArray();
                 control = new Gen5BufferMemoryControl(
                     dwordCount,
                     vectorAddress,
@@ -2429,7 +2729,10 @@ public static class Gen5ShaderTranslator
                     ((word >> 13) & 1) != 0,
                     ((word >> 12) & 1) != 0,
                     ((word >> 14) & 1) != 0,
-                    ((extra >> 22) & 1) != 0);
+                    ((extra >> 22) & 1) != 0,
+                    componentCount,
+                    (word >> 19) & 0x7F,
+                    d16);
                 break;
             }
             case Gen5ShaderEncoding.Mimg:

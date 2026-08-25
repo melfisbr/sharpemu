@@ -1,0 +1,3 @@
+            var neutral = texture with
+            {
+                Address = 0,

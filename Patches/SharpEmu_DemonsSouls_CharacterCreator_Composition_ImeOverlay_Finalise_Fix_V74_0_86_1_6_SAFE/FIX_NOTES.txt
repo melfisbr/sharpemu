@@ -1,7 +1,0 @@
-V74.0.86.1.6
-- Correct exact IME Base64 source marker version.
-- Correct PowerShell escaped-apostrophe post-apply assertion.
-- Validate exact marker + decoded title/Done/player prompt/Form before APPLY.
-- Preserve structural Presenter Y/UV learning.
-- Preserve V84.2.1 frame ownership/sticky planes and V86 typed DCC.
-- Preserve SAFE rollback.

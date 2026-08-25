@@ -1,0 +1,21 @@
+        private uint NarrowGfx10FormatResultToD16(
+            uint value,
+            uint numberFormat)
+        {
+            var isUint = Equal(numberFormat, UInt(4));
+            var isSint = Equal(numberFormat, UInt(5));
+            var isInteger = _module.AddInstruction(
+                SpirvOp.LogicalOr,
+                _boolType,
+                isUint,
+                isSint);
+            var integerBits = BitwiseAnd(value, UInt(0xFFFF));
+            var floatBits = EmitFloatToHalf(value);
+            return _module.AddInstruction(
+                SpirvOp.Select,
+                _uintType,
+                isInteger,
+                integerBits,
+                floatBits);
+        }
+

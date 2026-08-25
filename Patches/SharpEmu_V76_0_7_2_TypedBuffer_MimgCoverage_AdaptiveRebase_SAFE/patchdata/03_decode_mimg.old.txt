@@ -1,0 +1,46 @@
+    private static bool DecodeMimg(uint word, out string name, out uint sizeDwords, out string error)
+    {
+        var opcode = (word >> 18) & 0x7F;
+        sizeDwords = 2 + ((word >> 1) & 0x3);
+        error = string.Empty;
+        name = opcode switch
+        {
+            0x00 => "ImageLoad",
+            0x01 => "ImageLoadMip",
+            0x08 => "ImageStore",
+            0x09 => "ImageStoreMip",
+            0x0E => "ImageGetResinfo",
+            0x0F => "ImageAtomicSwap",
+            0x10 => "ImageAtomicCmpswap",
+            0x11 => "ImageAtomicAdd",
+            0x12 => "ImageAtomicSub",
+            0x14 => "ImageAtomicSmin",
+            0x15 => "ImageAtomicUmin",
+            0x16 => "ImageAtomicSmax",
+            0x17 => "ImageAtomicUmax",
+            0x18 => "ImageAtomicAnd",
+            0x19 => "ImageAtomicOr",
+            0x1A => "ImageAtomicXor",
+            0x1B => "ImageAtomicInc",
+            0x1C => "ImageAtomicDec",
+            0x20 => "ImageSample",
+            0x22 => "ImageSampleD",
+            0x24 => "ImageSampleL",
+            0x25 => "ImageSampleB",
+            0x27 => "ImageSampleLz",
+            0x2F => "ImageSampleCLz",
+            0x30 => "ImageSampleO",
+            0x34 => "ImageSampleLO",
+            0x37 => "ImageSampleLzO",
+            0x40 => "ImageGather4",
+            0x47 => "ImageGather4Lz",
+            0x48 => "ImageGather4C",
+            0x4E => "ImageGather4CBCl",
+            0x57 => "ImageGather4LzO",
+            0x5F => "ImageGather4CLzO",
+            _ => string.Empty,
+        };
+
+        return FinishDecode(name, $"unknown-mimg op=0x{opcode:X2}", out error);
+    }
+

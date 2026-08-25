@@ -1,0 +1,16 @@
+    private static void AttachMovieLocked(string hostPath, MovieMode mode)
+    {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
+            Console.Error.WriteLine(
+                "[BINK-GUEST][V76.0.18][HOST-ATTACH-BLOCK] " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "backend=all-host action=reject");
+            return;
+        }
+
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return;
+        }

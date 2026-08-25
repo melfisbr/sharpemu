@@ -1,0 +1,50 @@
+        var v7500Configured =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_MODE");
+
+        if (string.Equals(
+                v7500Configured,
+                "native-rad",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v7500Configured,
+                "rad-native",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v7500Configured,
+                "sdk-rad",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return MovieMode.NativeRad;
+        }
+
+        if (string.Equals(
+                v7500Configured,
+                "external-rad",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return MovieMode.Rad;
+        }
+
+        if ((string.Equals(
+                 v7500Configured,
+                 "rad",
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 v7500Configured,
+                 "binkplay",
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 v7500Configured,
+                 "radvideo",
+                 StringComparison.OrdinalIgnoreCase)) &&
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_NATIVE_PREFER") != "0" &&
+            RadBinkNativeSdkDecoderV7500.IsRuntimeAvailable)
+        {
+            Console.Error.WriteLine(
+                "[BINK-NATIVE][V75.0.0] auto_selected " +
+                "requested=rad resolved=native-rad " +
+                $"dll='{RadBinkNativeSdkDecoderV7500.RuntimeLibraryPath}'");
+            return MovieMode.NativeRad;
+        }

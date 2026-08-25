@@ -1233,8 +1233,16 @@ public static partial class Gen5MslTranslator
             {
                 case "SNop":
                 case "SWaitcnt":
+                // V76.0.10 parity with Vulkan: dependency-counter waits are
+                // hardware scoreboard controls, not a shader-language memory barrier.
+                case "SWaitcntDepctr":
                 case "SInstPrefetch":
                 case "STtraceData":
+                // SHARPEMU_V74_0_104_RDNA2_S_TRAP_COMPAT
+                // The guest trap-handler is not modeled in MSL. Treat the
+                // legal RDNA2 opcode as host-irrelevant rather than rejecting
+                // the complete shader.
+                case "STrap":
                 case "SClause":
                 case "VNop":
                 // NGG shaders bracket their exports with s_sendmsg

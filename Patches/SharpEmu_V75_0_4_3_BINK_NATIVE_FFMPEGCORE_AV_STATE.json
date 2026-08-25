@@ -1,0 +1,12 @@
+﻿{
+    "Version":  "75.0.4.3",
+    "Timestamp":  "20260823_210553",
+    "RepositoryRoot":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu",
+    "Backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V75_0_4_3_BACKUP_20260823_210553.zip",
+    "ChangedSourceFiles":  6,
+    "AdapterSha":  "D76E63C35D6150CFA7BB29BBEDF8057445F2255D4A0F0DC6C905EE354032DF59",
+    "RuntimePolicy":  "local-only",
+    "StructuralRebase":  true,
+    "PreserveLocalFork":  true,
+    "GitUsed":  false
+}

@@ -1,0 +1,11 @@
+﻿Tag=V76.0.9.3-COMPUTE-ATOMICS-PARTIAL-GROUPS-SEMANTIC-AUDIT
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+PrerequisiteV7608Adaptive=PASSED
+AdaptiveInPlace=PASSED
+BoundedAtomicIncDec=PASSED
+FlatGlobalAtomicFamily=PASSED
+PartialThreadGroups=PASSED
+AtomicCompatHelperHash=4456dafc25323127bf996dccd5b943eb2298282612b0cc1681db2e0078e6cf4d
+src\SharpEmu.ShaderCompiler\Gen5ShaderTranslator.cs=e4dfd261652d4130c3e42ce9f030dc4bb4c5bf00a87f18dc5d1fcc3fd6043453
+src\SharpEmu.ShaderCompiler.Vulkan\Gen5SpirvTranslator.cs=56f2efe6caf2e79666350dd14fd70032b1eda87080fb5c8606cf4ccd27b20de0
+src\SharpEmu.Libs\Agc\AgcExports.cs=fd01dca4bdbe72ff88a770b3660b58ba159d1d95a4be0c40fbbb2b4406c6a25d

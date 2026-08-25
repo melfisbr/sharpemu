@@ -1,0 +1,8 @@
+﻿Tag=V76.2.4.6-BINK-GUEST-YUV-INTEGER-SAMPLER-SPLITPATH-COMPLETE-GUARD
+Target=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_2_4_1_BinkGuestYuvIntegerSamplerFix_ValidatorPathFix_SAFE
+Runner=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_2_4_1_BinkGuestYuvIntegerSamplerFix_ValidatorPathFix_SAFE\RUN_2_PATCH_AND_REVALIDATE_V76_2_4.cmd
+PowerShellScripts=2
+RawSplitPathCommands=3
+AlreadyGuardedScripts=0
+Strategy=AST-command-name-rewrite-plus-safe-wrapper
+TargetSourceMutation=none-at-precheck

@@ -1,0 +1,45 @@
+V118.0.1 STATIC / HARNESS VALIDATION
+====================================
+windows_powershell_5_1_alias_collision_fix=PASS
+one_letter_transform_helpers=0
+Replace-OnceV1180=PASS
+Normalize-NewlinesV1180=PASS
+Write-Utf8NoBomV1180=PASS
+source_feature_logic_changed_vs_v1180=0
+
+ORIGINAL V118.0 SOURCE TRANSFORM VALIDATION
+------------------------------------------
+V118.0 STATIC TRANSFORM VALIDATION
+==================================
+v1180_transforms=15
+anchor_compute-address-pass=1
+anchor_compute-fast-insert=1
+anchor_compute-resident-fastpath=1
+anchor_compute-resident-module-lifetime=1
+anchor_draw-resources-address-param=1
+anchor_graphics-fast-insert=1
+anchor_graphics-resident-fastpath=1
+anchor_graphics-resident-module-lifetime=1
+anchor_offscreen-address-pass=1
+anchor_pipeline-address-pass=1
+anchor_resident-envelope=1
+anchor_resident-fields=1
+anchor_resident-helper=1
+anchor_resident-shutdown=1
+anchor_resident-types=1
+v11716_descriptor_cache_included=PASS
+exact_spirv_sequence_guard=PASS
+same_guest_address_content_change_creates_new_version=PASS
+resident_shader_module_immutable=PASS
+resident_shader_destroy_after_device_idle_and_pipeline_destroy=PASS
+canonical_pipeline_cache_remains_owner=PASS
+direct_compute_pipeline_map=PASS
+direct_graphics_pipeline_map=PASS
+resident_helper_command_recording=0
+vkimage_change=0
+texture_lifetime_change=0
+buffer_content_change=0
+queue_change=0
+submit_change=0
+barrier_change=0
+dual_physical_queue=0

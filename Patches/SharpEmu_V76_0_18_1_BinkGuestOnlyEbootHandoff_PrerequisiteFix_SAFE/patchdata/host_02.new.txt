@@ -1,0 +1,9 @@
+    private static bool AttachRadNativeMovieLocked(
+        string hostPath)
+    {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
+        if (!TryOpenPreferredNativeRadDecoderV75045(

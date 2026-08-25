@@ -1,6 +1,0 @@
-﻿root_top_level_guest_handle=0 by RunTopLevelGuestEntryStub baseline
-KernelPthreadState=root raw worker already owns stable synthetic pthread identity
-V1.8.38=recovers that identity only inside pthread identity/TLS import hotpath
-GuestThreadExecution.CurrentGuestThreadHandle=not overwritten by V1.8.38
-APR/join root waits=remain host fallback; scheduler ownership semantics preserved
-mutex_import_hotpath=remains OFF in diagnostic and external identity recovery is not attempted for mutex kind

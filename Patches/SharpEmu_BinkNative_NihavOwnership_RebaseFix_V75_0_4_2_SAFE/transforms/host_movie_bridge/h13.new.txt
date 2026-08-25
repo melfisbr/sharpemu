@@ -1,0 +1,9 @@
+
+
+
+        var completionMode = ResolveMode();
+        if ((completionMode != MovieMode.Rad &&
+             completionMode != MovieMode.NativeRad) ||
+            !string.Equals(
+
+                Path.GetFileName(hostPath),

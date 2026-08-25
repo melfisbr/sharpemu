@@ -1,0 +1,16 @@
+            var presentSignalSemaphoresV1131 = stackalloc VkSemaphore[2];
+            var presentSignalValuesV1131 = stackalloc ulong[2];
+            ulong presentGraphicsSignalValueV1131 = 0;
+            ulong presentComputeWaitValueV1131 = 0;
+            var presentCrossQueueSyncV7615 = ResolvePresentCrossQueueWaitV7615(
+                translatedResources,
+                presentedGuestImage);
+            if (_dualPhysicalQueueEnabledV1131)
+            {
+                presentComputeWaitValueV1131 =
+                    presentCrossQueueSyncV7615.HasTrackedAccess
+                        ? presentCrossQueueSyncV7615.WaitValue
+                        : _computeQueueSignalValueV1131;
+                presentGraphicsSignalValueV1131 = ++_graphicsQueueSignalValueV1131;
+
+                presentWaitSemaphoresV1131[0] = imageAvailable;

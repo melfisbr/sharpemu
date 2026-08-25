@@ -1,7 +1,0 @@
-V74.0.67.2.10.2
-
-The scene-source gate is solved. Current runtime reaches a correct temporal input tuple but NativeVulkanUpscaler initialization returns false, after which the compact telemetry only says provider=0/caps=0x0.
-
-The old managed ABI did not consume sharpemu_vk_upscaler_get_last_error even though the V2.8 provider exports it. It also latched _upscalerInitAttempted after a failed initialization and would not retry a later correct pre-composite output size when _nativeUpscaler was null.
-
-V2.10 captures native last-error and permits exactly a size-change retry, never an unbounded same-size retry. It also rebuilds/redeploys the known provider to eliminate stale DLL uncertainty.

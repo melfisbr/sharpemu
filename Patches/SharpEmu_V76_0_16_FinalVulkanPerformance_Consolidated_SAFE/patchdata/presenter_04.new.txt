@@ -1,0 +1,17 @@
+                return PresentModeKHR.FifoKhr;
+            }
+
+            var availableModesV7616 =
+                new ReadOnlySpan<PresentModeKHR>(modes, checked((int)modeCount));
+            var selectedModeV7616 = VulkanPresentPolicyV7616.Select(
+                availableModesV7616,
+                _videoOptions.VSync,
+                RequestedDlssFrameGeneration(),
+                out var presentReasonV7616);
+            Console.Error.WriteLine(
+                $"[V76.0.16][PRESENT_MODE] mode={selectedModeV7616} " +
+                $"reason={presentReasonV7616} vsync={(_videoOptions.VSync ? 1 : 0)}");
+            return selectedModeV7616;
+        }
+
+        private void CreateCommandResources()

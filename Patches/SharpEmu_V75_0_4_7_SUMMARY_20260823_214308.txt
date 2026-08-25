@@ -1,0 +1,12 @@
+﻿SharpEmu V75.0.4.5 summary
+========================
+Exit=0
+FfmpegRuntimeInitialized=False
+FfmpegBridgeAttached=False
+FirstVisibleFrame=False
+FfmpegOpenException=False
+FfmpegOpenFailed=False
+NihavAttached=False
+NihavReady=False
+ExternalRadFallbackUsed=False
+RadRequiredMissing=False

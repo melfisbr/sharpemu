@@ -1,4 +1,0 @@
-V74.0.86 fixes three concrete regressions found in the latest character-creation test:
-1) visible host IME window instead of hidden/non-interactive child;
-2) RUN_5 no longer writes to PowerShell automatic $Error and uses the correct version regex;
-3) Demon's Souls DCC metadata alias final selection must have the exact requested Vulkan format, including V80 provenance-recovery results.

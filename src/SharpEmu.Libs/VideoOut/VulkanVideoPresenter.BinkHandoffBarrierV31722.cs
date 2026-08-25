@@ -44,15 +44,8 @@ internal static unsafe partial class VulkanVideoPresenter
         string movieName)
     {
         var fileName = Path.GetFileName(movieName ?? string.Empty);
-        if (!string.Equals(
-                fileName,
-                "ps_studios_logo.bk2",
-                StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
-                Environment.GetEnvironmentVariable(
-                    "SHARPEMU_POST_STUDIOS_FRESH_FRAME_BARRIER"),
-                "0",
-                StringComparison.Ordinal))
+        // V76.1.7: attract/intro/logo family
+        if (!SharpEmu.Libs.Media.BinkHandoffMoviesV7617.ShouldArm(fileName))
         {
             return;
         }

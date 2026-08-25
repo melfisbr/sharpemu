@@ -1,0 +1,2 @@
+﻿RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+Error=V76 baseline helper mismatch: src\SharpEmu.Libs\VideoOut\VulkanVideoPresenter.BinkGuestYuvV7612.cs expected=cb264d09b0bb665e1bad0cf54d0d74efab14b92205871e0c671c447c81d9b0b0 actual=58b1ad2800662e20ff29b7c69eadba6d868463880c81872ebcb28608e59c66e5

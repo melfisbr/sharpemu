@@ -1,0 +1,10 @@
+﻿{
+    "Version":  "75.0.4.5",
+    "Timestamp":  "20260823_213539",
+    "RepositoryRoot":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu",
+    "Backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V75_0_4_5_BACKUP_20260823_213539.zip",
+    "ChangedSourceFiles":  3,
+    "Backend":  "ffmpeg-core-inprocess",
+    "NihavFallback":  false,
+    "GitMutation":  false
+}

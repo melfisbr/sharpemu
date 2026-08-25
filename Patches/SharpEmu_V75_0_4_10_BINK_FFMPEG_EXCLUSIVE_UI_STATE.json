@@ -1,0 +1,14 @@
+﻿{
+    "Version":  "75.0.4.10",
+    "Timestamp":  "20260824_083324",
+    "RepositoryRoot":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu",
+    "Backup":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V75_0_4_10_BACKUP_20260824_083324.zip",
+    "ChangedSourceFiles":  1,
+    "Backend":  "ffmpeg-core-inprocess",
+    "UiBinks":  "ffmpeg-core-inprocess",
+    "PostStudiosHandoff":  "fresh-guest-frame",
+    "PsStudiosGuestExecution":  "live-passthrough",
+    "ExternalRadNormalRoute":  false,
+    "NihavNormalRoute":  false,
+    "GitMutation":  false
+}

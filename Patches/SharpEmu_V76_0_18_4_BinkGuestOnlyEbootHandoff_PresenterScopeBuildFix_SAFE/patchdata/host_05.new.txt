@@ -1,0 +1,8 @@
+    private static bool AttachFfmpegMovieLocked(string hostPath)
+    {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
+        if (!FfmpegVideoDecoder.TryOpen(

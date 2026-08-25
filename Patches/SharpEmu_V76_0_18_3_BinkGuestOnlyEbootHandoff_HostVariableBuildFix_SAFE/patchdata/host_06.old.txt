@@ -1,0 +1,3 @@
+        completionShim = default;
+
+        if (BinkGuestOwnedRuntimeV7600.Enabled)

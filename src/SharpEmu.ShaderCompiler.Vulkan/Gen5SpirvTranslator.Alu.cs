@@ -32,7 +32,14 @@ public static partial class Gen5SpirvTranslator
             if (instruction.Control is Gen5DppControl dppControl &&
                 !IsSupportedDppControl(dppControl.Control))
             {
-                error = $"unsupported DPP16 control 0x{dppControl.Control:X3}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported DPP16 control 0x{dppControl.Control:X3}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -54,7 +61,7 @@ public static partial class Gen5SpirvTranslator
                 var value = GetRawSource(instruction, 0);
                 if (_subgroupInvocationIdInput != 0)
                 {
-                    if (_emulateWave64)
+                    if (_emulateWave64 || _multiWave64Bridge)
                     {
                         value = BroadcastFirstWave64Active(value);
                     }
@@ -119,11 +126,15 @@ public static partial class Gen5SpirvTranslator
                     // Per-lane: if current lane == src1, write src0, else keep old value.
                     var oldValue = LoadV(destination);
                     var src0 = GetRawSource(instruction, 0);
-                    var laneSelect = GetRawSource(instruction, 1);
+                    var laneMask = _waveLaneCount == 64 ? UInt(63) : UInt(31);
+                    var laneSelect = BitwiseAnd(
+                        GetRawSource(instruction, 1),
+                        laneMask);
+                    // V76.0.4: V_WRITELANE_B32 addresses the logical guest
+                    // wave lane. SubgroupLocalInvocationId wraps at 32 on
+                    // NVIDIA, so using it made guest lanes 32..63 alias 0..31.
                     var currentLane = _subgroupInvocationIdInput != 0
-                        ? BitwiseAnd(
-                            Load(_uintType, _subgroupInvocationIdInput),
-                            UInt(RdnaWaveLaneCount - 1))
+                        ? GuestWaveLane()
                         : UInt(0);
                     var isTargetLane = _module.AddInstruction(
                         SpirvOp.IEqual,
@@ -1162,7 +1173,41 @@ public static partial class Gen5SpirvTranslator
 
                     break;
                 default:
-                    error = $"unsupported vector opcode {instruction.Opcode}";
+                    if (TryEmitExtraVectorOpcodeV7621(
+                            instruction,
+                            destination,
+                            out result,
+                            out error))
+                    {
+                        break;
+                    }
+
+                    if (TryEmitExtraVectorOpcodeV7620(
+                            instruction,
+                            destination,
+                            out result,
+                            out error))
+                    {
+                        break;
+                    }
+
+                    if (TryEmitExtraVectorOpcodeV7619(
+                            instruction,
+                            destination,
+                            out result,
+                            out error))
+                    {
+                        break;
+                    }
+
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported vector opcode {instruction.Opcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
                     return false;
             }
 
@@ -1850,7 +1895,7 @@ public static partial class Gen5SpirvTranslator
                     "VCmpNgtF32" or "VCmpxNgtF32" => SpirvOp.FUnordLessThanEqual,
                     "VCmpNgeF32" or "VCmpxNgeF32" => SpirvOp.FUnordLessThan,
                     "VCmpNlgF32" or "VCmpxNlgF32" => SpirvOp.FUnordEqual,
-                    _ => SpirvOp.Nop,
+                    _ => MapExtraFloatCompareV7617(opcode),
                 };
                 if (operation == SpirvOp.Nop)
                 {
@@ -1885,7 +1930,7 @@ public static partial class Gen5SpirvTranslator
                     "VCmpLeU32" or "VCmpxLeU32" => SpirvOp.ULessThanEqual,
                     "VCmpGtU32" or "VCmpxGtU32" => SpirvOp.UGreaterThan,
                     "VCmpGeU32" or "VCmpxGeU32" => SpirvOp.UGreaterThanEqual,
-                    _ => SpirvOp.Nop,
+                    _ => MapExtraIntegerCompareV7617(opcode),
                 };
                 if (operation == SpirvOp.Nop)
                 {
@@ -1992,7 +2037,14 @@ public static partial class Gen5SpirvTranslator
                 };
                 if (value == 0)
                 {
-                    error = $"unsupported scalar immediate {instruction.Opcode}";
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported scalar immediate {instruction.Opcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
                     return false;
                 }
 
@@ -2052,7 +2104,14 @@ public static partial class Gen5SpirvTranslator
                 };
                 if (newExec == 0)
                 {
-                    error = $"unsupported scalar 32-bit saveexec opcode {instruction.Opcode}";
+                    if (TrySoftFailInstruction(
+                            instruction,
+                            $"unsupported scalar 32-bit saveexec opcode {instruction.Opcode}",
+                            out error))
+                    {
+                        return true;
+                    }
+
                     return false;
                 }
 
@@ -2499,7 +2558,14 @@ public static partial class Gen5SpirvTranslator
                                 BitwiseAnd(right, UInt(0xFFFF0000)));
                             break;
                         default:
-                            error = $"unsupported scalar opcode {instruction.Opcode}";
+                            if (TrySoftFailInstruction(
+                                    instruction,
+                                    $"unsupported scalar opcode {instruction.Opcode}",
+                                    out error))
+                            {
+                                return true;
+                            }
+
                             return false;
                     }
 
@@ -2557,7 +2623,14 @@ public static partial class Gen5SpirvTranslator
             };
             if (operation == SpirvOp.Nop)
             {
-                error = $"unsupported scalar compare {instruction.Opcode}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported scalar compare {instruction.Opcode}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -2596,7 +2669,14 @@ public static partial class Gen5SpirvTranslator
             };
             if (operation == SpirvOp.Nop)
             {
-                error = $"unsupported scalar immediate compare {instruction.Opcode}";
+                if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported scalar immediate compare {instruction.Opcode}",
+                        out error))
+                {
+                    return true;
+                }
+
                 return false;
             }
 
@@ -2946,7 +3026,14 @@ public static partial class Gen5SpirvTranslator
                 };
                 if (value == 0)
                 {
-                    error = $"unsupported scalar 64-bit opcode {instruction.Opcode}";
+                    if (TrySoftFailInstruction(
+                        instruction,
+                        $"unsupported scalar 64-bit opcode {instruction.Opcode}",
+                        out error))
+                    {
+                        return true;
+                    }
+
                     return false;
                 }
             }
@@ -3249,13 +3336,7 @@ public static partial class Gen5SpirvTranslator
         }
 
         private static bool IsSupportedDppControl(uint control) =>
-            control <= 0xFF ||
-            control is >= 0x101 and <= 0x10F or
-                >= 0x111 and <= 0x11F or
-                >= 0x121 and <= 0x12F or
-                0x140 or 0x141 or
-                >= 0x150 and <= 0x15F or
-                >= 0x160 and <= 0x16F;
+            IsSupportedDppControlV7617(control);
 
         private void GetDppSourceLane(
             Gen5DppControl control,
@@ -3354,7 +3435,7 @@ public static partial class Gen5SpirvTranslator
 
         private uint IsDppWriteEnabled(Gen5DppControl control)
         {
-            GetDppSourceLane(control, out _, out var inRange);
+            GetDppSourceLane(control, out var targetLane, out var inRange);
             var lane = GuestWaveLane();
             var row = ShiftRightLogical(lane, UInt(4));
             var bank = BitwiseAnd(lane, UInt(3));
@@ -3364,9 +3445,52 @@ public static partial class Gen5SpirvTranslator
             var bankEnabled = IsNotZero(BitwiseAnd(
                 UInt(control.BankMask),
                 ShiftLeftLogical(UInt(1), bank)));
-            var sourceAllowsWrite = control.BoundControl
-                ? _module.ConstantBool(true)
-                : inRange;
+            uint sourceAllowsWrite;
+            if (control.BoundControl)
+            {
+                // DPP_BOUND_ZERO: invalid/out-of-range or inactive sources
+                // still execute the destination write; ApplyDppSource supplies
+                // zero when the source itself is unavailable.
+                sourceAllowsWrite = _module.ConstantBool(true);
+            }
+            else if (control.FetchInactive)
+            {
+                // FI ignores EXEC inactivity, but it cannot make an
+                // out-of-range lane valid.  BOUND_OFF suppresses that write.
+                sourceAllowsWrite = inRange;
+            }
+            else
+            {
+                // DPP_BOUND_OFF + FI=0: an inactive source lane disables the
+                // write instead of writing zero.  Preserve VDST by feeding this
+                // predicate into the existing destination select above.
+                var safeTarget = _module.AddInstruction(
+                    SpirvOp.Select,
+                    _uintType,
+                    inRange,
+                    targetLane,
+                    lane);
+                safeTarget = BitwiseAnd(safeTarget, UInt(31));
+                var activeWord = _module.AddInstruction(
+                    SpirvOp.Select,
+                    _uintType,
+                    Load(_boolType, _exec),
+                    UInt(1),
+                    UInt(0));
+                var sourceActive = IsNotZero(
+                    _module.AddInstruction(
+                        SpirvOp.GroupNonUniformShuffle,
+                        _uintType,
+                        UInt(3),
+                        activeWord,
+                        safeTarget));
+                sourceAllowsWrite = _module.AddInstruction(
+                    SpirvOp.LogicalAnd,
+                    _boolType,
+                    inRange,
+                    sourceActive);
+            }
+
             return _module.AddInstruction(
                 SpirvOp.LogicalAnd,
                 _boolType,
@@ -3826,6 +3950,37 @@ public static partial class Gen5SpirvTranslator
 
         private uint BroadcastFirstWave64Active(uint value)
         {
+            if (_multiWave64Bridge)
+            {
+                var multiWaveActiveMask = BooleanToWaveMask(Load(_boolType, _exec));
+                var multiWaveLowMask = _module.AddInstruction(
+                    SpirvOp.UConvert,
+                    _uintType,
+                    multiWaveActiveMask);
+                var multiWaveHighMask = _module.AddInstruction(
+                    SpirvOp.UConvert,
+                    _uintType,
+                    ShiftRightLogical64(
+                        multiWaveActiveMask,
+                        _module.Constant64(_ulongType, 32)));
+                var multiWaveHasLow = IsNotZero(multiWaveLowMask);
+                var multiWaveHasHigh = IsNotZero(multiWaveHighMask);
+                var multiWaveFirstLow = Ext(73, _uintType, multiWaveLowMask);
+                var multiWaveFirstHigh = IAdd(UInt(32), Ext(73, _uintType, multiWaveHighMask));
+                var multiWaveFirstLane = _module.AddInstruction(
+                    SpirvOp.Select,
+                    _uintType,
+                    multiWaveHasLow,
+                    multiWaveFirstLow,
+                    _module.AddInstruction(
+                        SpirvOp.Select,
+                        _uintType,
+                        multiWaveHasHigh,
+                        multiWaveFirstHigh,
+                        UInt(0)));
+                return BroadcastGuestWaveLaneV7604(value, multiWaveFirstLane);
+            }
+
             var lane = GuestWaveLane();
             EmitConditional(
                 _module.AddInstruction(
@@ -3917,10 +4072,46 @@ public static partial class Gen5SpirvTranslator
             var destination = instruction.Destinations[0].Value;
             var src0 = GetRawSource(instruction, 0);
 
-            if (_subgroupInvocationIdInput != 0)
+            if (_multiWave64Bridge && _wave64ReadlaneScratch != 0)
             {
-                // sdst = vsrc0[lane(src1)] — broadcast from the specified lane.
-                var laneSelect = GetRawSource(instruction, 1);
+                // V76.0.4: publish one selected VGPR value per logical guest
+                // wave and rendezvous only the native subgroup fragments that
+                // belong to that wave. This remains valid for 128/256/512/1024
+                // invocation workgroups where a Workgroup barrier would mix
+                // unrelated PS5 waves or deadlock under divergent scalar flow.
+                var laneSelect = BitwiseAnd(
+                    GetRawSource(instruction, 1),
+                    UInt(63));
+                var broadcast = BroadcastGuestWaveLaneV7604(src0, laneSelect);
+                StoreS(destination, broadcast);
+            }
+            else if (_emulateWave64 && _waveLaneScratch != 0)
+            {
+                // V76.0.3: V_READLANE_B32 is a guest-wave operation, not a
+                // native-host-subgroup operation. On NVIDIA a PS5 wave64 is
+                // represented by two 32-lane Vulkan subgroups. A direct
+                // OpGroupNonUniformBroadcast cannot cross that boundary, so
+                // publish all 64 VGPR lane values to workgroup scratch and
+                // read the requested guest lane after a rendezvous.
+                Store(WaveLaneScratchPointer(GuestWaveLane()), src0);
+                EmitWave64Barrier();
+                var laneSelect = BitwiseAnd(
+                    GetRawSource(instruction, 1),
+                    UInt(63));
+                var broadcast = Load(
+                    _uintType,
+                    WaveLaneScratchPointer(laneSelect));
+                EmitWave64Barrier();
+                StoreS(destination, broadcast);
+            }
+            else if (_subgroupInvocationIdInput != 0)
+            {
+                // Native wave32 / native-compatible path. Masking to the guest
+                // wave width also prevents invalid subgroup lane IDs.
+                var laneMask = _waveLaneCount == 64 ? UInt(63) : UInt(31);
+                var laneSelect = BitwiseAnd(
+                    GetRawSource(instruction, 1),
+                    laneMask);
                 var broadcast = _module.AddInstruction(
                     SpirvOp.GroupNonUniformBroadcast,
                     _uintType,
@@ -3996,6 +4187,13 @@ public static partial class Gen5SpirvTranslator
                 UInt(3),
                 value,
                 targetLane);
+            // GFX10 PERMLANE overloads OP_SEL[0:1] as DPP FI/BOUND_CTRL.
+            // FI=1 fetches an inactive source lane anyway.  With FI=0, an
+            // inactive source is resolved by BOUND_CTRL: BC=1 supplies zero,
+            // while BC=0 disables the destination write and therefore keeps
+            // VDST's pre-instruction value.  The old lowering always supplied
+            // zero here, corrupting saveexec/permlanex sequences used by the
+            // guest Bink compute path.
             var fetchInactive = (control.OperandSelect & 1) != 0;
             if (fetchInactive)
             {
@@ -4015,12 +4213,16 @@ public static partial class Gen5SpirvTranslator
                     UInt(3),
                     activeWord,
                     targetLane));
+            var boundControl = (control.OperandSelect & 2) != 0;
+            var inactiveValue = boundControl
+                ? UInt(0)
+                : LoadV(instruction.Destinations[0].Value);
             return _module.AddInstruction(
                 SpirvOp.Select,
                 _uintType,
                 sourceActive,
                 shuffled,
-                UInt(0));
+                inactiveValue);
         }
 
         private uint EmitFloatResult(

@@ -1,0 +1,7 @@
+            var size = Math.Max(
+                requestedSize,
+                (ulong)sizeof(uint));
+            var capacity = VulkanBufferCapacityPolicyV7614.Round(size);
+            var key = new VulkanHostBufferPoolKey(
+                usage,
+                capacity,

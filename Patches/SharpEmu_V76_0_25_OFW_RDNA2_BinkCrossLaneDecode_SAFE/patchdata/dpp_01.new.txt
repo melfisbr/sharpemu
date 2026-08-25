@@ -1,0 +1,11 @@
+        // V76.0.25: advertise only DPP16 controls that the RDNA2 lowering
+        // below actually implements. Reserved values previously fell through to
+        // src=self, silently corrupting cross-lane reductions instead of failing.
+        private static bool IsSupportedDppControlV7617(uint control) =>
+            control <= 0xFF ||
+            control is >= 0x101 and <= 0x10F or
+                >= 0x111 and <= 0x11F or
+                >= 0x121 and <= 0x12F or
+                0x140 or 0x141 or
+                >= 0x150 and <= 0x15F or
+                >= 0x160 and <= 0x16F;

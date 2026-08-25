@@ -1,0 +1,3 @@
+    internal const string Marker = "V76.0.2_GUEST_BINK2_EXACT_YUV_PRODUCER";
+    internal const string GuestOnlyMarkerV7618 =
+        "V76.0.18_BINK2_HARD_GUEST_ONLY_EBOOT_HANDOFF";

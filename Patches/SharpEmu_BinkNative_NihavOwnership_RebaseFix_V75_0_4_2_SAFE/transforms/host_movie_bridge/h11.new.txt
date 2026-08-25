@@ -1,0 +1,7 @@
+        _radPlayback?.Dispose();
+        _radPlayback = null;
+
+        Volatile.Write(ref _nativeRadExclusiveOwnerActiveV75041, 0);
+        _activePath = null;
+        _activeInfo = default;
+        _frameBuffer = null;

@@ -1,0 +1,23 @@
+            if (memoryOpcode is "GlobalAtomicAdd" or "GlobalAtomicUMax")
+            {
+                EmitExecConditional(() =>
+                {
+                    EmitConditional(IsBufferWordInRange(bindingIndex, dwordAddress), () =>
+                    {
+                        var original = _module.AddInstruction(
+                            memoryOpcode == "GlobalAtomicAdd"
+                                ? SpirvOp.AtomicIAdd
+                                : SpirvOp.AtomicUMax,
+                            _uintType,
+                            BufferWordPointer(bindingIndex, dwordAddress),
+                            UInt(1),
+                            UInt(0x48),
+                            LoadV(control.VectorData));
+                        if (control.Glc)
+                        {
+                            StoreV(control.VectorData, original);
+                        }
+                    });
+                });
+                return true;
+            }

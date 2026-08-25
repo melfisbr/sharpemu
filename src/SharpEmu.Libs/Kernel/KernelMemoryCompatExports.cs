@@ -1,9 +1,10 @@
-﻿// Copyright (C) 2026 SharpEmu Emulator Project
+// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
 using SharpEmu.Libs.Ampr;
 using SharpEmu.Libs.Media;
+using SharpEmu.Libs.Gpu; // SHARPEMU_V74_0_117_8_HLE_MEMCPY_FALLBACK_PROVENANCE
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
@@ -52,6 +53,11 @@ public static partial class KernelMemoryCompatExports
 
     private static string ApplyForceBinkIntroOnce(string guestPath, string resolvedHostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return resolvedHostPath;
+        }
+
         if (!string.Equals(
                 Environment.GetEnvironmentVariable("SHARPEMU_FORCE_BINK_INTRO_ONCE"),
                 "1",
@@ -316,6 +322,59 @@ public static partial class KernelMemoryCompatExports
     private static void ReleaseOpenFileStreamV59(FileStream stream) =>
         Monitor.Exit(stream);
 
+    // SHARPEMU_V74_0_95_PARALLEL_PREAD_HANDLE_LEASE
+    // Positioned I/O does not mutate FileStream.Position, so serializing every
+    // sceKernelPread on Monitor(stream) blocks independent asset workers. A
+    // per-fd reader/writer gate permits parallel positioned reads while close()
+    // takes the writer side before it removes/disposes the underlying stream.
+    private static readonly Dictionary<int, ReaderWriterLockSlim>
+        _positionedReadGatesV74095 = new();
+
+    private static bool TryAcquirePositionedFileHandleV74095(
+        int fd,
+        out Microsoft.Win32.SafeHandles.SafeFileHandle? handle,
+        out ReaderWriterLockSlim? gate,
+        out string path)
+    {
+        handle = null;
+        gate = null;
+        path = string.Empty;
+        lock (_fdGate)
+        {
+            if (!_openFiles.TryGetValue(fd, out var stream) || stream is null)
+            {
+                return false;
+            }
+
+            if (!_positionedReadGatesV74095.TryGetValue(fd, out gate))
+            {
+                gate = new ReaderWriterLockSlim(
+                    LockRecursionPolicy.NoRecursion);
+                _positionedReadGatesV74095.Add(fd, gate);
+            }
+
+            gate.EnterReadLock();
+            try
+            {
+                handle = stream.SafeFileHandle;
+                path = stream.Name;
+                return true;
+            }
+            catch
+            {
+                gate.ExitReadLock();
+                gate = null;
+                handle = null;
+                path = string.Empty;
+                throw;
+            }
+        }
+    }
+
+    private static void ReleasePositionedFileHandleV74095(
+        ReaderWriterLockSlim gate) =>
+        gate.ExitReadLock();
+
     internal static int KernelPreadAtV59(
         CpuContext ctx,
         int fd,
@@ -336,7 +395,10 @@ public static partial class KernelMemoryCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_OK;
         }
 
-        if (!TryAcquireOpenFileStreamV59(fd, out var stream) || stream is null)
+        if (!TryAcquirePositionedFileHandleV74095(
+                fd, out var handle, out var positionedGate, out var path) ||
+            handle is null ||
+            positionedGate is null)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
         }
@@ -345,7 +407,7 @@ public static partial class KernelMemoryCompatExports
         {
             var buffer = GetKernelReadScratchV1821(requested);
             var read = RandomAccess.Read(
-                stream.SafeFileHandle,
+                handle,
                 buffer.AsSpan(0, requested),
                 offset);
 
@@ -357,8 +419,8 @@ public static partial class KernelMemoryCompatExports
 
             LogIoTrace(
                 "pread",
-                stream.Name,
-                $"fd={fd} offset={offset} req={requested} read={read}");
+                path,
+                $"fd={fd} offset={offset} req={requested} read={read} v95_parallel=1");
 
             ctx[CpuRegister.Rax] = unchecked((ulong)read);
             return (int)OrbisGen2Result.ORBIS_GEN2_OK;
@@ -367,13 +429,13 @@ public static partial class KernelMemoryCompatExports
         {
             LogIoTrace(
                 "pread",
-                stream.Name,
+                path,
                 $"fd={fd} offset={offset} req={requested} result=io_error ex={ex.Message}");
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
         finally
         {
-            ReleaseOpenFileStreamV59(stream);
+            ReleasePositionedFileHandleV74095(positionedGate);
         }
     }
 
@@ -689,7 +751,14 @@ public static partial class KernelMemoryCompatExports
         LibraryName = "libc")]
     public static int Strlen(CpuContext ctx)
     {
-        if (!TryReadCString(ctx, ctx[CpuRegister.Rdi], 1_048_576, out var bytes))
+        var addressV91 = ctx[CpuRegister.Rdi];
+        if (TryReadCStringLengthFastV91(ctx.Memory, addressV91, 1_048_576, out var lengthV91))
+        {
+            ctx[CpuRegister.Rax] = lengthV91;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
+        if (!TryReadCString(ctx, addressV91, 1_048_576, out var bytes))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
@@ -705,8 +774,15 @@ public static partial class KernelMemoryCompatExports
         LibraryName = "libc")]
     public static int Strnlen(CpuContext ctx)
     {
+        var addressV91 = ctx[CpuRegister.Rdi];
         var maxLength = ctx[CpuRegister.Rsi];
-        if (!TryReadCString(ctx, ctx[CpuRegister.Rdi], maxLength, out var bytes))
+        if (TryReadCStringLengthFastV91(ctx.Memory, addressV91, maxLength, out var lengthV91))
+        {
+            ctx[CpuRegister.Rax] = lengthV91;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
+        if (!TryReadCString(ctx, addressV91, maxLength, out var bytes))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
@@ -770,7 +846,8 @@ public static partial class KernelMemoryCompatExports
     {
         var left = ctx[CpuRegister.Rdi];
         var right = ctx[CpuRegister.Rsi];
-        if (!TryCompareStrings(ctx, left, right, limit: ulong.MaxValue, out var compare))
+        if (!TryCompareStringsFastV91(ctx.Memory, left, right, ulong.MaxValue, out var compare) &&
+            !TryCompareStrings(ctx, left, right, limit: ulong.MaxValue, out compare))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
@@ -869,7 +946,8 @@ public static partial class KernelMemoryCompatExports
         var left = ctx[CpuRegister.Rdi];
         var right = ctx[CpuRegister.Rsi];
         var limit = ctx[CpuRegister.Rdx];
-        if (!TryCompareStrings(ctx, left, right, limit, out var compare))
+        if (!TryCompareStringsFastV91(ctx.Memory, left, right, limit, out var compare) &&
+            !TryCompareStrings(ctx, left, right, limit, out compare))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
         }
@@ -1364,6 +1442,15 @@ public static partial class KernelMemoryCompatExports
             {
                 return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
             }
+
+            // SHARPEMU_V74_0_117_8_HLE_MEMCPY_FALLBACK_PROVENANCE
+            // The normal PhysicalVirtualMemory.TryCopy path propagates itself.
+            // Only the managed fallback needs this second hook.
+            GuestResourceProvenance.PropagateCopy(
+                source,
+                destination,
+                (ulong)count,
+                "hle-memcpy-fallback");
         }
 
         ctx[CpuRegister.Rax] = destination;
@@ -1614,12 +1701,19 @@ public static partial class KernelMemoryCompatExports
     {
         var left = ctx[CpuRegister.Rdi];
         var right = ctx[CpuRegister.Rsi];
-        var count = (int)Math.Min(ctx[CpuRegister.Rdx], int.MaxValue);
-        if (count < 0)
+        var countRawV91 = ctx[CpuRegister.Rdx];
+        if (countRawV91 > (ulong)int.MaxValue)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
+        if (TryMemcmpFastV91(ctx.Memory, left, right, countRawV91, out var compareV91))
+        {
+            ctx[CpuRegister.Rax] = unchecked((ulong)compareV91);
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
+        var count = (int)countRawV91;
         Span<byte> leftByte = stackalloc byte[1];
         Span<byte> rightByte = stackalloc byte[1];
         for (var i = 0; i < count; i++)
@@ -1807,12 +1901,25 @@ public static partial class KernelMemoryCompatExports
             // KernelReadUnderscore patches NumFrames=1 and waits on the exact
             // header read until host playback completes.
             HostMovieBridge.BinkGuestCompletionShim binkCompletionShim = default;
-            var observedBinkMovie = false;
-            var useBinkCompletionShim = access == FileAccess.Read &&
-                HostMovieBridge.TryTakeOverGuestMovie(
+            var guestOnlyBinkV7618 =
+                BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath);
+            var observedBinkMovie = guestOnlyBinkV7618;
+            var useBinkCompletionShim = false;
+            if (guestOnlyBinkV7618)
+            {
+                _ = BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
+                Console.Error.WriteLine(
+                    "[BINK-GUEST][V76.0.18][KERNEL-OPEN] " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    "route=guest-file-fd host_takeover=False completion_shim=False");
+            }
+            else if (access == FileAccess.Read)
+            {
+                useBinkCompletionShim = HostMovieBridge.TryTakeOverGuestMovie(
                     hostPath,
                     out binkCompletionShim,
                     out observedBinkMovie);
+            }
             if (hostPath.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase))
             {
                 BinkIntroHarnessTrace.Event(
@@ -1880,6 +1987,15 @@ public static partial class KernelMemoryCompatExports
                 {
                     _observedBinkGuestFiles[fd] = hostPath;
                 }
+            }
+
+            // V76.0.1 guest-owned Bink lifetime. This is observation only:
+            // FileStream remains the normal guest fd and no host decoder is
+            // started. The lifetime signal lets Vulkan temporarily preserve
+            // strict guest compute ordering for the decoder's Y/UV surfaces.
+            if (observedBinkMovie && BinkGuestOwnedRuntimeV7600.Enabled)
+            {
+                BinkGuestOwnedRuntimeV7600.GuestMovieOpened(fd, hostPath);
             }
 
             if (useBinkCompletionShim)
@@ -2085,7 +2201,12 @@ public static partial class KernelMemoryCompatExports
             }
 
             var hostPath = ResolveGuestPath(guestPath);
-            if (!TryGetAprFileSize(hostPath, out var fileSize))
+            if (!TryGetAprFileSize(hostPath, out var fileSize) &&
+                !TryResolveDemonSoulsAprLiteralPercentCgprV108(
+                    guestPath,
+                    hostPath,
+                    out hostPath,
+                    out fileSize))
             {
                 // Stop at the first miss and report its index.
                 // The caller can then use its normal file-open fallback.
@@ -2575,12 +2696,25 @@ public static partial class KernelMemoryCompatExports
         }
 
         FileStream? stream;
+        ReaderWriterLockSlim? positionedGateV74095 = null;
+        var positionedWriteHeldV74095 = false;
         var notifyBinkClose = false;
         string? observedBinkPath = null;
         lock (_fdGate)
         {
-            if (_openFiles.Remove(fd, out stream))
+            if (_openFiles.TryGetValue(fd, out stream) && stream is not null)
             {
+                if (_positionedReadGatesV74095.TryGetValue(
+                        fd, out positionedGateV74095))
+                {
+                    // Hold _fdGate while waiting: new preads cannot enter, while
+                    // existing readers can release without touching _fdGate.
+                    positionedGateV74095.EnterWriteLock();
+                    positionedWriteHeldV74095 = true;
+                }
+
+                _openFiles.Remove(fd);
+                _positionedReadGatesV74095.Remove(fd);
                 _binkGuestCompletionShims.Remove(fd);
                 if (_observedBinkGuestFiles.Remove(fd, out observedBinkPath))
                 {
@@ -2602,14 +2736,31 @@ public static partial class KernelMemoryCompatExports
             }
         }
 
-        if (notifyBinkClose)
+        try
         {
-            HostMovieBridge.NotifyGuestMovieClosed(observedBinkPath!);
-        }
+            if (observedBinkPath is not null && BinkGuestOwnedRuntimeV7600.Enabled)
+            {
+                BinkGuestOwnedRuntimeV7600.GuestMovieClosed(fd, observedBinkPath);
+            }
 
-        lock (stream)
+            if (notifyBinkClose &&
+                !BinkGuestOwnedRuntimeV7600.IsBinkPath(observedBinkPath))
+            {
+                HostMovieBridge.NotifyGuestMovieClosed(observedBinkPath!);
+            }
+
+            lock (stream)
+            {
+                stream.Dispose();
+            }
+        }
+        finally
         {
-            stream.Dispose();
+            if (positionedWriteHeldV74095 && positionedGateV74095 is not null)
+            {
+                positionedGateV74095.ExitWriteLock();
+                positionedGateV74095.Dispose();
+            }
         }
 
         ctx[CpuRegister.Rax] = 0;
@@ -4826,6 +4977,53 @@ public static partial class KernelMemoryCompatExports
     [ThreadStatic]
     private static StringBuilder? _formatBuilder;
 
+    // SHARPEMU_V74_0_111_PRINTF_UPPER_S_WIDE_STRING
+    // FreeBSD/Orbis printf semantics treat %S as the wide-string alias of %ls.
+    // Bluepoint's character resource formatter emits %S_* templates; leaving
+    // the unsupported specifier literal propagates those templates into APR.
+    private static long _v740111PrintfUpperSCount;
+
+    // SHARPEMU_V74_0_114_DS_CHARACTER_CREATION_PHASE
+    // Bluepoint formats concrete character-part stems with BSD %S shortly
+    // before the Character Creation render graph becomes active. Keep this
+    // phase bit so title-specific renderer fixes cannot arm during the
+    // language/title/New Game screens.
+    private static int _v114DsCharacterCreationAssetPhase;
+    private static long _v114DsCharacterCreationAssetPhaseCount;
+
+    public static bool IsDemonSoulsCharacterCreationAssetPhaseV114 =>
+        Volatile.Read(ref _v114DsCharacterCreationAssetPhase) != 0;
+
+    private static void ObserveDemonSoulsCharacterPartTokenV114(string rendered)
+    {
+        if (string.IsNullOrWhiteSpace(rendered) ||
+            !IsConfiguredApplicationTitle("PPSA01341"))
+        {
+            return;
+        }
+
+        var isCharacterPart =
+            rendered.StartsWith("hd_", StringComparison.OrdinalIgnoreCase) ||
+            rendered.StartsWith("bd_", StringComparison.OrdinalIgnoreCase) ||
+            rendered.StartsWith("am_", StringComparison.OrdinalIgnoreCase) ||
+            rendered.StartsWith("lg_", StringComparison.OrdinalIgnoreCase) ||
+            rendered.StartsWith("wp_", StringComparison.OrdinalIgnoreCase);
+        if (!isCharacterPart)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _v114DsCharacterCreationAssetPhase, 1) == 0)
+        {
+            var count = Interlocked.Increment(
+                ref _v114DsCharacterCreationAssetPhaseCount);
+            Console.Error.WriteLine(
+                "[V74.0.114][DS_CHARACTER_CREATION_PHASE] " +
+                $"count={count} token='{rendered}' action=armed " +
+                "source=bsd-printf-upper-s");
+        }
+    }
+
     // printf length modifier collapsed to the widths our conversions care about.
     // Kept as an enum rather than a per-argument substring so the hot format
     // loop avoids a string allocation and string comparisons on every spec.
@@ -5064,24 +5262,64 @@ public static partial class KernelMemoryCompatExports
                     break;
 
                 case 's':
+                case 'S':
                     {
+                        // SHARPEMU_V74_0_111_PRINTF_UPPER_S_WIDE_STRING
+                        // FreeBSD/Orbis %S is equivalent to %ls. Bluepoint uses
+                        // this form while formatting character-part CGPR paths.
+                        var wideString =
+                            specifier == 'S' ||
+                            lengthMod == PrintfLength.Long;
                         var strAddr = argumentSource.NextGpArg();
-                        TracePrintfStringArgument(ctx, lengthMod == PrintfLength.Long ? "l" : "", strAddr);
+                        TracePrintfStringArgument(
+                            ctx,
+                            specifier == 'S' ? "S" : (wideString ? "l" : ""),
+                            strAddr);
                         if (strAddr == 0)
                         {
                             sb.Append("(null)");
                         }
-                        else if (lengthMod == PrintfLength.Long)
+                        else if (wideString)
                         {
                             if (TryReadWideCString(ctx, strAddr, 1_048_576, out var wideUnits))
                             {
                                 var str = DecodeWideUnits(wideUnits);
+                                if (specifier == 'S')
+                                {
+                                    ObserveDemonSoulsCharacterPartTokenV114(str);
+                                    var count = Interlocked.Increment(
+                                        ref _v740111PrintfUpperSCount);
+                                    if (count <= 16 || (count & (count - 1)) == 0)
+                                    {
+                                        var preview = str.Length > 160
+                                            ? str[..160]
+                                            : str;
+                                        preview = preview
+                                            .Replace('\r', ' ')
+                                            .Replace('\n', ' ');
+                                        Console.Error.WriteLine(
+                                            "[V74.0.111][PRINTF_UPPER_S] " +
+                                            $"count={count} ptr=0x{strAddr:X16} " +
+                                            $"rendered='{preview}' semantics=wide-string-alias-of-ls");
+                                    }
+                                }
                                 if (precision >= 0 && str.Length > precision)
                                     str = str.Substring(0, precision);
                                 sb.Append(PadString(str, width, leftAlign, false));
                             }
                             else
                             {
+                                if (specifier == 'S')
+                                {
+                                    var count = Interlocked.Increment(
+                                        ref _v740111PrintfUpperSCount);
+                                    if (count <= 16 || (count & (count - 1)) == 0)
+                                    {
+                                        Console.Error.WriteLine(
+                                            "[V74.0.111][PRINTF_UPPER_S] " +
+                                            $"count={count} ptr=0x{strAddr:X16} result=wide-read-failed");
+                                    }
+                                }
                                 sb.Append("(null)");
                             }
                         }
@@ -6142,6 +6380,201 @@ public static partial class KernelMemoryCompatExports
         }
 
         bytes = writer.WrittenSpan.ToArray();
+        return true;
+    }
+
+    // SHARPEMU_V74_0_91_LIBC_PARSE_FAST_LANE
+    // Allocation-free, page-bounded helpers used both by libc exports and the
+    // native import dispatcher. They use ICpuMemory only; if a read cannot be
+    // satisfied directly the caller falls back to the established compat path.
+    public static bool TryReadCStringLengthFastV91(
+        ICpuMemory memory,
+        ulong address,
+        ulong maxLength,
+        out ulong length)
+    {
+        length = 0;
+        if (address == 0)
+        {
+            return false;
+        }
+
+        var limit = Math.Min(maxLength, 1_048_576UL);
+        if (limit == 0)
+        {
+            return true;
+        }
+
+        Span<byte> scratch = stackalloc byte[256];
+        ulong offset = 0;
+        while (offset < limit)
+        {
+            var current = address + offset;
+            if (current < address)
+            {
+                return false;
+            }
+
+            var pageRemaining = 0x1000UL - (current & 0xFFFUL);
+            var take = (int)Math.Min(
+                (ulong)scratch.Length,
+                Math.Min(limit - offset, pageRemaining));
+            var span = scratch[..take];
+            if (!memory.TryRead(current, span))
+            {
+                return false;
+            }
+
+            var nul = span.IndexOf((byte)0);
+            if (nul >= 0)
+            {
+                length = offset + (ulong)nul;
+                return true;
+            }
+
+            offset += (ulong)take;
+        }
+
+        length = limit;
+        return true;
+    }
+
+    public static bool TryCompareStringsFastV91(
+        ICpuMemory memory,
+        ulong left,
+        ulong right,
+        ulong limit,
+        out int compare)
+    {
+        compare = 0;
+        if (left == 0 || right == 0)
+        {
+            return false;
+        }
+
+        var max = limit == ulong.MaxValue
+            ? 1_048_576UL
+            : Math.Min(limit, 1_048_576UL);
+        if (max == 0 || left == right)
+        {
+            return true;
+        }
+
+        Span<byte> leftScratch = stackalloc byte[256];
+        Span<byte> rightScratch = stackalloc byte[256];
+        ulong offset = 0;
+        while (offset < max)
+        {
+            var leftCurrent = left + offset;
+            var rightCurrent = right + offset;
+            if (leftCurrent < left || rightCurrent < right)
+            {
+                return false;
+            }
+
+            var leftPage = 0x1000UL - (leftCurrent & 0xFFFUL);
+            var rightPage = 0x1000UL - (rightCurrent & 0xFFFUL);
+            var take = (int)Math.Min(
+                (ulong)leftScratch.Length,
+                Math.Min(max - offset, Math.Min(leftPage, rightPage)));
+            var leftSpan = leftScratch[..take];
+            var rightSpan = rightScratch[..take];
+            if (!memory.TryRead(leftCurrent, leftSpan) ||
+                !memory.TryRead(rightCurrent, rightSpan))
+            {
+                return false;
+            }
+
+            if (leftSpan.SequenceEqual(rightSpan))
+            {
+                if (leftSpan.IndexOf((byte)0) >= 0)
+                {
+                    return true;
+                }
+
+                offset += (ulong)take;
+                continue;
+            }
+
+            for (var index = 0; index < take; index++)
+            {
+                var leftByte = leftSpan[index];
+                var rightByte = rightSpan[index];
+                if (leftByte != rightByte)
+                {
+                    compare = leftByte - rightByte;
+                    return true;
+                }
+
+                if (leftByte == 0)
+                {
+                    return true;
+                }
+            }
+
+            offset += (ulong)take;
+        }
+
+        return true;
+    }
+
+    public static bool TryMemcmpFastV91(
+        ICpuMemory memory,
+        ulong left,
+        ulong right,
+        ulong count,
+        out int compare)
+    {
+        compare = 0;
+        if (count == 0 || left == right)
+        {
+            return true;
+        }
+        if (left == 0 || right == 0 || count > (ulong)int.MaxValue)
+        {
+            return false;
+        }
+
+        Span<byte> leftScratch = stackalloc byte[256];
+        Span<byte> rightScratch = stackalloc byte[256];
+        ulong offset = 0;
+        while (offset < count)
+        {
+            var leftCurrent = left + offset;
+            var rightCurrent = right + offset;
+            if (leftCurrent < left || rightCurrent < right)
+            {
+                return false;
+            }
+
+            var leftPage = 0x1000UL - (leftCurrent & 0xFFFUL);
+            var rightPage = 0x1000UL - (rightCurrent & 0xFFFUL);
+            var take = (int)Math.Min(
+                (ulong)leftScratch.Length,
+                Math.Min(count - offset, Math.Min(leftPage, rightPage)));
+            var leftSpan = leftScratch[..take];
+            var rightSpan = rightScratch[..take];
+            if (!memory.TryRead(leftCurrent, leftSpan) ||
+                !memory.TryRead(rightCurrent, rightSpan))
+            {
+                return false;
+            }
+
+            if (!leftSpan.SequenceEqual(rightSpan))
+            {
+                for (var index = 0; index < take; index++)
+                {
+                    if (leftSpan[index] != rightSpan[index])
+                    {
+                        compare = leftSpan[index] - rightSpan[index];
+                        return true;
+                    }
+                }
+            }
+
+            offset += (ulong)take;
+        }
+
         return true;
     }
 
@@ -7860,6 +8293,230 @@ public static partial class KernelMemoryCompatExports
         {
             return false;
         }
+    }
+
+    // SHARPEMU_V74_0_108_DS_APR_LITERAL_PERCENT_CGPR
+    // HostFsPath intentionally percent-encodes generic guest path segments so
+    // collision-free host names remain reversible. Bluepoint's common character
+    // part scripts are an observed exception: their literal filename begins
+    // with "%s_" and Windows permits '%' in the filename. Keep the generic
+    // encoding policy intact; only retry this exact Demon's Souls .cgpr shape
+    // after the encoded APR lookup has failed, and only if the literal host file
+    // actually exists under the verified /app0 root.
+    private static bool TryResolveDemonSoulsAprLiteralPercentCgprV108(
+        string guestPath,
+        string encodedHostPath,
+        out string resolvedHostPath,
+        out ulong fileSize)
+    {
+        resolvedHostPath = encodedHostPath;
+        fileSize = 0;
+        if (string.IsNullOrWhiteSpace(guestPath) ||
+            string.IsNullOrWhiteSpace(encodedHostPath))
+        {
+            return false;
+        }
+
+        var normalizedGuest = guestPath.Replace('\\', '/');
+        var isObservedTemplate =
+            normalizedGuest.EndsWith(".cgpr", StringComparison.OrdinalIgnoreCase) &&
+            (normalizedGuest.Contains(
+                 "/scripts/cp11/parts/_cmn/%s_",
+                 StringComparison.OrdinalIgnoreCase) ||
+             normalizedGuest.Contains(
+                 "/scripts/cp11/weapons/_cmn/%s_",
+                 StringComparison.OrdinalIgnoreCase));
+        if (!isObservedTemplate)
+        {
+            return false;
+        }
+
+        var encodedPercentIndex = encodedHostPath.IndexOf(
+            "%25s_",
+            StringComparison.OrdinalIgnoreCase);
+        if (encodedPercentIndex < 0)
+        {
+            return false;
+        }
+
+        var literalHostPath =
+            encodedHostPath[..encodedPercentIndex] +
+            "%" +
+            encodedHostPath[(encodedPercentIndex + 3)..];
+        var app0Root = ResolveApp0Root();
+        if (string.IsNullOrWhiteSpace(app0Root))
+        {
+            return false;
+        }
+
+        string fullRoot;
+        string fullLiteralPath;
+        try
+        {
+            fullRoot = Path.GetFullPath(app0Root);
+            fullLiteralPath = Path.GetFullPath(literalHostPath);
+        }
+        catch (Exception ex) when (
+            ex is IOException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+
+        var rootWithSeparator =
+            Path.TrimEndingDirectorySeparator(fullRoot) +
+            Path.DirectorySeparatorChar;
+        if (!string.Equals(
+                fullLiteralPath,
+                fullRoot,
+                HostFsPath.Comparison) &&
+            !fullLiteralPath.StartsWith(
+                rootWithSeparator,
+                HostFsPath.Comparison))
+        {
+            return false;
+        }
+
+        if (EscapesMountViaReparsePoint(fullRoot, fullLiteralPath))
+        {
+            return false;
+        }
+
+        if (!TryGetAprFileSize(fullLiteralPath, out fileSize))
+        {
+            // SHARPEMU_V74_0_109_DS_APR_TEMPLATE_SUFFIX_UNIQUE
+            // V108 proved that '%s_*' is not a literal filename. Treat it as a
+            // template only when the same directory contains exactly one file
+            // with the requested suffix. Multiple candidates are diagnostic
+            // only: never guess which character part the guest intended.
+            if (TryResolveDemonSoulsAprTemplateSuffixUniqueV74109(
+                    guestPath,
+                    fullLiteralPath,
+                    fullRoot,
+                    out resolvedHostPath,
+                    out fileSize))
+            {
+                return true;
+            }
+
+            Console.Error.WriteLine(
+                "[V74.0.108][APR_LITERAL_PERCENT_CGPR] " +
+                $"guest='{guestPath}' encoded='{encodedHostPath}' " +
+                $"literal='{fullLiteralPath}' result=miss");
+            return false;
+        }
+
+        resolvedHostPath = fullLiteralPath;
+        Console.Error.WriteLine(
+            "[V74.0.108][APR_LITERAL_PERCENT_CGPR] " +
+            $"guest='{guestPath}' encoded='{encodedHostPath}' " +
+            $"literal='{fullLiteralPath}' size={fileSize} result=hit");
+        return true;
+    }
+
+    // SHARPEMU_V74_0_109_DS_APR_TEMPLATE_SUFFIX_UNIQUE
+    private static bool TryResolveDemonSoulsAprTemplateSuffixUniqueV74109(
+        string guestPath,
+        string literalHostPath,
+        string fullRoot,
+        out string resolvedHostPath,
+        out ulong fileSize)
+    {
+        resolvedHostPath = literalHostPath;
+        fileSize = 0;
+
+        var directory = Path.GetDirectoryName(literalHostPath);
+        var leaf = Path.GetFileName(literalHostPath);
+        if (string.IsNullOrWhiteSpace(directory) ||
+            string.IsNullOrWhiteSpace(leaf))
+        {
+            return false;
+        }
+
+        var marker = leaf.IndexOf(
+            "%s",
+            StringComparison.OrdinalIgnoreCase);
+        if (marker < 0)
+        {
+            return false;
+        }
+
+        var suffix = leaf[(marker + 2)..];
+        if (string.IsNullOrWhiteSpace(suffix) ||
+            !suffix.EndsWith(".cgpr", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var candidates = new List<string>(4);
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                foreach (var candidate in Directory.EnumerateFiles(
+                             directory,
+                             "*.cgpr",
+                             SearchOption.TopDirectoryOnly))
+                {
+                    if (!Path.GetFileName(candidate).EndsWith(
+                            suffix,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    candidates.Add(Path.GetFullPath(candidate));
+                    if (candidates.Count > 8)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or
+            ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+
+        if (candidates.Count != 1)
+        {
+            var names = "none";
+            if (candidates.Count > 0)
+            {
+                var candidateNames = new string[candidates.Count];
+                for (var index = 0; index < candidates.Count; index++)
+                {
+                    candidateNames[index] = Path.GetFileName(candidates[index]);
+                }
+                names = string.Join("|", candidateNames);
+            }
+            Console.Error.WriteLine(
+                "[V74.0.109][APR_TEMPLATE_SUFFIX] " +
+                $"guest='{guestPath}' suffix='{suffix}' " +
+                $"candidate_count={candidates.Count} candidates='{names}' " +
+                "result=no-unique-match");
+            return false;
+        }
+
+        var candidatePath = candidates[0];
+        var rootWithSeparator =
+            Path.TrimEndingDirectorySeparator(fullRoot) +
+            Path.DirectorySeparatorChar;
+        if (!candidatePath.StartsWith(rootWithSeparator, HostFsPath.Comparison) ||
+            EscapesMountViaReparsePoint(fullRoot, candidatePath) ||
+            !TryGetAprFileSize(candidatePath, out fileSize))
+        {
+            return false;
+        }
+
+        resolvedHostPath = candidatePath;
+        Console.Error.WriteLine(
+            "[V74.0.109][APR_TEMPLATE_SUFFIX] " +
+            $"guest='{guestPath}' suffix='{suffix}' " +
+            $"candidate='{candidatePath}' size={fileSize} " +
+            "candidate_count=1 result=unique-hit");
+        return true;
     }
 
     private static bool TryGetAprFileSize(string hostPath, out ulong size)

@@ -1,0 +1,4 @@
+﻿Tag=V76.0.11-PARALLEL-SHADER-PREWARM
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+CachePrewarm=Ready hash=f1cff905d31904a870105aba7ae250f796089cd706a21a5f7a7da2d74f2354fe
+ParallelStages=ReadySemanticReplace

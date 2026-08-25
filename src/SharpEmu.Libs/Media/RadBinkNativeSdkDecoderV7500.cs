@@ -16,6 +16,7 @@ namespace SharpEmu.Libs.Media;
 internal sealed class RadBinkNativeSdkDecoderV7500 :
     IMediaFrameDecoder,
     IMediaPlaybackClockSource,
+    IMediaPresentationAware,
     IMediaFrameBufferPolicy
 {
     private readonly nint _movie;
@@ -23,6 +24,7 @@ internal sealed class RadBinkNativeSdkDecoderV7500 :
     private readonly bool _preferDemonSoulsSidecarClock;
     private long _decodedFrames;
     private long _decodeTicks;
+    private int _presentationStarted;
     private int _disposed;
 
     private RadBinkNativeSdkDecoderV7500(
@@ -50,6 +52,11 @@ internal sealed class RadBinkNativeSdkDecoderV7500 :
                 Path.GetFileName(moviePath),
                 "attract_movie.bk2",
                 StringComparison.OrdinalIgnoreCase);
+
+        // Match RAD/Nihav's lifecycle ownership. BinkHostPlaybackAssist keeps
+        // title/UI movies guest-live while applying the existing one-shot gate
+        // semantics to movies that require it.
+        BinkHostPlaybackAssist.NotifyHostMovieDecoderStarted(moviePath);
     }
 
     internal static bool IsRuntimeAvailable =>
@@ -63,6 +70,11 @@ internal sealed class RadBinkNativeSdkDecoderV7500 :
         out RadBinkNativeSdkDecoderV7500? decoder)
     {
         decoder = null;
+
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(moviePath))
+        {
+            return false;
+        }
 
         if (!BinkNativeSdkAbiV7500.TryOpen(
                 moviePath,
@@ -213,6 +225,26 @@ internal sealed class RadBinkNativeSdkDecoderV7500 :
         return true;
     }
 
+    public void NotifyPresentationStarted()
+    {
+        if (Interlocked.Exchange(ref _presentationStarted, 1) != 0 ||
+            Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        // Release embedded PCM and the native media clock exactly at the first
+        // presentable frame. Demon's Souls attract_movie is video-only, so the
+        // same seam releases its deterministic AT9 sidecar instead.
+        BinkNativeSdkAbiV7500.NotifyPresented(_movie);
+        BinkHostAudioBridgeV7241.NotifyPresentationStarted(_moviePath);
+
+        Console.Error.WriteLine(
+            "[BINK-NATIVE][V75.0.4] first_visible_frame " +
+            $"file='{Path.GetFileName(_moviePath)}' " +
+            $"embedded_audio={EmbeddedAudioActive} sidecar_clock={_preferDemonSoulsSidecarClock}");
+    }
+
     public bool TryGetPlaybackSeconds(
         out double seconds)
     {
@@ -256,6 +288,7 @@ internal sealed class RadBinkNativeSdkDecoderV7500 :
 
         BinkNativeSdkAbiV7500.Close(
             _movie);
+        BinkHostPlaybackAssist.NotifyHostMovieDecoderStopped(_moviePath);
 
         Console.Error.WriteLine(
             "[BINK-NATIVE][V75.0.0] closed " +

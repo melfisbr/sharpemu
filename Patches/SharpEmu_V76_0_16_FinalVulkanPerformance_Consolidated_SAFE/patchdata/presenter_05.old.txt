@@ -1,0 +1,14 @@
+                    physicalLaneSwitchV1131 =
+                        _hasPhysicalSubmitV1131 &&
+                        physicalComputeQueueV1131 != _lastPhysicalSubmitWasComputeV1131;
+                    if (physicalComputeQueueV1131)
+                    {
+                        physicalSignalValueV1131 = ++_computeQueueSignalValueV1131;
+                        physicalSignalSemaphoreV1131 =
+                            _computeQueueTimelineSemaphoreV1131;
+                        if (physicalLaneSwitchV1131)
+                        {
+                            physicalWaitValueV1131 = _graphicsQueueSignalValueV1131;
+                            physicalWaitSemaphoreV1131 =
+                                _graphicsQueueTimelineSemaphoreV1131;
+                        }

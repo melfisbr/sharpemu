@@ -1,0 +1,9 @@
+{
+    "version":  "V74.0.119.0.2",
+    "timestamp":  "2026-08-23T20:35:39.6530944-03:00",
+    "phase":  5,
+    "status":  "ANALYSIS_COMPLETED",
+    "summary":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_119_0_2_SUMMARY_20260823_203539.txt",
+    "result_zip":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_119_0_2_RESULT_20260823_203539.zip",
+    "assessment":  "EXECUTION_GRAPH_ACTIVE_USE_RENDER_PHASE_PROFILE_FOR_NEXT_STRUCTURAL_STEP"
+}

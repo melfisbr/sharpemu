@@ -1,0 +1,1 @@
+        control.DwordCount is >= 1 and <= 4 &&

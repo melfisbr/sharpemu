@@ -1,0 +1,4 @@
+    private static bool AttachRadNativeMovieLocked(
+        string hostPath)
+    {
+        if (!TryOpenPreferredNativeRadDecoderV75045(

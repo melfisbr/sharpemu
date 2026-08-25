@@ -5,6 +5,7 @@ using SharpEmu.Libs.VideoOut;
 using SharpEmu.ShaderCompiler;
 using SharpEmu.ShaderCompiler.Vulkan;
 using System.Threading;
+using System.Linq;
 
 namespace SharpEmu.Libs.Gpu.Vulkan;
 
@@ -17,6 +18,11 @@ namespace SharpEmu.Libs.Gpu.Vulkan;
 internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
 {
     public string BackendName => "Vulkan";
+
+    static VulkanGuestGpuBackend()
+    {
+        Console.Error.WriteLine(VulkanShaderBinaryCacheV7605.StatusLine());
+    }
 
     private static readonly IGuestCompiledShader DepthOnlyFragmentShader =
         new VulkanCompiledGuestShader(SpirvFixedShaders.CreateDepthOnlyFragment());
@@ -67,27 +73,52 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         ulong storageBufferOffsetAlignment = 1)
     {
         shader = null;
-        var translateStartV74030 = TraceShaderPipelineTimingV74030
-            ? System.Diagnostics.Stopwatch.GetTimestamp()
-            : 0L;
-        var translatedV74030 = Gen5SpirvTranslator.TryCompileVertexShader(
+        var cacheKeyV7605 = VulkanShaderBinaryCacheV7605.BuildKey(
+            "VS",
+            state,
+            evaluation,
+            $"gbb={globalBufferBase}|tgb={totalGlobalBufferCount}|ibb={imageBindingBase}|" +
+            $"sr={scalarRegisterBufferIndex}|vo={requiredVertexOutputCount}|" +
+            $"align={storageBufferOffsetAlignment}");
+        var translateStartV74030 = 0L;
+
+        bool TranslateV7605(out byte[] spirv, out string translateError)
+        {
+            translateStartV74030 = TraceShaderPipelineTimingV74030
+                ? System.Diagnostics.Stopwatch.GetTimestamp()
+                : 0L;
+            var ok = Gen5SpirvTranslator.TryCompileVertexShader(
                 state,
                 evaluation,
                 out var compiled,
-                out error,
+                out translateError,
                 globalBufferBase,
                 totalGlobalBufferCount,
                 imageBindingBase,
                 scalarRegisterBufferIndex,
                 requiredVertexOutputCount,
                 storageBufferOffsetAlignment);
-        TraceShaderTranslateV74030("vertex", state, translateStartV74030, translatedV74030);
+            spirv = ok ? compiled.Spirv : [];
+            return ok;
+        }
+
+        var translatedV74030 = VulkanShaderBinaryCacheV7605.TryGetOrTranslate(
+            cacheKeyV7605,
+            TranslateV7605,
+            out var compiledSpirvV7605,
+            out error,
+            out var cacheHitV7605);
+        if (!cacheHitV7605)
+        {
+            TraceShaderTranslateV74030("vertex", state, translateStartV74030, translatedV74030);
+        VulkanShaderCompileBudgetV7610.Note("vertex", state.Program.Address, translateStartV74030, translatedV74030);
+        }
         if (!translatedV74030)
         {
             return false;
         }
 
-        shader = new VulkanCompiledGuestShader(compiled.Spirv);
+        shader = new VulkanCompiledGuestShader(compiledSpirvV7605);
         return true;
     }
 
@@ -107,15 +138,34 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         ulong storageBufferOffsetAlignment = 1)
     {
         shader = null;
-        var translateStartV74030 = TraceShaderPipelineTimingV74030
-            ? System.Diagnostics.Stopwatch.GetTimestamp()
-            : 0L;
-        var translatedV74030 = Gen5SpirvTranslator.TryCompilePixelShader(
+        var outputFingerprintV7605 = string.Join(
+            ',',
+            outputs.Select(static output =>
+                $"{output.GuestSlot}:{output.HostLocation}:{(int)output.Kind}"));
+        var pixelInputFingerprintV7605 = pixelInputCntl is null
+            ? string.Empty
+            : string.Join(',', pixelInputCntl);
+        var cacheKeyV7605 = VulkanShaderBinaryCacheV7605.BuildKey(
+            "PS",
+            state,
+            evaluation,
+            $"gbb={globalBufferBase}|tgb={totalGlobalBufferCount}|ibb={imageBindingBase}|" +
+            $"sr={scalarRegisterBufferIndex}|pe={pixelInputEnable:X8}|pa={pixelInputAddress:X8}|" +
+            $"pic={pixelInputFingerprintV7605}|out={outputFingerprintV7605}|" +
+            $"align={storageBufferOffsetAlignment}");
+        var translateStartV74030 = 0L;
+
+        bool TranslateV7605(out byte[] spirv, out string translateError)
+        {
+            translateStartV74030 = TraceShaderPipelineTimingV74030
+                ? System.Diagnostics.Stopwatch.GetTimestamp()
+                : 0L;
+            var ok = Gen5SpirvTranslator.TryCompilePixelShader(
                 state,
                 evaluation,
                 outputs,
                 out var compiled,
-                out error,
+                out translateError,
                 globalBufferBase,
                 totalGlobalBufferCount,
                 imageBindingBase,
@@ -124,13 +174,27 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
                 pixelInputAddress,
                 pixelInputCntl,
                 storageBufferOffsetAlignment);
-        TraceShaderTranslateV74030("pixel", state, translateStartV74030, translatedV74030);
+            spirv = ok ? compiled.Spirv : [];
+            return ok;
+        }
+
+        var translatedV74030 = VulkanShaderBinaryCacheV7605.TryGetOrTranslate(
+            cacheKeyV7605,
+            TranslateV7605,
+            out var compiledSpirvV7605,
+            out error,
+            out var cacheHitV7605);
+        if (!cacheHitV7605)
+        {
+            TraceShaderTranslateV74030("pixel", state, translateStartV74030, translatedV74030);
+        VulkanShaderCompileBudgetV7610.Note("pixel", state.Program.Address, translateStartV74030, translatedV74030);
+        }
         if (!translatedV74030)
         {
             return false;
         }
 
-        shader = new VulkanCompiledGuestShader(compiled.Spirv);
+        shader = new VulkanCompiledGuestShader(compiledSpirvV7605);
         return true;
     }
 
@@ -148,28 +212,53 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         ulong storageBufferOffsetAlignment = 1)
     {
         shader = null;
-        var translateStartV74030 = TraceShaderPipelineTimingV74030
-            ? System.Diagnostics.Stopwatch.GetTimestamp()
-            : 0L;
-        var translatedV74030 = Gen5SpirvTranslator.TryCompileComputeShader(
+        var cacheKeyV7605 = VulkanShaderBinaryCacheV7605.BuildKey(
+            "CS",
+            state,
+            evaluation,
+            $"local={localSizeX}x{localSizeY}x{localSizeZ}|" +
+            $"tgb={totalGlobalBufferCount}|sr={initialScalarBufferIndex}|" +
+            $"wave={waveLaneCount}|align={storageBufferOffsetAlignment}");
+        var translateStartV74030 = 0L;
+
+        bool TranslateV7605(out byte[] spirv, out string translateError)
+        {
+            translateStartV74030 = TraceShaderPipelineTimingV74030
+                ? System.Diagnostics.Stopwatch.GetTimestamp()
+                : 0L;
+            var ok = Gen5SpirvTranslator.TryCompileComputeShader(
                 state,
                 evaluation,
                 localSizeX,
                 localSizeY,
                 localSizeZ,
                 out var compiled,
-                out error,
+                out translateError,
                 totalGlobalBufferCount,
                 initialScalarBufferIndex,
                 waveLaneCount,
                 storageBufferOffsetAlignment);
-        TraceShaderTranslateV74030("compute", state, translateStartV74030, translatedV74030);
+            spirv = ok ? compiled.Spirv : [];
+            return ok;
+        }
+
+        var translatedV74030 = VulkanShaderBinaryCacheV7605.TryGetOrTranslate(
+            cacheKeyV7605,
+            TranslateV7605,
+            out var compiledSpirvV7605,
+            out error,
+            out var cacheHitV7605);
+        if (!cacheHitV7605)
+        {
+            TraceShaderTranslateV74030("compute", state, translateStartV74030, translatedV74030);
+        VulkanShaderCompileBudgetV7610.Note("compute", state.Program.Address, translateStartV74030, translatedV74030);
+        }
         if (!translatedV74030)
         {
             return false;
         }
 
-        shader = new VulkanCompiledGuestShader(compiled.Spirv);
+        shader = new VulkanCompiledGuestShader(compiledSpirvV7605);
         return true;
     }
 
@@ -312,6 +401,7 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
         uint localSizeX,
         uint localSizeY,
         uint localSizeZ,
+        uint waveLaneCount,
         bool isIndirect,
         bool writesGlobalMemory,
         uint threadCountX = uint.MaxValue,
@@ -331,6 +421,7 @@ internal sealed class VulkanGuestGpuBackend : IGuestGpuBackend
             localSizeX,
             localSizeY,
             localSizeZ,
+            waveLaneCount,
             isIndirect,
             writesGlobalMemory,
             threadCountX,

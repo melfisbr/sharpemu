@@ -1,0 +1,13 @@
+            if (instruction.Opcode == "DsSwizzleB32")
+            {
+                return TryEmitDsSwizzleB32V7610(instruction, control, out error);
+            }
+
+            // V76.0.25: RDNA2 DS_PERMUTE/DS_BPERMUTE use the LDS routing
+            // fabric without touching LDS memory and are legal with zero LDS.
+            if (instruction.Opcode is "DsPermuteB32" or "DsBpermuteB32")
+            {
+                return TryEmitDsPermuteB32V7625(instruction, control, out error);
+            }
+
+            if (_lds == 0 || _ldsElementPointer == 0)

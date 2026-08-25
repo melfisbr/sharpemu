@@ -1,0 +1,11 @@
+        var uploadStartedV740945 = System.Diagnostics.Stopwatch.GetTimestamp();
+        var uploadModeV740945 = "sliced";
+        var uploadSucceededV740945 = false;
+        void* mapped;
+        Check(_vk.MapMemory(_device, memory, 0, totalBytes, 0, &mapped), "vkMapMemory(detile guest direct)");
+        try
+        {
+            var destination = new Span<byte>(mapped, checked((int)totalBytes));
+
+            // Exact fast path only: no base offset and physical stride equals
+            // the bytes copied per layer. Non-contiguous layouts preserve V88.

@@ -1,0 +1,7 @@
+﻿Tag=V76.0.11.1-PARALLEL-SHADER-PREWARM-BUILDFIX
+Status=SOURCE_VERIFY_PASSED
+CacheHash=09b7daedf5eab60c1979012d6cf125c9a607623e8df5072f6d487c9907ccbbd3
+ParallelHelperHash=e9b28628eb48c7c84bc61f216ac47721d98bc8e6b746afbed965d9708cc88255
+SpirvPrewarm=1
+ParallelVulkanVSPS=1
+CacheGenerationRetained=V76.0.10-r1

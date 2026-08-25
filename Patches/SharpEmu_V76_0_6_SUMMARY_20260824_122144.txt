@@ -1,0 +1,11 @@
+﻿Tag=V76.0.6-GEN5-INDIRECT-SHADER-CONTROL
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+InitialState=Ready
+BuildExitCode=1
+BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_6_BUILD_20260824_122144.log
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_6_PREVIOUS_FILES_20260824_122144.zip
+Core=S_SETPC_B64; S_SWAPPC_B64; indirect CFG; scalar call/return discovery; S_ASHR_I64 evaluator
+Scope=shader translator/evaluator only; no RAD/IME/DCC/presenter/scheduler changes
+Build=FAILED
+Rollback=STARTED
+Rollback=COMPLETED

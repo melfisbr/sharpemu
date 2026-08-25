@@ -1,0 +1,7 @@
+
+        foreach (var allocation in _allAllocations)
+        {
+            DestroyBuffer(allocation.Buffer, allocation.Memory);
+        }
+
+        _allAllocations.Clear();

@@ -1,0 +1,81 @@
+        private bool TryEmitVertexInputFetch(
+            Gen5BufferMemoryControl control,
+            SpirvVertexInput input,
+            out string error)
+        {
+            error = string.Empty;
+            if (control.ComponentCount == 0 ||
+                control.ComponentCount > input.ComponentCount)
+            {
+                error =
+                    $"invalid vertex input fetch components={control.ComponentCount} " +
+                    $"input={input.ComponentCount}";
+                return false;
+            }
+
+            var loaded = Load(input.Type, input.Variable);
+            var components = new uint[4];
+            for (var component = 0;
+                 component < checked((int)control.ComponentCount);
+                 component++)
+            {
+                var value = input.ComponentCount == 1
+                    ? loaded
+                    : _module.AddInstruction(
+                        SpirvOp.CompositeExtract,
+                        input.ComponentType,
+                        loaded,
+                        (uint)component);
+                components[component] = input.ComponentKind == VertexInputComponentKind.Uint
+                    ? value
+                    : Bitcast(_uintType, value);
+            }
+
+            if (!control.D16)
+            {
+                for (var component = 0;
+                     component < checked((int)control.ComponentCount);
+                     component++)
+                {
+                    StoreV(
+                        control.VectorData + (uint)component,
+                        components[component]);
+                }
+
+                return true;
+            }
+
+            if (control.TypedFormat is not { } typedFormat ||
+                !Gfx10UnifiedFormat.TryDecode(
+                    typedFormat,
+                    out _,
+                    out var numberFormat))
+            {
+                error = $"invalid MTBUF D16 vertex format={control.TypedFormat}";
+                return false;
+            }
+
+            var numberFormatId = UInt(numberFormat);
+            for (var component = 0;
+                 component < checked((int)control.ComponentCount);
+                 component += 2)
+            {
+                var low = NarrowGfx10FormatResultToD16(
+                    components[component],
+                    numberFormatId);
+                var high = component + 1 < checked((int)control.ComponentCount)
+                    ? NarrowGfx10FormatResultToD16(
+                        components[component + 1],
+                        numberFormatId)
+                    : UInt(0);
+                StoreV(
+                    control.VectorData + (uint)(component / 2),
+                    BitwiseOr(
+                        BitwiseAnd(low, UInt(0xFFFF)),
+                        ShiftLeftLogical(
+                            BitwiseAnd(high, UInt(0xFFFF)),
+                            UInt(16))));
+            }
+
+            return true;
+        }

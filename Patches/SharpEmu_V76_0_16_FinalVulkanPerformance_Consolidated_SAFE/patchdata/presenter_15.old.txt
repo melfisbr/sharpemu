@@ -1,0 +1,13 @@
+            }
+            if (_dualPhysicalQueueEnabledV1131)
+            {
+                var switchedForPresentV1131 =
+                    _hasPhysicalSubmitV1131 && _lastPhysicalSubmitWasComputeV1131;
+                _hasPhysicalSubmitV1131 = true;
+                _lastPhysicalSubmitWasComputeV1131 = false;
+                var graphicsCountV1131 = Interlocked.Increment(
+                    ref _graphicsPhysicalSubmitCountV1131);
+                if (switchedForPresentV1131)
+                {
+                    Interlocked.Increment(ref _physicalLaneSwitchWaitCountV1131);
+                }

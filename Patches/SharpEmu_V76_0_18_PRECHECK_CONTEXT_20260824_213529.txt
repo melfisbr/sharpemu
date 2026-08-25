@@ -1,0 +1,2 @@
+﻿RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+Error=V76 baseline helper mismatch: src\SharpEmu.Libs\Media\BinkGuestAvClockV7613.cs expected=07dfdacd9c6f5855275318a161db4968f56b06e4336e62d6c594fdcc4673585f actual=4688da66dcaf14cf85d1646cd8a8ebf086b7f3563c405bdcdace7a7dade697ee

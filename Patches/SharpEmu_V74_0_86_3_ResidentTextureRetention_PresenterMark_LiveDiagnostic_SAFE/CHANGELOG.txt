@@ -1,6 +1,0 @@
-V74.0.86.3
-- Removes all TryCreateGuestDrawTexture/cache-hit/NoteSampledAddress installer anchors.
-- Retires producer CPU bridge snapshots from Presenter.MarkTextureContentCached after exact content cache registration.
-- Keeps 3072 MiB standalone texture cache and 10 s large snapshot TTL defaults.
-- Preserves V81.2/V82/V84/V85 runtime behavior.
-- RUN_4 writes live log in Patches.

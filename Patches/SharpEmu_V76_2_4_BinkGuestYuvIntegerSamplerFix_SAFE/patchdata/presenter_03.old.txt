@@ -1,0 +1,3 @@
+                        DstSelect = texture.DstSelect,
+                        SamplerState = texture.Sampler,
+                        GuestImage = binkYuvProducerV7602,

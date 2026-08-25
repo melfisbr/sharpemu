@@ -1,0 +1,6 @@
+﻿Tag=V76.0.18.3-BINK-GUEST-ONLY-EBOOT-HANDOFF-HOSTVAR-BUILDFIX
+Status=FAILED_ROLLBACK
+Error=DEBUG BUILD FAILED exit=1
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_18_3_PREVIOUS_FILES_20260824_214752.zip
+DebugBuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_18_3_DEBUG_BUILD_20260824_214752.log
+ReleaseBuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_18_3_RELEASE_BUILD_20260824_214752.log

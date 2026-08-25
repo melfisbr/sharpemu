@@ -1,0 +1,6 @@
+        out NihavBink2Decoder? decoder)
+    {
+        decoder = null;
+        if (!TryReadHeader(
+                path,
+                out var sourceWidth,

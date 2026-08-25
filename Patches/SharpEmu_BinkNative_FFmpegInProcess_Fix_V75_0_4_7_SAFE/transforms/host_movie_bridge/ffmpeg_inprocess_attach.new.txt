@@ -1,0 +1,126 @@
+    // SHARPEMU_BINK_FFMPEG_INPROCESS_HOST_V75_0_4_5
+    private static bool TryOpenPreferredNativeRadDecoderV75045(
+        string hostPath,
+        out IMediaFrameDecoder? source,
+        out bool embeddedAudioActive,
+        out string backend)
+    {
+        source = null;
+        embeddedAudioActive = false;
+        backend = "none";
+
+        if (FfmpegRuntime.IsRuntimeCandidatePresent)
+        {
+            try
+            {
+                if (FfmpegVideoDecoder.TryOpen(
+                        hostPath,
+                        _presentationWidth,
+                        _presentationHeight,
+                        out var ffmpegSource) &&
+                    ffmpegSource is not null)
+                {
+                    source = ffmpegSource;
+                    embeddedAudioActive = ffmpegSource.EmbeddedAudioActive;
+                    backend = "ffmpeg-core-inprocess";
+                    return true;
+                }
+
+                Console.Error.WriteLine(
+                    "[BINK-FFMPEG][V75.0.4.5] open_failed " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    $"root='{FfmpegRuntime.RuntimeRoot}' reason=decoder-open-returned-false");
+            }
+            catch (Exception exception)
+            {
+                var detail = exception.Message.Replace('\r', ' ').Replace('\n', ' ');
+                Console.Error.WriteLine(
+                    "[BINK-FFMPEG][V75.0.4.5] open_exception " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    $"type={exception.GetType().Name} detail='{detail}' " +
+                    $"root='{FfmpegRuntime.RuntimeRoot}'");
+            }
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.5] runtime_missing " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                $"root='{FfmpegRuntime.RuntimeRoot}'");
+        }
+
+        // The V75.0.4 ffmpeg.exe adapter remains available only for A/B
+        // diagnostics. It is never an implicit fallback and Nihav is not used.
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_BINK_LEGACY_ADAPTER_FALLBACK"),
+                "1",
+                StringComparison.Ordinal) &&
+            RadBinkNativeSdkDecoderV7500.TryOpen(
+                hostPath,
+                out var legacySource) &&
+            legacySource is not null)
+        {
+            source = legacySource;
+            embeddedAudioActive = legacySource.EmbeddedAudioActive;
+            backend = "legacy-sharpemu-binknative";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool AttachRadNativeMovieLocked(
+        string hostPath)
+    {
+        if (!TryOpenPreferredNativeRadDecoderV75045(
+                hostPath,
+                out var source,
+                out var embeddedAudioActive,
+                out var backend) ||
+            source is null)
+        {
+            return false;
+        }
+
+        var info = new Bink2MovieInfo(
+            source.Width,
+            source.Height,
+            source.FramesPerSecondNumerator,
+            source.FramesPerSecondDenominator);
+
+        if (!IsValid(info))
+        {
+            source.Dispose();
+            return false;
+        }
+
+        // Demon's Souls attract_movie is video-only in Bink. Its existing AT9
+        // sidecar is prepared now and released by IMediaPresentationAware on
+        // the first visible frame. Embedded Bink audio stays FFmpeg-owned.
+        if (string.Equals(
+                Path.GetFileName(hostPath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            BinkHostAudioBridgeV7241.TryStart(hostPath);
+        }
+
+        AttachPlaybackLocked(
+            hostPath,
+            info,
+            source);
+        Volatile.Write(ref _nativeRadExclusiveOwnerActiveV75041, 1);
+
+        Console.Error.WriteLine(
+            "[BINK-FFMPEG][V75.0.4.5] bridge_attached " +
+            $"file='{Path.GetFileName(hostPath)}' " +
+            $"size={info.Width}x{info.Height} " +
+            $"fps={info.FramesPerSecondNumerator}/" +
+            $"{info.FramesPerSecondDenominator} " +
+            $"embedded_audio_active={embeddedAudioActive} " +
+            $"decoder={backend} " +
+            $"runtime_root='{FfmpegRuntime.RuntimeRoot}' " +
+            "nihav_owner=False native_rad_owner=True");
+        return true;
+    }

@@ -1,7 +1,0 @@
-    // True means CPU bytes are intentionally absent because they are DCC-
-    // compressed. The backend must try a GPU image alias before any guest-RAM
-    // snapshot/self-heal path. Appended for source compatibility.
-    bool GpuReferenceOnly = false);
-
-/// <summary>Raw guest sampler descriptor dwords, copied verbatim from guest memory.</summary>
-internal readonly record struct GuestSampler(

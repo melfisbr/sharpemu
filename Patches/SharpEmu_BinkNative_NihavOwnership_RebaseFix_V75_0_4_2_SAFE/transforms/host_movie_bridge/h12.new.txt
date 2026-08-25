@@ -1,0 +1,9 @@
+            return false;
+        }
+
+        var completionMode = ResolveMode();
+        if (completionMode != MovieMode.Rad &&
+            completionMode != MovieMode.NativeRad)
+        {
+            return false;
+        }

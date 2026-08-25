@@ -1,0 +1,12 @@
+﻿Tag=V76.0.8-GFX10-TYPED-BUFFER-STORES-D16
+Status=BUILD_PASSED
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+InitialState=ReadyAdaptive
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_8_PREVIOUS_FILES_20260824_142120.zip
+BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_8_BUILD_20260824_142120.log
+ApplyMode=adaptive-in-place; no whole-file replacement
+MubufOpcodeWidth=8-bit; D16 0x80..0x87 decoded
+TypedStores=MTBUF instruction FORMAT + identity; MUBUF resource FORMAT + resource dst_sel
+D16Stores=packed low/high half source components
+FormatConversion=UNORM/SNORM/USCALED/SSCALED/UINT/SINT/FLOAT including 10/11-bit UFLOAT
+D16LoadIntegerKindFix=Equal(numberFormat,4/5) numeric constants

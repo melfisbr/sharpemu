@@ -1,0 +1,12 @@
+﻿Tag=V76.0.8-GFX10-TYPED-BUFFER-STORES-D16
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+State=ReadyAdaptive
+Prerequisite=V76.0.7.2 semantic baseline
+ApplyMode=adaptive-in-place; no whole-file replacement
+src\SharpEmu.ShaderCompiler\Gen5ShaderTranslator.cs=e780ee22432ccde397ac42d12e4dfcf0e3e7cf95e3ecc78fb9ed0c7e50f51dd4
+src\SharpEmu.ShaderCompiler.Vulkan\Gen5SpirvTranslator.cs=3a313d56576fb6dc4572a6a5d62bb447fc4c04ad4cfc68102edc6d29caf43424
+Patch.01_mubuf_decode=Ready
+Patch.02_mubuf_ir=Ready
+Patch.03_format_store_dispatch=Ready
+Patch.04_d16_narrow_integer_kind=Ready
+Helper=Ready

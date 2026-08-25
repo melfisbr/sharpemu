@@ -1,0 +1,9 @@
+{
+    "version":  "V74.0.118.0.1",
+    "timestamp":  "2026-08-23T20:52:23.4550688-03:00",
+    "phase":  5,
+    "status":  "ANALYSIS_COMPLETED",
+    "summary":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_118_0_1_SUMMARY_20260823_205223.txt",
+    "result_zip":  "C:\\Users\\Edpo\\Documents\\GitHub\\sharpemu\\Patches\\SharpEmu_V74_0_118_0_1_RESULT_20260823_205223.zip",
+    "assessment":  "GPU_RESIDENT_SHADER_ACTIVE_MEASURE_FPS"
+}

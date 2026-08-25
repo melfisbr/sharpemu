@@ -1,0 +1,17 @@
+V75.0.4.2 NIHAV ownership review
+=================================
+
+Finding from V75.0.4 review:
+- V75.0.4 changed HostMovieBridge routing, loops and completion handoffs.
+- V75.0.4 did NOT modify NihavBink2Decoder.cs itself.
+- Therefore a legacy/direct NIHAV call could still open nihav-tool even with NativeRad installed.
+
+V75.0.4.1 functional correction, preserved/rebased by V75.0.4.2:
+1. NihavBink2Decoder.cs contains SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1 (functional ownership marker retained by the V75.0.4.2 structural rebase).
+2. NihavBink2Decoder.TryOpen refuses normal-runtime opens when NativeRad is available, preferred and exclusive.
+3. HostMovieBridge promotes legacy UI branches that rewrite mode to NIHAV back to NativeRad before audio probing.
+4. ResolveMode defaults to NativeRad when the adapter is available and exclusive ownership is enabled.
+5. Demon's Souls boot policy sets SHARPEMU_BINK_NATIVE_EXCLUSIVE=1.
+6. Test forces exclusive ownership and records any unexpected 'Bink2 NIHAV bridge attached' line.
+
+NIHAV is not deleted: explicit SHARPEMU_BINK_MODE=nihav/bink2 or SHARPEMU_BINK_NATIVE_EXCLUSIVE=0 can still be used for diagnostics/compatibility.

@@ -1,0 +1,5 @@
+                            $"generation={binkYuvProducerV7602.ContentGeneration} " +
+                            $"layout={binkYuvProducerV7602.Layout} " +
+                            $"storage_format={vkFormat} " +
+                            $"sample_view_format={binkSampleViewFormatV7624} " +
+                            "source=exact-initialized-storage");

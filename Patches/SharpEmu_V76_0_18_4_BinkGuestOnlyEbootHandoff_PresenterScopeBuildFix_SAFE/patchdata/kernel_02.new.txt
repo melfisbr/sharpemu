@@ -1,0 +1,5 @@
+            if (notifyBinkClose &&
+                !BinkGuestOwnedRuntimeV7600.IsBinkPath(observedBinkPath))
+            {
+                HostMovieBridge.NotifyGuestMovieClosed(observedBinkPath!);
+            }

@@ -1,0 +1,18 @@
+                "file='logo_intro_loop.bk2' mode=nihav " +
+                "reason=guest-ui-composition-and-no-rad-relaunch");
+        }
+        // SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1
+        // Legacy RAD/UI branches above can still rewrite a request to NIHAV.
+        // Under native exclusive ownership, immediately return that request to
+        // the native DLL before any NIHAV decoder or host-audio sidecar starts.
+        if (mode == MovieMode.Nihav && NativeRadExclusiveOwnerEnabledV75041())
+        {
+            Console.Error.WriteLine(
+                "[BINK-NATIVE][V75.0.4.1] legacy_nihav_route_promoted " +
+                $"file='{Path.GetFileName(hostPath)}' owner=native-rad");
+            mode = MovieMode.NativeRad;
+        }
+
+        // SHARPEMU_V74_0_82_TITLE_LOOP_NO_HOST_AUDIO_PROBE
+        // logo_intro_loop.bk2 has no audio stream in the observed title asset.
+        // Do not launch NIHAV/FFmpeg audio probes every time the persistent loop

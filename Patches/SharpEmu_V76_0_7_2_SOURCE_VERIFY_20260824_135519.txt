@@ -1,0 +1,13 @@
+﻿Tag=V76.0.7.2-GFX10-MTBUF-D16-MIMG-ADAPTIVE-REBASE
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+PrerequisiteV76061=PASSED
+AdaptiveInPlace=PASSED
+Mtbuf4BitDecode=PASSED
+MtbufInstructionFormat=PASSED
+MtbufD16LoadPacking=PASSED
+MimgNonMinLodSampleCoverage=PASSED
+TypedStorePolicy=EXPLICIT_PENDING_NOT_RAW_FALLBACK
+src\SharpEmu.ShaderCompiler\Gen5ShaderIr.cs=addd358c37ec7393bfeaaa9b0fa124236b5224d8fe0bb8d233cd3db52707b598
+src\SharpEmu.ShaderCompiler\Gen5ShaderTranslator.cs=e780ee22432ccde397ac42d12e4dfcf0e3e7cf95e3ecc78fb9ed0c7e50f51dd4
+src\SharpEmu.ShaderCompiler\Gen5ShaderScalarEvaluator.cs=27e22e6afdcd945e84824405e3d08591ea165e0130d648a7582e00f721959bbd
+src\SharpEmu.ShaderCompiler.Vulkan\Gen5SpirvTranslator.cs=3a313d56576fb6dc4572a6a5d62bb447fc4c04ad4cfc68102edc6d29caf43424

@@ -1,0 +1,16 @@
+﻿SharpEmu V75.0.4.8.1 summary
+========================
+Exit=0
+FfmpegRuntimeInitialized=True
+FfmpegBridgeAttached=True
+FfmpegRouteLocked=True
+FirstVisibleFrame=True
+LogoIntroLoopSeen=False
+MainMenuSeen=False
+MainMenuNgpSeen=False
+ExternalRadStarted=False
+ExternalRadForceExecuted=False
+NihavAttached=False
+NihavReady=False
+StrictAttachFailed=False
+StrictFfmpegExclusivePass=True

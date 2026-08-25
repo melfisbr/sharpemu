@@ -1,0 +1,4 @@
+                    "GlobalStoreDword" or
+                    "GlobalAtomicAdd" or
+                    "GlobalAtomicUMax" => 1u,
+                    "GlobalLoadDword" => 1u,

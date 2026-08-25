@@ -1,0 +1,16 @@
+﻿version=V75.0.1.3
+runtime_log=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V75_0_1_3_EXTERNAL_RAD_20260823_192020.log
+rad_bridge_attach_count=4
+ps_studios_rad_count=1
+attract_rad_count=1
+logo_intro_rad_count=1
+logo_loop_rad_count=1
+main_menu_rad_count=0
+native_adapter_loaded_count=0
+native_auto_selected_count=0
+native_bridge_attached_count=0
+native_open_failed_count=0
+native_attach_failed_count=0
+external_force_count=0
+device_lost_count=0
+classification=external-rad-active-main-menu-not-observed

@@ -1,0 +1,7 @@
+            BufferUsageFlags usage,
+            out DeviceMemory memory)
+        {
+            var capacity = BitOperations.RoundUpToPowerOf2(
+                Math.Max(size, (ulong)sizeof(uint)));
+            var key = new VulkanDeviceBufferPoolKey(usage, capacity);
+

@@ -1,6 +1,0 @@
-V74.0.86.1.1
-- Does NOT repatch PumpHostMovieFrame.
-- Requires and preserves existing V74.0.84.2.1 frame ownership/sticky-plane code.
-- Repairs FindHostMovieTextureBindings rediscovery so it routes through RememberHostMovieTextureMappings().
-- Installs the larger OSK-style IME overlay.
-- Adds runtime counts for UI_BINK_PLANE_LEARN / UI_BINK_STICKY_PLANE and Finalise access violations.

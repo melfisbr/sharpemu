@@ -1,0 +1,6 @@
+LOCAL FORK PRESERVATION POLICY
+==============================
+Repository root is always the existing parent of Patches.
+No remote source is authoritative for this package.
+No Git command may download, switch, reset, clean, rebase or overwrite the user's fork.
+RUN_4 may only discover and verify an already-existing local ffmpeg runtime.

@@ -1,7 +1,0 @@
-V74.0.88.3
-- Requires V74.0.88.2 source already installed.
-- Restricts UI-Bink EOF rewind to main_menu.bk2/main_menu_ngp.bk2.
-- Prevents host rewind of logo_intro_loop.bk2.
-- Replaces temp stdout/stderr redirection with direct, AutoFlush runtime logging to Patches.
-- Keeps V88 in-window IME and uint-plane fixes untouched.
-- SAFE backup/rollback modifies only HostMovieBridge.cs.

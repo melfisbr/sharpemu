@@ -1,0 +1,5 @@
+﻿Tag=V76.0.10.2-SHADER-CACHE-CRITICAL-PATH-SEMANTIC-SOPP-FIX
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+Cache=Applied hash=f1cff905d31904a870105aba7ae250f796089cd706a21a5f7a7da2d74f2354fe
+VulkanSopp=Applied
+MetalSopp=Applied

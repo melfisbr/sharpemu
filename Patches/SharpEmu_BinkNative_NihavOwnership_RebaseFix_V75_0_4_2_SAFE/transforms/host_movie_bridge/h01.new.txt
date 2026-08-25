@@ -1,0 +1,11 @@
+    private static bool _frameBufferPresented;
+    private static MediaFramePlayback? _playback;
+    private static long _frameSerial;
+    // SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1
+    private static int _nativeRadExclusiveOwnerActiveV75041;
+
+    internal static bool IsNativeRadExclusiveOwnerActiveV75041 =>
+        Volatile.Read(ref _nativeRadExclusiveOwnerActiveV75041) != 0;
+    // SHARPEMU_BINK_OPTIONS_START_SKIP_V1_0
+    private static long _optionsStartMovieSkipCount;
+    private static uint _presentationWidth = MaxHostVideoWidth;

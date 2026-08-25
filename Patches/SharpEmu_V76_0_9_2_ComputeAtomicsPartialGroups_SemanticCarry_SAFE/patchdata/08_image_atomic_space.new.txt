@@ -1,0 +1,3 @@
+                        value: () => LoadData(image.VectorData),
+                        comparator: () => LoadData(image.VectorData + 1),
+                        space: RdnaAtomicSpaceV7609.Image);

@@ -1,0 +1,13 @@
+        private TextureResource GetOrCreateGuestBinkNeutralYuvV7602(
+            GuestDrawTexture texture)
+        {
+            var binkSamplerV7624 =
+                NormalizeGuestBinkIntegerSamplerV7624(
+                    texture.Sampler,
+                    texture.Format,
+                    texture.Address);
+            var key = (
+                texture.Format,
+                texture.NumberType,
+                texture.DstSelect,
+                binkSamplerV7624);

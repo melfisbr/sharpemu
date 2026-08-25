@@ -1,0 +1,15 @@
+﻿version=V75.0.1.2
+current_host_sha=D3BC791213F1815C5C3E2B2713E90590C507C685DA4C95E308E4E72A4923B91B
+current_playback_sha=C1403289699A4F51E83BC7F0CCF09ABF563A46C356D282AB1CFDF8432088CB37
+current_native_host_marker=True
+current_native_playback_marker=True
+current_native_abi_exists=True
+current_native_decoder_exists=True
+native_adapter_present_count=2
+pre_v75_backup=C:\Users\Edpo\Documents\GitHub\sharpemu\.sharpemu-hotfix-backup\BinkNativeSdkV75_0_0_20260819_105224
+pre_v75_host_sha=FE52E639BDC762FC19391F88BBD00D85F481505172A668211587E65ADD7541FD
+pre_v75_playback_sha=77A7C6F9317BCA6A58AC9AE2A58DF3F8F3A07D3E025785B36F3512CA13D0243F
+radvideo64=C:\Program Files (x86)\RADVideo\radvideo64.exe
+restore_policy=exact-clean-pre-V75-backup
+native_adapter_policy=remove-debug-and-release
+source_write=0

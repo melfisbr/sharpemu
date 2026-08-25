@@ -1,0 +1,7 @@
+V75.0.4.3 package self-test contract
+- baseline HostMovieBridge 13 hunks -> known final hash
+- baseline Nihav 2 hunks -> known final hash
+- h06 may be absent only when semantic safety postcondition passes
+- semantic ownership postconditions required after preview/apply
+- setup_ffmpegcore.ps1: local-only; no URL, clone, fetch, checkout, reset, clean or download operation
+- SharpEmu.BinkNative.dll: AMD64; 9 ABI exports

@@ -1,0 +1,5 @@
+            var vkFormat = GetTextureFormat(texture.Format, texture.NumberType);
+            var binkSampleViewFormatV7624 =
+                GetGuestBinkNormalizedSampleViewFormatV7624(texture, vkFormat);
+
+            // V76.0.2: the title's final Bink planes are GPU-owned ping-pong

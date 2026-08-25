@@ -1,0 +1,6 @@
+                _pendingGuestImagePresentations.Dequeue();
+            }
+
+            if (_pendingGuestImagePresentations.Count > 0)
+            {
+                var pending = _pendingGuestImagePresentations.Peek();

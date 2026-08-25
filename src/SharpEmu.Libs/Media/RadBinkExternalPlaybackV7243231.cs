@@ -29,6 +29,7 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private readonly bool _usesSharpEmuAttractAudio;
     private readonly Timer? _guestThrottleHeartbeatTimer;
+    private readonly bool _guestThrottleStarted;
     private int _guestThrottleHeartbeatCount;
     private int _guestThrottleReleased;
     private bool _disposed;
@@ -64,6 +65,7 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
         AudioTrackCount = audioTrackCount;
         AudioTrackIds = audioTrackIds;
         _usesSharpEmuAttractAudio = usesSharpEmuAttractAudio;
+        _guestThrottleStarted = guestThrottleStarted;
 
         if (guestThrottleStarted)
         {
@@ -107,6 +109,11 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
     {
         playback = null;
 
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(moviePath))
+        {
+            return false;
+        }
+
         if (!OperatingSystem.IsWindows() ||
             string.IsNullOrWhiteSpace(moviePath) ||
             !File.Exists(moviePath))
@@ -125,6 +132,13 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
         }
 
         var fileName = Path.GetFileName(moviePath);
+        var interactiveRadUiV111 =
+            HostMovieBridge.IsDemonSoulsUiBinkCompositePathV740841(moviePath) &&
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DS_UI_BINK_RAD_INTERACTIVE"),
+                "0",
+                StringComparison.Ordinal);
 
         // V31.7.18_BINK_EMBEDDED_ATTRACT_AUDIO
         // When possible, play a cache-only BK2 produced by RAD binkmix with the
@@ -242,6 +256,63 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
             // Audio.  When Bink audio tracks exist, select them explicitly in
             // track-index order so embedding cannot inherit a silent default.
             start.ArgumentList.Add("/I2");
+            // SHARPEMU_V74_0_118_7_6_3_12_RAD_UI_TEXTURE_SOURCE
+            // UI Binks must enter the guest render graph as textures. When the
+            // only licensed RAD component available is the external player,
+            // force its 2D path so PrintWindow/BitBlt can provide a deterministic
+            // BGRA frame source for BOTH title UI movies. The RAD child is only a
+            // temporary producer; it is cloaked after the injected guest frame
+            // reaches the normal VideoOut present boundary.
+            var radUiTextureInjectionV11876312 =
+                interactiveRadUiV111 &&
+                !string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_DS_RAD_UI_TEXTURE_INJECTION"),
+                    "0",
+                    StringComparison.Ordinal);
+
+            // Preserve the older main-menu experiment behind its original gate.
+            var mainMenuRadCaptureV1187 =
+                interactiveRadUiV111 &&
+                string.Equals(
+                    fileName,
+                    "main_menu.bk2",
+                    StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_DS_RAD_MAIN_MENU_CAPTURE_COMPOSITE"),
+                    "0",
+                    StringComparison.Ordinal);
+
+            if (radUiTextureInjectionV11876312 ||
+                mainMenuRadCaptureV1187)
+            {
+                start.ArgumentList.Add("/!1");
+                if (radUiTextureInjectionV11876312)
+                {
+                    Console.Error.WriteLine(
+                        "[V74.0.118.7.6.3.12][RAD_UI_TEXTURE_SOURCE] " +
+                        $"file='{fileName}' decoder=official-rad-external " +
+                        "draw_type=2d switch='/!1' consumer=guest-yuv-textures " +
+                        "final_owner=guest-videoout nihav=False");
+                }
+                else
+                {
+                    Console.Error.WriteLine(
+                        "[V74.0.118.7.1][RAD_MAIN_MENU_CAPTURE_SOURCE] " +
+                        "file='main_menu.bk2' decoder=official-rad-external " +
+                        "draw_type=2d switch='/!1' nihav=False");
+                }
+            }
+
+            // SHARPEMU_V74_0_111_RAD_INTERACTIVE_LOOP
+            if (interactiveRadUiV111)
+            {
+                start.ArgumentList.Add("/L");
+                Console.Error.WriteLine(
+                    "[V74.0.111][RAD_INTERACTIVE_LOOP] " +
+                    $"file='{fileName}' loop=rad-infinite transition_owner=guest");
+            }
             // V31.7.18: Win Audio/WASAPI is RAD's default output. Do not force
             // /Z0; this also restores the single embedded audio track path used
             // by ps_studios_logo.
@@ -413,21 +484,26 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
                 $"renderer_pid={embeddedHost.RendererProcessId} " +
                 "window_discovery=pid-mainwindow-no-windowtext");
 
-            // V31.7.5 proved that OnMovieFrame() is a compatibility no-op in
-            // this accumulated checkout: the diagnostic emitted heartbeats, but
-            // Core.Res.TaskManager still entered the native lane and zero
-            // vk.guest_queue_backpressure markers were produced. Drive the real
-            // decoder lifecycle. The V14 lifecycle hook itself owns the
-            // matching HLE HostMovieExecutionGate Begin/End pair.
-            BeginGuestMovieThrottle(moviePath);
-            guestThrottleStarted = true;
-            Console.Error.WriteLine(
-                "[LOADER][INFO] bink2.rad_guest_work_throttle_begin " +
-                $"file='{fileName}' cpu_event_park=True gpu_payload_backpressure=True " +
-                "lifecycle=decoder-active hle_gate=True");
-            Console.Error.WriteLine(
-                "[LOADER][INFO] bink2.rad_guest_hard_gate_started " +
-                $"file='{fileName}' active_decoder_lifecycle=True hle_execution_gate=True");
+            // SHARPEMU_V74_0_111_RAD_INTERACTIVE_GUEST_LIVE
+            if (interactiveRadUiV111)
+            {
+                Console.Error.WriteLine(
+                    "[V74.0.111][RAD_INTERACTIVE_GUEST_LIVE] " +
+                    $"file='{fileName}' hard_gate=False cpu_park=False " +
+                    "gpu_payload_backpressure=False guest_input=True guest_scripts=True");
+            }
+            else
+            {
+                BeginGuestMovieThrottle(moviePath);
+                guestThrottleStarted = true;
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.rad_guest_work_throttle_begin " +
+                    $"file='{fileName}' cpu_event_park=True gpu_payload_backpressure=True " +
+                    "lifecycle=decoder-active hle_gate=True");
+                Console.Error.WriteLine(
+                    "[LOADER][INFO] bink2.rad_guest_hard_gate_started " +
+                    $"file='{fileName}' active_decoder_lifecycle=True hle_execution_gate=True");
+            }
 
             playback =
                 new RadBinkExternalPlaybackV7243231(
@@ -516,6 +592,11 @@ internal sealed class RadBinkExternalPlaybackV7243231 : IDisposable
 
     private void ReleaseGuestMovieThrottle(string reason)
     {
+        if (!_guestThrottleStarted)
+        {
+            return;
+        }
+
         if (Interlocked.Exchange(ref _guestThrottleReleased, 1) != 0)
         {
             return;

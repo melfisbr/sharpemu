@@ -1,0 +1,25 @@
+    private static bool DecodeMtbuf(
+        uint word,
+        uint extra,
+        out string name,
+        out uint sizeDwords,
+        out string error)
+    {
+        var opcode = (word >> 16) & 0x7;
+        name = opcode switch
+        {
+            0x00 => "TBufferLoadFormatX",
+            0x01 => "TBufferLoadFormatXy",
+            0x02 => "TBufferLoadFormatXyz",
+            0x03 => "TBufferLoadFormatXyzw",
+            0x04 => "TBufferStoreFormatX",
+            0x05 => "TBufferStoreFormatXy",
+            0x06 => "TBufferStoreFormatXyz",
+            0x07 => "TBufferStoreFormatXyzw",
+            _ => string.Empty,
+        };
+        sizeDwords = (extra >> 24) == 0xFF ? 3u : 2u;
+        error = string.Empty;
+        return true;
+    }
+

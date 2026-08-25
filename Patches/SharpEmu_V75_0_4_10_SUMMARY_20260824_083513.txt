@@ -1,0 +1,26 @@
+﻿SharpEmu V75.0.4.9 summary
+========================
+Exit=0
+FfmpegRuntimeInitialized=True
+FfmpegBridgeAttached=True
+FfmpegRouteLocked=True
+FirstVisibleFrame=True
+PsStudiosGuestLiveStart=True
+PsStudiosGuestLiveStop=True
+PsStudiosGuestWorkerParked=False
+PsStudiosHostAffinityLimited=False
+AttractSeen=False
+LogoIntroLoopSeen=False
+MainMenuSeen=False
+MainMenuNgpSeen=False
+ExternalRadStarted=False
+ExternalRadForceExecuted=False
+NihavAttached=False
+NihavReady=False
+StrictAttachFailed=False
+LegacyCoverBypassed=True
+FreshFrameHandoffArmed=True
+FreshGuestFrameReleased=False
+LegacyTransitionCoverTimedOut=False
+PostStudiosProgressObserved=False
+StrictFfmpegExclusivePass=False

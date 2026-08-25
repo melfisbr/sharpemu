@@ -1,0 +1,10 @@
+﻿Tag=V76.0.12.3-BINK-GUEST-YUV-STORAGE-EPOCH-PREREQFIX
+Status=BUILD_PASSED
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_12_3_PREVIOUS_FILES_20260824_184855.zip
+BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_12_3_BUILD_20260824_184855.log
+BinkDecodeOwner=guest
+YuvProducerOwnership=session-epoch
+YuvStorageCpuUpload=suppressed-for-final-bink-yuv
+NeutralY=0-full-range
+HostDecoder=unchanged-disabled-by-default

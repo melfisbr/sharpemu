@@ -1,0 +1,8 @@
+    private static bool AttachRadMovieLocked(string hostPath)
+    {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
+        // SHARPEMU_BINK_FFMPEG_BLOCK_EXTERNAL_RAD_V75_0_4_8

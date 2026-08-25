@@ -1,0 +1,6 @@
+        {
+            bucket <<= 1;
+        }
+        return bucket;
+    }
+

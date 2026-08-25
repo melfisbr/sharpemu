@@ -1,0 +1,41 @@
+    private static bool DecodeMtbuf(
+        uint word,
+        uint extra,
+        out string name,
+        out uint sizeDwords,
+        out string error)
+    {
+        // V76.0.7 / GFX10 MTBUF: OP is four bits. OP[2:0] lives in the
+        // first dword while OP[3] is bit 53 (bit 21 of the second dword).
+        // The previous three-bit decode aliased every D16 load onto a
+        // non-D16 store opcode.
+        var opcode =
+            ((word >> 16) & 0x7) |
+            (((extra >> 21) & 0x1) << 3);
+        name = opcode switch
+        {
+            0x00 => "TBufferLoadFormatX",
+            0x01 => "TBufferLoadFormatXy",
+            0x02 => "TBufferLoadFormatXyz",
+            0x03 => "TBufferLoadFormatXyzw",
+            0x04 => "TBufferStoreFormatX",
+            0x05 => "TBufferStoreFormatXy",
+            0x06 => "TBufferStoreFormatXyz",
+            0x07 => "TBufferStoreFormatXyzw",
+            0x08 => "TBufferLoadFormatD16X",
+            0x09 => "TBufferLoadFormatD16Xy",
+            0x0A => "TBufferLoadFormatD16Xyz",
+            0x0B => "TBufferLoadFormatD16Xyzw",
+            0x0C => "TBufferStoreFormatD16X",
+            0x0D => "TBufferStoreFormatD16Xy",
+            0x0E => "TBufferStoreFormatD16Xyz",
+            0x0F => "TBufferStoreFormatD16Xyzw",
+            _ => string.Empty,
+        };
+        sizeDwords = (extra >> 24) == 0xFF ? 3u : 2u;
+        return FinishDecode(
+            name,
+            $"unknown-mtbuf op=0x{opcode:X1} word=0x{word:X8} extra=0x{extra:X8}",
+            out error);
+    }
+

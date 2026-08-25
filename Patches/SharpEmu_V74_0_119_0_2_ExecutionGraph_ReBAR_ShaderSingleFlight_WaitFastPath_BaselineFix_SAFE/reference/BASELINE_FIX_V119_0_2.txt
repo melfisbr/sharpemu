@@ -1,0 +1,29 @@
+V119.0.2 BASELINE OWNER FIX
+============================
+
+Observed failure:
+  AGC baseline missing: HasLatchedSatisfiedV74100
+
+Root cause:
+  V119.0.1 common.ps1 checked the correct API in the wrong source file.
+  HasLatchedSatisfiedV74100 belongs to GpuWaitRegistry.cs.
+
+V119.0.2 contract:
+  AgcExports.cs must contain:
+    _graphicsShaderCache
+    _computeShaderCache
+    DrainResumableDcbs
+    preferLatchedFastPathV740942
+    MonitorGpuWaits
+
+  GpuWaitRegistry.cs must contain:
+    public static bool HasLatchedSatisfiedV74100
+    CollectLatchedSatisfiedV740942
+    LatchSatisfiedByValue
+
+Original patch_v1190.ps1 SHA256:
+  F1371CD8023604050110BE4CB97C175CDEDDEFDC0F18EF1977211C79D63A3483
+
+The feature patch is unchanged in V119.0.2.
+GpuWaitRegistry.cs is not modified.
+Queue / submit / barrier / image lifetime policies are unchanged.

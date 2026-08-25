@@ -1,0 +1,64 @@
+            if (IsFormatBufferLoad(instruction.Opcode))
+            {
+                EmitBufferFormatLoad(
+                    bindingIndex,
+                    byteAddress,
+                    control.ScalarResource,
+                    control.VectorData,
+                    control.DwordCount);
+                return true;
+            }
+
+            for (uint index = 0; index < control.DwordCount; index++)
+            {
+                var address = index == 0
+                    ? byteAddress
+                    : IAdd(byteAddress, UInt(index * sizeof(uint)));
+                StoreV(
+                    control.VectorData + index,
+                    LoadGuestBufferDwordV74054(bindingIndex, address));
+            }
+
+            return true;
+        }
+
+        private void EmitBufferFormatLoad(
+            int bindingIndex,
+            uint byteAddress,
+            uint scalarResource,
+            uint vectorData,
+            uint componentCount)
+        {
+            var descriptorWord3 = LoadS(scalarResource + 3);
+            var unifiedFormat = BitwiseAnd(
+                ShiftRightLogical(descriptorWord3, UInt(12)),
+                UInt(0x7F));
+            var (dataFormat, numberFormat) = DecodeGfx10BufferFormat(unifiedFormat);
+
+            var canonical = new uint[4];
+            for (var component = 0; component < canonical.Length; component++)
+            {
+                canonical[component] = LoadGfx10BufferFormatComponent(
+                    bindingIndex,
+                    byteAddress,
+                    dataFormat,
+                    numberFormat,
+                    component);
+            }
+
+            var one = Gfx10FormatOne(numberFormat);
+            for (uint destination = 0; destination < componentCount; destination++)
+            {
+                var selector = BitwiseAnd(
+                    ShiftRightLogical(descriptorWord3, UInt(destination * 3)),
+                    UInt(7));
+                var value = UInt(0);
+                value = SelectUInt(selector, 1, one, value);
+                value = SelectUInt(selector, 4, canonical[0], value);
+                value = SelectUInt(selector, 5, canonical[1], value);
+                value = SelectUInt(selector, 6, canonical[2], value);
+                value = SelectUInt(selector, 7, canonical[3], value);
+                StoreV(vectorData + destination, value);
+            }
+        }
+

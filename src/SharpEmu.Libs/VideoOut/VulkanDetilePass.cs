@@ -55,6 +55,21 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
     private PhysicalDeviceMemoryProperties _memoryProperties;
     private bool _memoryPropertiesLoaded;
 
+    // SHARPEMU_V74_0_94_5_HOST_CACHED_DETILE_STAGING
+    // Upload buffers are CPU-written and GPU-read. On discrete GPUs a generic
+    // HOST_VISIBLE|HOST_COHERENT match may select BAR/device-local memory,
+    // which is legal but can make hundreds-of-MiB CPU writes dramatically
+    // slower. Prefer HOST_CACHED host memory when the device exposes it, then
+    // fall back to the exact legacy selection.
+    private static readonly bool _preferHostCachedDetileStagingV740945 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_DETILE_STAGING_HOST_CACHED"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _v740945StagingMemoryTraceCount;
+    private static long _v740945GuestUploadTraceCount;
+    private static long _v740945GuestUploadBytes;
+
     private readonly Dictionary<int[], TermBuffer> _xorTermBuffers = new(ReferenceComparer.Instance);
     private readonly Dictionary<int[], TermBuffer> _blockTermBuffers = new(ReferenceComparer.Instance);
     private TermBuffer _placeholderTermBuffer;
@@ -69,12 +84,33 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
     // disposal. Limit only IDLE buffers; active detile allocations are never
     // denied or truncated by this cache policy.
     private const int MaxBuffersPerBucket = 4;
+    // SHARPEMU_V74_0_90_DETILE_POOL_AND_LARGE_BUCKET
+    // V90: recurring tiled arrays use 16/32/64 MiB buckets. A 128 MiB
+    // shared idle budget cannot retain all input+output pairs, causing
+    // vkAllocateMemory/vkFreeMemory churn. 256 MiB retains those recurring
+    // classes while very large one-shot buffers still bypass the pool.
     private static readonly ulong MaxPooledBufferBytes =
         (ulong.TryParse(
              Environment.GetEnvironmentVariable("SHARPEMU_VK_DETILE_POOL_MB"),
              out var detilePoolMb) && detilePoolMb > 0
             ? detilePoolMb
-            : 128UL) * 1024UL * 1024UL;
+            : 256UL) * 1024UL * 1024UL;
+
+    private static readonly bool _largeExactBucketsV74090 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_VK_DETILE_LARGE_EXACT"),
+            "0",
+            StringComparison.Ordinal);
+    private static readonly bool _contiguousGuestReadV74090 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_VK_DETILE_CONTIGUOUS_READ"),
+            "0",
+            StringComparison.Ordinal);
+    private const ulong LargeBufferBucketThresholdV74090 = 64UL * 1024UL * 1024UL;
+    private const ulong LargeBufferBucketAlignmentV74090 = 4UL * 1024UL * 1024UL;
+    private static long _v74090LargeBucketTraceCount;
+    private static long _v74090ContiguousReadTraceCount;
+    private static long _v74090ContiguousReadSavedCalls;
 
     private readonly Stack<DescriptorSet> _freeDescriptorSets = new();
     private readonly List<DescriptorPool> _descriptorPools = new();
@@ -123,7 +159,8 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         VkBuffer Buffer,
         DeviceMemory Memory,
         ulong Capacity,
-        bool HostVisible);
+        bool HostVisible,
+        nint Mapped = 0);
 
     private readonly record struct TermBuffer(VkBuffer Buffer, ulong ByteSize);
 
@@ -391,7 +428,7 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
             (ulong)parameters.ElementsWide * (ulong)parameters.ElementsHigh * bytesPerElement * layers;
 
         resources.Tiled = RentBuffer((ulong)tiled.Length, hostVisible: true);
-        UploadBytes(resources.Tiled.Memory, tiled);
+        UploadBytes(resources.Tiled, tiled);
         resources.Output = RentBuffer(resources.OutputBytes, hostVisible: false);
 
         resources.Set = RentDescriptorSet();
@@ -439,7 +476,7 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
 
         resources.Tiled = RentBuffer(totalTiledBytes, hostVisible: true);
         if (!UploadGuestTextureSlicesV74088(
-                resources.Tiled.Memory,
+                resources.Tiled,
                 guestMemory,
                 guestBaseAddress,
                 guestSliceStride,
@@ -461,8 +498,9 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         return true;
     }
 
+    // SHARPEMU_V74_0_90_CONTIGUOUS_TILED_GUEST_READ
     private bool UploadGuestTextureSlicesV74088(
-        DeviceMemory memory,
+        Allocation allocation,
         SharpEmu.HLE.ICpuMemory guestMemory,
         ulong guestBaseAddress,
         ulong guestSliceStride,
@@ -471,11 +509,52 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         uint layers)
     {
         var totalBytes = checked((ulong)guestSliceBytes * layers);
-        void* mapped;
-        Check(_vk.MapMemory(_device, memory, 0, totalBytes, 0, &mapped), "vkMapMemory(detile guest direct)");
+        var uploadStartedV740945 = System.Diagnostics.Stopwatch.GetTimestamp();
+        var uploadModeV740945 = "sliced";
+        var uploadSucceededV740945 = false;
+        if (allocation.Mapped == 0 || allocation.Capacity < totalBytes)
+        {
+            return false;
+        }
         try
         {
-            var destination = new Span<byte>(mapped, checked((int)totalBytes));
+            var destination = new Span<byte>((void*)allocation.Mapped, checked((int)totalBytes));
+
+            // Exact fast path only: no base offset and physical stride equals
+            // the bytes copied per layer. Non-contiguous layouts preserve V88.
+            if (_contiguousGuestReadV74090 &&
+                layers > 1 &&
+                guestBaseOffset == 0 &&
+                guestSliceStride == (ulong)guestSliceBytes)
+            {
+                uploadModeV740945 = "contiguous";
+                if (!TryReadGuestTextureBackingV74088(
+                        guestMemory,
+                        guestBaseAddress,
+                        destination))
+                {
+                    return false;
+                }
+
+                var savedCalls = checked((long)layers - 1L);
+                var savedTotal = Interlocked.Add(
+                    ref _v74090ContiguousReadSavedCalls,
+                    savedCalls);
+                var trace = Interlocked.Increment(
+                    ref _v74090ContiguousReadTraceCount);
+                if (trace <= 16 || (trace & (trace - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V74.0.90][CONTIGUOUS_TILED_READ] count={trace} " +
+                        $"addr=0x{guestBaseAddress:X16} layers={layers} " +
+                        $"bytes={totalBytes} saved_calls={savedCalls} " +
+                        $"saved_calls_total={savedTotal}");
+                }
+
+                uploadSucceededV740945 = true;
+                return true;
+            }
+
             for (var layer = 0u; layer < layers; layer++)
             {
                 var guestAddress = checked(
@@ -489,11 +568,44 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
                 }
             }
 
+            uploadSucceededV740945 = true;
             return true;
         }
         finally
         {
-            _vk.UnmapMemory(_device, memory);
+            // V76.0.14: host-visible detile buffers stay persistently mapped.
+            // They return to the pool only after the submission fence retires,
+            // so CPU writes cannot race an in-flight GPU read.
+
+            // SHARPEMU_V74_0_94_5_DETILE_GUEST_UPLOAD_TIMING
+            if (totalBytes >= 8UL * 1024UL * 1024UL)
+            {
+                var elapsedV740945 =
+                    System.Diagnostics.Stopwatch.GetElapsedTime(uploadStartedV740945);
+                var elapsedMsV740945 = elapsedV740945.TotalMilliseconds;
+                var countV740945 = Interlocked.Increment(
+                    ref _v740945GuestUploadTraceCount);
+                var bytesV740945 = Interlocked.Add(
+                    ref _v740945GuestUploadBytes,
+                    checked((long)totalBytes));
+                if (countV740945 <= 128 ||
+                    (countV740945 & (countV740945 - 1)) == 0 ||
+                    elapsedMsV740945 >= 50.0)
+                {
+                    var throughputV740945 =
+                        elapsedMsV740945 > 0.0
+                            ? (totalBytes / (1024.0 * 1024.0)) /
+                              (elapsedMsV740945 / 1000.0)
+                            : 0.0;
+                    Console.Error.WriteLine(
+                        $"[V74.0.94.5][DETILE_GUEST_UPLOAD] " +
+                        $"count={countV740945} addr=0x{guestBaseAddress:X16} " +
+                        $"layers={layers} bytes={totalBytes} mode={uploadModeV740945} " +
+                        $"success={(uploadSucceededV740945 ? 1 : 0)} " +
+                        $"ms={elapsedMsV740945:F3} mbps={throughputV740945:F1} " +
+                        $"total_mb={bytesV740945 / (1024 * 1024)}");
+                }
+            }
         }
     }
 
@@ -515,7 +627,7 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         var terms = ToElementTerms(table, shift);
         var byteSize = (ulong)terms.Length * sizeof(uint);
         var allocation = CreateBuffer(byteSize, hostVisible: true);
-        UploadUInts(allocation.Memory, terms);
+        UploadUInts(allocation, terms);
         var termBuffer = new TermBuffer(allocation.Buffer, byteSize);
         cache[table] = termBuffer;
         return termBuffer;
@@ -529,19 +641,26 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         }
 
         var allocation = CreateBuffer(sizeof(uint), hostVisible: true);
-        UploadUInts(allocation.Memory, [0u]);
+        UploadUInts(allocation, [0u]);
         _placeholderTermBuffer = new TermBuffer(allocation.Buffer, sizeof(uint));
         return _placeholderTermBuffer;
     }
 
+    // V76.0.14: use common large-buffer size classes. This preserves the
+    // old power-of-two behavior for small allocations while preventing
+    // multi-megabyte over-allocation for recurring detile surfaces.
     private static ulong BucketFor(ulong size)
     {
+        if (_largeExactBucketsV74090)
+        {
+            return VulkanBufferCapacityPolicyV7614.Round(size);
+        }
+
         var bucket = MinimumBufferBucket;
         while (bucket < size)
         {
             bucket <<= 1;
         }
-
         return bucket;
     }
 
@@ -579,7 +698,7 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         if (free.Count >= MaxBuffersPerBucket ||
             allocation.Capacity > remainingBudget)
         {
-            DestroyBuffer(allocation.Buffer, allocation.Memory);
+            DestroyBuffer(allocation.Buffer, allocation.Memory, allocation.Mapped);
             _allAllocations.Remove(allocation);
             return;
         }
@@ -903,7 +1022,23 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         };
         Check(_vk.AllocateMemory(_device, &allocateInfo, null, out var memory), "vkAllocateMemory(detile)");
         Check(_vk.BindBufferMemory(_device, buffer, memory, 0), "vkBindBufferMemory(detile)");
-        var allocation = new Allocation(buffer, memory, size, hostVisible);
+
+        nint persistentMapping = 0;
+        if (hostVisible)
+        {
+            void* mapped;
+            Check(
+                _vk.MapMemory(_device, memory, 0, size, 0, &mapped),
+                "vkMapMemory(detile persistent v7614)");
+            persistentMapping = (nint)mapped;
+        }
+
+        var allocation = new Allocation(
+            buffer,
+            memory,
+            size,
+            hostVisible,
+            persistentMapping);
         _allAllocations.Add(allocation);
         return allocation;
     }
@@ -919,11 +1054,44 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         fixed (PhysicalDeviceMemoryProperties* properties = &_memoryProperties)
         {
             var memoryTypes = &properties->MemoryTypes.Element0;
+
+            // SHARPEMU_V74_0_94_5_HOST_CACHED_DETILE_STAGING
+            // Prefer CPU-cached host memory for upload buffers. Preserve the
+            // previous required-flags scan as a complete fallback, so devices
+            // without HOST_CACHED support retain identical behavior.
+            if (hostVisible && _preferHostCachedDetileStagingV740945)
+            {
+                var preferredFlagsV740945 =
+                    requiredFlags | MemoryPropertyFlags.HostCachedBit;
+                for (uint index = 0; index < properties->MemoryTypeCount; index++)
+                {
+                    var flagsV740945 = memoryTypes[index].PropertyFlags;
+                    if ((typeBits & (1u << (int)index)) == 0 ||
+                        (flagsV740945 & preferredFlagsV740945) != preferredFlagsV740945)
+                    {
+                        continue;
+                    }
+
+                    TraceDetileStagingMemoryTypeV740945(
+                        index,
+                        flagsV740945,
+                        preferred: true);
+                    return index;
+                }
+            }
+
             for (uint index = 0; index < properties->MemoryTypeCount; index++)
             {
                 if ((typeBits & (1u << (int)index)) != 0 &&
                     (memoryTypes[index].PropertyFlags & requiredFlags) == requiredFlags)
                 {
+                    if (hostVisible)
+                    {
+                        TraceDetileStagingMemoryTypeV740945(
+                            index,
+                            memoryTypes[index].PropertyFlags,
+                            preferred: false);
+                    }
                     return index;
                 }
             }
@@ -943,21 +1111,41 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         throw new InvalidOperationException("No compatible Vulkan memory type for detile.");
     }
 
-    private void UploadBytes(DeviceMemory memory, ReadOnlySpan<byte> data)
+    // SHARPEMU_V74_0_94_5_DETILE_STAGING_MEMORY_TRACE
+    private static void TraceDetileStagingMemoryTypeV740945(
+        uint index,
+        MemoryPropertyFlags flags,
+        bool preferred)
     {
-        void* mapped;
-        Check(_vk.MapMemory(_device, memory, 0, (ulong)data.Length, 0, &mapped), "vkMapMemory(detile)");
-        data.CopyTo(new Span<byte>(mapped, data.Length));
-        _vk.UnmapMemory(_device, memory);
+        var count = Interlocked.Increment(ref _v740945StagingMemoryTraceCount);
+        if (count <= 16 || (count & (count - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V74.0.94.5][DETILE_STAGING_MEMORY] " +
+                $"count={count} type={index} flags=0x{(uint)flags:X8} " +
+                $"host_cached={((flags & MemoryPropertyFlags.HostCachedBit) != 0 ? 1 : 0)} " +
+                $"device_local={((flags & MemoryPropertyFlags.DeviceLocalBit) != 0 ? 1 : 0)} " +
+                $"preferred={(preferred ? 1 : 0)}");
+        }
     }
 
-    private void UploadUInts(DeviceMemory memory, uint[] data)
+    private static void UploadBytes(Allocation allocation, ReadOnlySpan<byte> data)
     {
-        void* mapped;
+        if (allocation.Mapped == 0 || (ulong)data.Length > allocation.Capacity)
+        {
+            throw new InvalidOperationException("Detile host allocation is not persistently mapped.");
+        }
+        data.CopyTo(new Span<byte>((void*)allocation.Mapped, data.Length));
+    }
+
+    private static void UploadUInts(Allocation allocation, uint[] data)
+    {
         var byteCount = (ulong)data.Length * sizeof(uint);
-        Check(_vk.MapMemory(_device, memory, 0, byteCount, 0, &mapped), "vkMapMemory(detile terms)");
-        data.AsSpan().CopyTo(new Span<uint>(mapped, data.Length));
-        _vk.UnmapMemory(_device, memory);
+        if (allocation.Mapped == 0 || byteCount > allocation.Capacity)
+        {
+            throw new InvalidOperationException("Detile term allocation is not persistently mapped.");
+        }
+        data.AsSpan().CopyTo(new Span<uint>((void*)allocation.Mapped, data.Length));
     }
 
     private void WriteDescriptors(
@@ -1051,8 +1239,12 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
         return fence;
     }
 
-    private void DestroyBuffer(VkBuffer buffer, DeviceMemory memory)
+    private void DestroyBuffer(VkBuffer buffer, DeviceMemory memory, nint mapped = 0)
     {
+        if (mapped != 0 && memory.Handle != 0)
+        {
+            _vk.UnmapMemory(_device, memory);
+        }
         if (buffer.Handle != 0)
         {
             _vk.DestroyBuffer(_device, buffer, null);
@@ -1083,7 +1275,7 @@ internal sealed unsafe class VulkanDetilePass : IDisposable
 
         foreach (var allocation in _allAllocations)
         {
-            DestroyBuffer(allocation.Buffer, allocation.Memory);
+            DestroyBuffer(allocation.Buffer, allocation.Memory, allocation.Mapped);
         }
 
         _allAllocations.Clear();

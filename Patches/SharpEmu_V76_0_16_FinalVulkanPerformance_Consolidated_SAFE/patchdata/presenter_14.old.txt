@@ -1,0 +1,9 @@
+            var presentSignalSemaphoresV1131 = stackalloc VkSemaphore[2];
+            var presentSignalValuesV1131 = stackalloc ulong[2];
+            ulong presentGraphicsSignalValueV1131 = 0;
+            if (_dualPhysicalQueueEnabledV1131)
+            {
+                var presentComputeWaitValueV1131 = _computeQueueSignalValueV1131;
+                presentGraphicsSignalValueV1131 = ++_graphicsQueueSignalValueV1131;
+
+                presentWaitSemaphoresV1131[0] = imageAvailable;

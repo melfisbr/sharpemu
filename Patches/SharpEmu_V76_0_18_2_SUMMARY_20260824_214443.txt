@@ -1,0 +1,6 @@
+﻿Tag=V76.0.18.2-BINK-GUEST-ONLY-EBOOT-HANDOFF-BASELINE-REBASE
+Status=FAILED_ROLLBACK
+Error=Não é possível substituir a variável Host porque ela é somente leitura ou constante.
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_18_2_PREVIOUS_FILES_20260824_214443.zip
+DebugBuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_18_2_DEBUG_BUILD_20260824_214443.log
+ReleaseBuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_18_2_RELEASE_BUILD_20260824_214443.log

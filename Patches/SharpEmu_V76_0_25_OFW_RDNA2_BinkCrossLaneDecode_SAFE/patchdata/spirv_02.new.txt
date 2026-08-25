@@ -1,0 +1,12 @@
+                usesLds |= instruction.Control is Gen5DataShareControl &&
+                    instruction.Opcode != "DsSwizzleB32" &&
+                    instruction.Opcode != "DsPermuteB32" &&
+                    instruction.Opcode != "DsBpermuteB32";
+                usesSubgroupShuffle |=
+                    instruction.Control is Gen5DppControl or Gen5Dpp8Control ||
+                    instruction.Opcode is
+                        "VPermlane16B32" or
+                        "VPermlanex16B32" or
+                        "VReadlaneB32" or
+                        "DsPermuteB32" or
+                        "DsBpermuteB32";

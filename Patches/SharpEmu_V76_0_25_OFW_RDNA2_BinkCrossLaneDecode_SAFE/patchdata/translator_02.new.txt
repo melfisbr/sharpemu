@@ -1,0 +1,6 @@
+                    "DsSwizzleB32" => [Gen5Operand.Vector(vectorData0)],
+                    "DsPermuteB32" or "DsBpermuteB32" => [
+                        Gen5Operand.Vector(vectorAddress),
+                        Gen5Operand.Vector(vectorData0),
+                    ],
+                    // DS_CMPST operand order is reversed vs buffer/image cmpswap:

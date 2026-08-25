@@ -1,0 +1,60 @@
+        private static bool TryDecodeImageSampleOpcodeV7607(
+            string opcode,
+            out bool hasOffset,
+            out bool hasCompare,
+            out bool hasGradients,
+            out bool hasZeroLod,
+            out bool hasLod,
+            out bool hasBias)
+        {
+            hasOffset = false;
+            hasCompare = false;
+            hasGradients = false;
+            hasZeroLod = false;
+            hasLod = false;
+            hasBias = false;
+
+            const string prefix = "ImageSample";
+            if (!opcode.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var suffix = opcode[prefix.Length..];
+            if (suffix.EndsWith("O", StringComparison.Ordinal))
+            {
+                hasOffset = true;
+                suffix = suffix[..^1];
+            }
+
+            if (suffix.StartsWith("C", StringComparison.Ordinal))
+            {
+                hasCompare = true;
+                suffix = suffix[1..];
+            }
+
+            switch (suffix)
+            {
+                case "":
+                    return true;
+                case "D":
+                    hasGradients = true;
+                    return true;
+                case "L":
+                    hasLod = true;
+                    return true;
+                case "B":
+                    hasBias = true;
+                    return true;
+                case "Lz":
+                    hasZeroLod = true;
+                    return true;
+                default:
+                    // In particular, *_Cl LOD-clamp variants are not silently
+                    // treated as ordinary samples. Vulkan requires explicit
+                    // shaderResourceMinLod feature plumbing for MinLod.
+                    return false;
+            }
+        }
+
+        private static bool UsesSampler(string opcode) =>

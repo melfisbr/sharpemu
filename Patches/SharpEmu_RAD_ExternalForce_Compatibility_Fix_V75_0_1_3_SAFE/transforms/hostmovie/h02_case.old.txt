@@ -1,0 +1,23 @@
+            // SHARPEMU_BINK_NATIVE_RAD_MODE_V75_0_0
+            case MovieMode.NativeRad:
+                if (AttachRadNativeMovieLocked(hostPath))
+                {
+                    return;
+                }
+
+                if (Environment.GetEnvironmentVariable(
+                        "SHARPEMU_BINK_NATIVE_FALLBACK") != "0" &&
+                    AttachRadMovieLocked(hostPath))
+                {
+                    Console.Error.WriteLine(
+                        "[BINK-NATIVE][V75.0.0] fallback_external_rad " +
+                        $"file='{Path.GetFileName(hostPath)}'");
+                    return;
+                }
+
+                Console.Error.WriteLine(
+                    "[BINK-NATIVE][V75.0.0] attach_failed " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    "fallback_external_rad=False");
+                return;
+

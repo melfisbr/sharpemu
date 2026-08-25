@@ -1,0 +1,12 @@
+﻿Tag=V76.0.5.1-GEN5-VULKAN-ADAPTIVE-REBASE
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+InitialState=ReadyAdaptive
+BuildExitCode=0
+BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_5_1_BUILD_20260824_120332.log
+Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_5_1_PREVIOUS_FILES_20260824_120332.zip
+ApplyMode=adaptive-in-place; divergent files were not replaced wholesale
+Core=DS_SWIZZLE_B32; S_BITCMP0/1_B64; VCMPX const I32/U32; V_CVT_PK_U16_U32; V_DOT2C_F32_F16; S_BARRIER 0x948; binary SPIR-V cache
+Safety=V7604 soft-fail becomes opt-in when present; V7603 missing disk-cache reference neutralized only if its class is absent
+Build=PASSED
+Rollback=NOT_REQUIRED
+TraceHint=SHARPEMU_TRACE_SPIRV_CACHE=1; SHARPEMU_TRACE_COMPUTE_DISPATCH_TIMING=1; SHARPEMU_TRACE_PRESENT_CADENCE=1; SHARPEMU_TRACE_FRAME_STATS=1

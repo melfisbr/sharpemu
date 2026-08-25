@@ -1,0 +1,60 @@
+    private static bool DecodeMubuf(
+        uint word,
+        uint extra,
+        out string name,
+        out uint sizeDwords,
+        out string error)
+    {
+        var opcode = (word >> 18) & 0x7F;
+        name = opcode switch
+        {
+            0x00 => "BufferLoadFormatX",
+            0x01 => "BufferLoadFormatXy",
+            0x02 => "BufferLoadFormatXyz",
+            0x03 => "BufferLoadFormatXyzw",
+            0x04 => "BufferStoreFormatX",
+            0x05 => "BufferStoreFormatXy",
+            0x06 => "BufferStoreFormatXyz",
+            0x07 => "BufferStoreFormatXyzw",
+            0x08 => "BufferLoadUbyte",
+            0x09 => "BufferLoadSbyte",
+            0x0A => "BufferLoadUshort",
+            0x0B => "BufferLoadSshort",
+            0x0C => "BufferLoadDword",
+            0x0D => "BufferLoadDwordx2",
+            0x0E => "BufferLoadDwordx4",
+            0x0F => "BufferLoadDwordx3",
+            0x18 => "BufferStoreByte",
+            0x19 => "BufferStoreByteD16Hi",
+            0x1A => "BufferStoreShort",
+            0x1B => "BufferStoreShortD16Hi",
+            0x1C => "BufferStoreDword",
+            0x1D => "BufferStoreDwordx2",
+            0x1E => "BufferStoreDwordx4",
+            0x1F => "BufferStoreDwordx3",
+            0x20 => "BufferLoadUbyteD16",
+            0x21 => "BufferLoadUbyteD16Hi",
+            0x22 => "BufferLoadSbyteD16",
+            0x23 => "BufferLoadSbyteD16Hi",
+            0x24 => "BufferLoadShortD16",
+            0x25 => "BufferLoadShortD16Hi",
+            0x30 => "BufferAtomicSwap",
+            0x31 => "BufferAtomicCmpswap",
+            0x32 => "BufferAtomicAdd",
+            0x33 => "BufferAtomicSub",
+            0x35 => "BufferAtomicSmin",
+            0x36 => "BufferAtomicUmin",
+            0x37 => "BufferAtomicSmax",
+            0x38 => "BufferAtomicUmax",
+            0x39 => "BufferAtomicAnd",
+            0x3A => "BufferAtomicOr",
+            0x3B => "BufferAtomicXor",
+            0x3C => "BufferAtomicInc",
+            0x3D => "BufferAtomicDec",
+            _ => $"MubufRaw{opcode:X2}",
+        };
+        sizeDwords = (extra >> 24) == 0xFF ? 3u : 2u;
+        error = string.Empty;
+        return true;
+    }
+

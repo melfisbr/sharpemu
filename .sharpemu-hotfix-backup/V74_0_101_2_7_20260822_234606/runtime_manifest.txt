@@ -1,0 +1,9 @@
+﻿upscalers\SharpEmu.VulkanUpscaler.Native.dll|true
+nvngx_dlss.dll|true
+sl.interposer.dll|false
+sl.common.dll|false
+sl.dlss_g.dll|false
+nvngx_dlssg.dll|false
+sl.reflex.dll|false
+sl.pcl.dll|false
+NvLowLatencyVk.dll|false

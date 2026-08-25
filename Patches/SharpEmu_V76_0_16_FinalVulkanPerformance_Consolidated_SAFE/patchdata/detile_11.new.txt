@@ -1,0 +1,23 @@
+        };
+        Check(_vk.AllocateMemory(_device, &allocateInfo, null, out var memory), "vkAllocateMemory(detile)");
+        Check(_vk.BindBufferMemory(_device, buffer, memory, 0), "vkBindBufferMemory(detile)");
+
+        nint persistentMapping = 0;
+        if (hostVisible)
+        {
+            void* mapped;
+            Check(
+                _vk.MapMemory(_device, memory, 0, size, 0, &mapped),
+                "vkMapMemory(detile persistent v7614)");
+            persistentMapping = (nint)mapped;
+        }
+
+        var allocation = new Allocation(
+            buffer,
+            memory,
+            size,
+            hostVisible,
+            persistentMapping);
+        _allAllocations.Add(allocation);
+        return allocation;
+    }

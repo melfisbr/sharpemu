@@ -1,0 +1,13 @@
+
+        private void CreateDevice()
+        {
+            // V76.0.15: make the already-existing second queue the normal path
+            // on Vulkan desktops. Explicit 0 keeps the old single-queue A/B.
+            _dualPhysicalQueueRequestedV1131 =
+                !OperatingSystem.IsMacOS() &&
+                !string.Equals(
+                    Environment.GetEnvironmentVariable("SHARPEMU_DUAL_PHYSICAL_QUEUE"),
+                    "0",
+                    StringComparison.Ordinal);
+
+            uint queueFamilyCountV1131 = 0;

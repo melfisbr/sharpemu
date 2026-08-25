@@ -1,0 +1,6 @@
+﻿Tag=V76.0.12.3-BINK-GUEST-YUV-STORAGE-EPOCH-PREREQFIX
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+ShaderCache=AppliedKnownHash hash=4c40d35df93d1434f03c8092c1ccb0406063e0bfae2cb90a335f8895621ad09f
+BinkRuntime=ReadySemanticInsert
+Presenter=ReadySemanticInsert
+YuvEpochHelper=ReadyCopy hash=

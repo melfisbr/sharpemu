@@ -1,0 +1,7 @@
+        hostPath,
+        info,
+        source);
+    Volatile.Write(ref _nativeRadExclusiveOwnerActiveV75041, 1);
+
+    Console.Error.WriteLine(
+        "[BINK-NATIVE][V75.0.0] bridge_attached " +

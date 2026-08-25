@@ -1,6 +1,0 @@
-    // clear, or any other race), the presenter re-reads the texels itself
-    // instead of showing a fallback pattern.
-    private static volatile SharpEmu.HLE.ICpuMemory? _guestMemory;
-
-    internal static void AttachGuestMemory(SharpEmu.HLE.ICpuMemory memory) =>
-        _guestMemory = memory;

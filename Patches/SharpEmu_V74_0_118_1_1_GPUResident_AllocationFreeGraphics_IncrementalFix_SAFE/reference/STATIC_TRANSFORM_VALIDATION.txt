@@ -1,0 +1,23 @@
+V118.1.1 STATIC INCREMENTAL VALIDATION
+======================================
+original_v1181_false_idempotency_bug=CONFIRMED
+old_wrong_guard=SHARPEMU_V74_0_118_0_GPU_RESIDENT_SHADER_ID
+new_full_v1181_idempotency_guard=PASS
+incremental_transform_count=7
+incremental_resident-fields=PASS
+incremental_resident-types=PASS
+incremental_resident-helper=PASS
+incremental_graphics-resident-fastpath=PASS
+incremental_graphics-fast-insert=PASS
+incremental_resident-shutdown=PASS
+incremental_resident-envelope=PASS
+v1180_1_baseline_required=1
+v11716_descriptor_cache_reapply=0
+exact_spirv_compare_preserved=PASS
+graphics_hash_collision_exact_compare=PASS
+v11715_texture_alias=ABSENT_REQUIRED
+vkimage_change=0
+buffer_content_change=0
+queue_change=0
+submit_change=0
+barrier_change=0

@@ -1,0 +1,9 @@
+﻿Tag=V76.0.25-OFW-RDNA2-BINK-CROSSLANE-DECODE
+Status=SOURCE_VERIFY_PASSED
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+DS_PERMUTE_B32=implemented
+DS_BPERMUTE_B32=implemented
+DPP_reserved_identity_fallback=removed
+Bink_UNORM_sample_alias=disabled
+HybridHostDecoder=disabled
+HostDecoder=0

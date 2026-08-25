@@ -1,0 +1,7 @@
+﻿timestamp=20260822_162552
+nested=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_DemonsSouls_CPUToGPUFeed_EnvelopeUnclamp_REBASED_Fix_V74_0_117_1_1_SCRIPT_REPAIR_SAFE\SharpEmu_DemonsSouls_CPUToGPUFeed_EnvelopeUnclamp_REBASED_Fix_V74_0_117_1_1_SCRIPT_REPAIR_SAFE
+files=16
+exact=6
+hash_mismatch=10
+flat_missing=0
+policy=quarantine-divergent-nested; flat-root-is-canonical

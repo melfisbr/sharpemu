@@ -1,8 +1,0 @@
-{
-  "name": "SharpEmu_DemonsSouls_UiBink_FrameOwnership_StickyPlane_Fix_V74_0_84_2_SAFE",
-  "version": "74.0.84.2",
-  "target": "Demon's Souls PPSA01341 v01.005.000",
-  "requires": "V74.0.84.1",
-  "source_changes": ["src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs"],
-  "purpose": ["UI Bink decoded-frame ownership", "sticky learned sampled Y/UV plane substitution"]
-}

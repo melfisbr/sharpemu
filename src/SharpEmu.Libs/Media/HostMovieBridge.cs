@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 SharpEmu Emulator Project
+// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Runtime.InteropServices;
@@ -100,6 +100,11 @@ internal static class HostMovieBridge
     private static bool _frameBufferPresented;
     private static MediaFramePlayback? _playback;
     private static long _frameSerial;
+    // SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1
+    private static int _nativeRadExclusiveOwnerActiveV75041;
+
+    internal static bool IsNativeRadExclusiveOwnerActiveV75041 =>
+        Volatile.Read(ref _nativeRadExclusiveOwnerActiveV75041) != 0;
     // SHARPEMU_BINK_OPTIONS_START_SKIP_V1_0
     private static long _optionsStartMovieSkipCount;
     private static uint _presentationWidth = MaxHostVideoWidth;
@@ -109,6 +114,11 @@ internal static class HostMovieBridge
     {
         get
         {
+            if (BinkGuestOwnedRuntimeV7600.Enabled)
+            {
+                return false;
+            }
+
             lock (Gate)
             {
                 return _playback is not null ||
@@ -124,6 +134,11 @@ internal static class HostMovieBridge
     {
         get
         {
+            if (BinkGuestOwnedRuntimeV7600.Enabled)
+            {
+                return string.Empty;
+            }
+
             lock (Gate)
             {
                 return _activePath ?? string.Empty;
@@ -142,6 +157,11 @@ internal static class HostMovieBridge
     internal static bool IsDemonSoulsUiBinkCompositePathV740841(
         string? hostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(hostPath))
         {
             return false;
@@ -202,6 +222,11 @@ internal static class HostMovieBridge
     {
         get
         {
+            if (BinkGuestOwnedRuntimeV7600.Enabled)
+            {
+                return false;
+            }
+
             lock (Gate)
             {
                 return IsDemonSoulsUiBinkCompositePathV740841(_activePath) &&
@@ -224,6 +249,11 @@ internal static class HostMovieBridge
     // input hook or consuming the guest's real button event.
     internal static bool StopTitleLoopCompositeV74081(string reason)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return false;
+        }
+
         lock (Gate)
         {
             if (!IsTitleLoopPathV74081(_activePath))
@@ -258,7 +288,10 @@ internal static class HostMovieBridge
             _presentationHeight = Math.Min(height, MaxHostVideoHeight);
         }
 
-        TryStartConfiguredBootSequence();
+        if (!BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            TryStartConfiguredBootSequence();
+        }
     }
 
     /// <summary>
@@ -330,6 +363,7 @@ internal static class HostMovieBridge
                    StringComparison.OrdinalIgnoreCase);
     }
     internal static bool ShouldSkipGuestMovie(string hostPath) =>
+        !BinkGuestOwnedRuntimeV7600.Enabled &&
         IsSelfDecodedMovie(hostPath) &&
         ResolveMode() == MovieMode.Skip;
 
@@ -449,6 +483,10 @@ internal static class HostMovieBridge
     internal static void NotifyV31714GuestFirstFrameAttractHandoff()
 
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return;
+        }
 
         if (!string.Equals(
 
@@ -748,8 +786,15 @@ internal static class HostMovieBridge
 
     }
 
-    internal static bool ObserveGuestMovie(string hostPath) =>
-        ObserveMovie(hostPath, naturalGuestRequest: true);
+    internal static bool ObserveGuestMovie(string hostPath)
+    {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
+        }
+
+        return ObserveMovie(hostPath, naturalGuestRequest: true);
+    }
 
     // SHARPEMU_V74_0_78_NATURAL_ATTRACT_TITLE_LOOP
     // V31.7.15 already queues logo_intro_loop.bk2 after attract_movie.bk2,
@@ -961,6 +1006,17 @@ internal static class HostMovieBridge
                 "NATURAL_GUEST_MOVIE_OBSERVED",
                 v3179FileName,
                 $" n={observed}");
+
+            // SHARPEMU_V74_0_95_2_2_3_SCENE_BINK_LINK
+            // Observe only the movie requested naturally by the guest scene.
+            if (IsDemonSoulsUiBinkCompositePathV740841(hostPath))
+            {
+                Console.Error.WriteLine(
+                    "[V74.0.95.2.2.3][SCENE_BINK_LINK] " +
+                    $"guest_request='{v3179FileName}' " +
+                    $"active='{Path.GetFileName(_activePath ?? string.Empty)}' " +
+                    "source=guest-scene-script action=observe");
+            }
         }
 
         lock (Gate)
@@ -1056,15 +1112,34 @@ internal static class HostMovieBridge
             return false;
         }
 
-        if (!NihavBink2Decoder.TryOpen(
-                hostPath,
-                _presentationWidth,
-                _presentationHeight,
-                out var source) ||
-            source is null)
+        IMediaFrameDecoder? source = null;
+        var restartMode = ResolveMode();
+        if (restartMode == MovieMode.NativeRad)
+        {
+            if (TryOpenPreferredNativeRadDecoderV75045(
+                    hostPath,
+                    out var nativeSource,
+                    out _,
+                    out _) &&
+                nativeSource is not null)
+            {
+                source = nativeSource;
+            }
+        }
+        else if (NihavBink2Decoder.TryOpen(
+                     hostPath,
+                     _presentationWidth,
+                     _presentationHeight,
+                     out var nihavSource) &&
+                 nihavSource is not null)
+        {
+            source = nihavSource;
+        }
+
+        if (source is null)
         {
             Console.Error.WriteLine(
-                $"[V74.0.88.3][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' result=open-failed");
+                $"[V75.0.4][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' result=open-failed mode={restartMode}");
             return false;
         }
 
@@ -1085,8 +1160,9 @@ internal static class HostMovieBridge
         _activeInfo = info;
 
         Console.Error.WriteLine(
-            $"[V74.0.88.3][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' " +
-            $"result=rewound size={info.Width}x{info.Height} guest_movie_remains_open=True");
+            $"[V75.0.4][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' " +
+            $"result=rewound size={info.Width}x{info.Height} mode={restartMode} " +
+            "guest_movie_remains_open=True");
         return true;
     }
     internal static bool TryDecodeNextFrame(
@@ -1096,8 +1172,21 @@ internal static class HostMovieBridge
         out uint height,
         out bool advanced,
         out long frameSerial,
-        out string hostPath)
+        out string hostPath,
+        out MediaFramePixelLayout pixelLayout)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            pixels = [];
+            width = 0;
+            height = 0;
+            advanced = false;
+            frameSerial = 0;
+            hostPath = string.Empty;
+            pixelLayout = MediaFramePixelLayout.Bgra32;
+            return false;
+        }
+
         lock (Gate)
         {
             pixels = [];
@@ -1106,6 +1195,7 @@ internal static class HostMovieBridge
             advanced = false;
             frameSerial = _frameSerial;
             hostPath = _activePath ?? string.Empty;
+            pixelLayout = MediaFramePixelLayout.Bgra32;
             if (HostOptionsSkipBridgeV6113262.ConsumeRequest())
             {
                 var skipped = SkipActiveMovieForOptionsLocked("frame-pump");
@@ -1173,7 +1263,9 @@ internal static class HostMovieBridge
                         {
                             AttachMovieLocked(
                                 completedPath,
-                                MovieMode.Nihav);
+                                ResolveMode() == MovieMode.NativeRad
+                                    ? MovieMode.NativeRad
+                                    : MovieMode.Nihav);
 
                             Console.Error.WriteLine(
                                 "[V74.0.81][TITLE_LOOP_RESTART] " +
@@ -1196,6 +1288,7 @@ internal static class HostMovieBridge
 
                 width = _activeInfo.Width;
                 height = _activeInfo.Height;
+                pixelLayout = _playback.PixelLayout;
                 if (advanced)
                 {
                     frameSerial = ++_frameSerial;
@@ -1231,21 +1324,120 @@ internal static class HostMovieBridge
 
     private static void AttachMovieLocked(string hostPath, MovieMode mode)
     {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
+            Console.Error.WriteLine(
+                "[BINK-GUEST][V76.0.18][HOST-ATTACH-BLOCK] " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "backend=all-host action=reject");
+            return;
+        }
+
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return;
+        }
+
+        // SHARPEMU_BINK_FFMPEG_ATTACH_GUARD_V75_0_4_8
+        // This is deliberately before every historical RAD/NIHAV UI rewrite.
+        // It also catches callers that still pass MovieMode.Rad while the
+        // requested global owner is native-rad.
+        if (NativeFfmpegRouteRequestedV75048())
+        {
+            BinkDemonSoulsIntroAudioV7243227.NotifyMovieAttachV1113(hostPath);
+
+            if (AttachRadNativeMovieLocked(hostPath))
+            {
+                Console.Error.WriteLine(
+                    "[BINK-FFMPEG][V75.0.4.8] route_locked " +
+                    $"file='{Path.GetFileName(hostPath)}' backend=ffmpeg-core-inprocess " +
+                    "ui_and_fullscreen=True external_rad=False nihav=False");
+                return;
+            }
+
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.8] strict_attach_failed " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "external_rad_fallback=False nihav_fallback=False");
+            return;
+        }
+
         // SHARPEMU_DEMONS_TITLE_CHAIN_AUDIO_LIFECYCLE_HOOK_V1_1_13
         // Execute before mode rewriting and before any host-audio probe.
         // This covers UI_BINK_INTERNAL where host_audio_probe=False.
         BinkDemonSoulsIntroAudioV7243227.NotifyMovieAttachV1113(
             hostPath);
-        // SHARPEMU_V74_0_84_1_UI_BINK_INTERNAL_ROUTING
-        // RAD remains the owner for fullscreen PS Studios/attract. UI Binks are
-        // texture producers and therefore remain internal with the guest alive.
-        if (mode == MovieMode.Rad &&
+        // SHARPEMU_V74_0_111_RAD_INTERACTIVE_UI_ROUTE
+        // SHARPEMU_V74_0_118_3_RAD_UI_OWNERSHIP_RESTORE
+        // V118.2 proved that forcing main_menu through NIHAV regresses the
+        // title/menu image on this current chain. Restore the V111 external RAD
+        // owner for persistent title/menu Binks while keeping guest execution
+        // and guest input live. Also recover a missing RAD executable path from
+        // the normal Windows installation directory before the external bridge
+        // attempts to start.
+        if (mode == MovieMode.Rad)
+        {
+            var configuredRad =
+                Environment.GetEnvironmentVariable("SHARPEMU_RADVIDEO64");
+            if (string.IsNullOrWhiteSpace(configuredRad) ||
+                !File.Exists(configuredRad))
+            {
+                var programFilesX86 =
+                    Environment.GetFolderPath(
+                        Environment.SpecialFolder.ProgramFilesX86);
+                var installedRad = Path.Combine(
+                    programFilesX86,
+                    "RADVideo",
+                    "radvideo64.exe");
+                if (File.Exists(installedRad))
+                {
+                    Environment.SetEnvironmentVariable(
+                        "SHARPEMU_RADVIDEO64",
+                        installedRad);
+                    Console.Error.WriteLine(
+                        "[V74.0.118.3][RAD_RUNTIME_AUTO_PATH] " +
+                        $"path='{installedRad}' source=program-files-x86");
+                }
+            }
+        }
+
+        // SHARPEMU_V74_0_118_7_6_3_13_RAD_NIHAV_HYBRID_RESTORE
+        // Restore the proven V74.0.88.x media ownership split without
+        // reverting the later scheduler/Vulkan/NIHAV performance work:
+        //
+        //   one-shot/fullscreen title movies -> official external RAD
+        //   logo_intro_loop/main_menu       -> internal NIHAV + guest UI
+        //
+        // V118.3 made persistent UI Binks use external RAD by default because
+        // any value other than "0" selected the interactive RAD route. That
+        // default displaced the older UI compositor path. Keep the later RAD
+        // interactive implementation available only as an explicit diagnostic
+        // opt-in instead of making it the normal title/menu route.
+        var interactiveRadUiV111 =
+            mode == MovieMode.Rad &&
             IsDemonSoulsUiBinkCompositePathV740841(hostPath) &&
-            !string.Equals(
+            string.Equals(
                 Environment.GetEnvironmentVariable(
-                    "SHARPEMU_DS_UI_BINK_INTERNAL"),
-                "0",
-                StringComparison.Ordinal))
+                    "SHARPEMU_DS_UI_BINK_RAD_INTERACTIVE"),
+                "1",
+                StringComparison.Ordinal);
+
+        if (interactiveRadUiV111)
+        {
+            Console.Error.WriteLine(
+                "[V74.0.118.3][UI_BINK_RAD_INTERACTIVE_ROUTE] " +
+                $"file='{Path.GetFileName(hostPath)}' backend=official-rad-external " +
+                "guest_execution=live guest_input=live transition_owner=guest " +
+                "hard_gate=False composition=clipped-child explicit_opt_in=True");
+        }
+        else if (mode == MovieMode.Rad &&
+                 IsDemonSoulsUiBinkCompositePathV740841(hostPath) &&
+                 !string.Equals(
+                     Environment.GetEnvironmentVariable(
+                         "SHARPEMU_DS_UI_BINK_INTERNAL"),
+                     "0",
+                     StringComparison.Ordinal))
         {
             mode = MovieMode.Nihav;
             var n = Interlocked.Increment(
@@ -1255,6 +1447,12 @@ internal static class HostMovieBridge
                 $"count={n} file='{Path.GetFileName(hostPath)}' " +
                 "mode=nihav guest_hle_gate=False guest_gpu_live=True " +
                 "clock=guest-composite-pump");
+            Console.Error.WriteLine(
+                "[V74.0.118.7.6.3.13][RAD_NIHAV_HYBRID_ROUTE] " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "global_movie_mode=rad resolved_ui_backend=nihav " +
+                "fullscreen_owner=official-rad guest_gpu_live=True " +
+                "historical_baseline=V74.0.88.6.2");
         }
         // V31.7.20.7_POST_ATTRACT_LOOP_INTERNAL
         // SHARPEMU_V74_0_79_INTERNAL_TITLE_MENU_LOOP
@@ -1270,6 +1468,7 @@ internal static class HostMovieBridge
         // force only logo_intro_loop.bk2 through the existing internal NIHAV
         // lane so guest title/menu UI can remain resident and interactive.
         if (mode == MovieMode.Rad &&
+            !interactiveRadUiV111 &&
             string.Equals(
                 Path.GetFileName(hostPath),
                 "logo_intro_loop.bk2",
@@ -1281,6 +1480,18 @@ internal static class HostMovieBridge
                 "file='logo_intro_loop.bk2' mode=nihav " +
                 "reason=guest-ui-composition-and-no-rad-relaunch");
         }
+        // SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1
+        // Legacy RAD/UI branches above can still rewrite a request to NIHAV.
+        // Under native exclusive ownership, immediately return that request to
+        // the native DLL before any NIHAV decoder or host-audio sidecar starts.
+        if (mode == MovieMode.Nihav && NativeRadExclusiveOwnerEnabledV75041())
+        {
+            Console.Error.WriteLine(
+                "[BINK-NATIVE][V75.0.4.1] legacy_nihav_route_promoted " +
+                $"file='{Path.GetFileName(hostPath)}' owner=native-rad");
+            mode = MovieMode.NativeRad;
+        }
+
         // SHARPEMU_V74_0_82_TITLE_LOOP_NO_HOST_AUDIO_PROBE
         // logo_intro_loop.bk2 has no audio stream in the observed title asset.
         // Do not launch NIHAV/FFmpeg audio probes every time the persistent loop
@@ -1315,34 +1526,39 @@ internal static class HostMovieBridge
                 AttachFfmpegMovieLocked(hostPath);
                 return;
             // SHARPEMU_BINK_NATIVE_RAD_MODE_V75_0_0
+            // SHARPEMU_V75_0_1_3_NATIVE_RAD_CASE_EXTERNALIZED
+            // Defensive compatibility path: even if a future/legacy caller
+            // produces NativeRad directly, never enter the SDK adapter.
             case MovieMode.NativeRad:
-                if (AttachRadNativeMovieLocked(hostPath))
-                {
-                    return;
-                }
-
-                if (Environment.GetEnvironmentVariable(
-                        "SHARPEMU_BINK_NATIVE_FALLBACK") != "0" &&
-                    AttachRadMovieLocked(hostPath))
+                Console.Error.WriteLine(
+                    "[V75.0.1.3][RAD_EXTERNAL_FORCE_CASE] " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    "requested=native-rad resolved=external-rad");
+                if (!AttachRadMovieLocked(hostPath))
                 {
                     Console.Error.WriteLine(
-                        "[BINK-NATIVE][V75.0.0] fallback_external_rad " +
-                        $"file='{Path.GetFileName(hostPath)}'");
-                    return;
+                        "[LOADER][ERROR] bink2.external_rad_attach_failed " +
+                        $"file='{Path.GetFileName(hostPath)}' " +
+                        "source=v75.0.1.3-native-case-externalized");
                 }
-
-                Console.Error.WriteLine(
-                    "[BINK-NATIVE][V75.0.0] attach_failed " +
-                    $"file='{Path.GetFileName(hostPath)}' " +
-                    "fallback_external_rad=False");
                 return;
 
             case MovieMode.Rad:
-                // V72.4.3.2.31.4 RAD_REQUIRED_NO_FALLBACK
-                // Never hide RAD discovery/start failures by silently switching
-                // back to NIHAV; that would reproduce the corrupted-color path.
+                // SHARPEMU_V74_0_111_RAD_INTERACTIVE_SAFE_FALLBACK
+                // Fullscreen owner movies remain RAD-required. Interactive UI
+                // is different: if the RAD child cannot be embedded, preserve
+                // guest input by falling back to the existing internal decoder.
                 if (!AttachRadMovieLocked(hostPath))
                 {
+                    if (interactiveRadUiV111 && AttachNihavMovieLocked(hostPath))
+                    {
+                        Console.Error.WriteLine(
+                            "[V74.0.111][UI_BINK_RAD_FALLBACK] " +
+                            $"file='{Path.GetFileName(hostPath)}' backend=nihav " +
+                            "reason=rad-embed-failed guest_execution=live");
+                        return;
+                    }
+
                     Console.Error.WriteLine(
                         "[LOADER][ERROR] bink2.rad_required_attach_failed " +
                         $"file='{Path.GetFileName(hostPath)}'");
@@ -1362,59 +1578,156 @@ internal static class HostMovieBridge
         }
     }
 
-private static bool AttachRadNativeMovieLocked(
-    string hostPath)
-{
-    if (!RadBinkNativeSdkDecoderV7500.TryOpen(
+    // SHARPEMU_BINK_FFMPEG_INPROCESS_HOST_V75_0_4_5
+    private static bool TryOpenPreferredNativeRadDecoderV75045(
+        string hostPath,
+        out IMediaFrameDecoder? source,
+        out bool embeddedAudioActive,
+        out string backend)
+    {
+        source = null;
+        embeddedAudioActive = false;
+        backend = "none";
+
+        if (FfmpegRuntime.IsRuntimeCandidatePresent)
+        {
+            try
+            {
+                if (FfmpegVideoDecoder.TryOpen(
+                        hostPath,
+                        _presentationWidth,
+                        _presentationHeight,
+                        out var ffmpegSource) &&
+                    ffmpegSource is not null)
+                {
+                    source = ffmpegSource;
+                    embeddedAudioActive = ffmpegSource.EmbeddedAudioActive;
+                    backend = "ffmpeg-core-inprocess";
+                    return true;
+                }
+
+                Console.Error.WriteLine(
+                    "[BINK-FFMPEG][V75.0.4.5] open_failed " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    $"root='{FfmpegRuntime.RuntimeRoot}' reason=decoder-open-returned-false");
+            }
+            catch (Exception exception)
+            {
+                var detail = exception.Message.Replace('\r', ' ').Replace('\n', ' ');
+                Console.Error.WriteLine(
+                    "[BINK-FFMPEG][V75.0.4.5] open_exception " +
+                    $"file='{Path.GetFileName(hostPath)}' " +
+                    $"type={exception.GetType().Name} detail='{detail}' " +
+                    $"root='{FfmpegRuntime.RuntimeRoot}'");
+            }
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.5] runtime_missing " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                $"root='{FfmpegRuntime.RuntimeRoot}'");
+        }
+
+        // The V75.0.4 ffmpeg.exe adapter remains available only for A/B
+        // diagnostics. It is never an implicit fallback and Nihav is not used.
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_BINK_LEGACY_ADAPTER_FALLBACK"),
+                "1",
+                StringComparison.Ordinal) &&
+            RadBinkNativeSdkDecoderV7500.TryOpen(
+                hostPath,
+                out var legacySource) &&
+            legacySource is not null)
+        {
+            source = legacySource;
+            embeddedAudioActive = legacySource.EmbeddedAudioActive;
+            backend = "legacy-sharpemu-binknative";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool AttachRadNativeMovieLocked(
+        string hostPath)
+    {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
+        if (!TryOpenPreferredNativeRadDecoderV75045(
+                hostPath,
+                out var source,
+                out var embeddedAudioActive,
+                out var backend) ||
+            source is null)
+        {
+            return false;
+        }
+
+        var info = new Bink2MovieInfo(
+            source.Width,
+            source.Height,
+            source.FramesPerSecondNumerator,
+            source.FramesPerSecondDenominator);
+
+        if (!IsValid(info))
+        {
+            source.Dispose();
+            return false;
+        }
+
+        // Demon's Souls attract_movie is video-only in Bink. Its existing AT9
+        // sidecar is prepared now and released by IMediaPresentationAware on
+        // the first visible frame. Embedded Bink audio stays FFmpeg-owned.
+        if (string.Equals(
+                Path.GetFileName(hostPath),
+                "attract_movie.bk2",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            BinkHostAudioBridgeV7241.TryStart(hostPath);
+        }
+
+        AttachPlaybackLocked(
             hostPath,
-            out var source) ||
-        source is null)
-    {
-        return false;
+            info,
+            source);
+        Volatile.Write(ref _nativeRadExclusiveOwnerActiveV75041, 1);
+
+        Console.Error.WriteLine(
+            "[BINK-FFMPEG][V75.0.4.5] bridge_attached " +
+            $"file='{Path.GetFileName(hostPath)}' " +
+            $"size={info.Width}x{info.Height} " +
+            $"fps={info.FramesPerSecondNumerator}/" +
+            $"{info.FramesPerSecondDenominator} " +
+            $"embedded_audio_active={embeddedAudioActive} " +
+            $"decoder={backend} " +
+            $"runtime_root='{FfmpegRuntime.RuntimeRoot}' " +
+            "nihav_owner=False native_rad_owner=True");
+        return true;
     }
 
-    var info = new Bink2MovieInfo(
-        source.Width,
-        source.Height,
-        source.FramesPerSecondNumerator,
-        source.FramesPerSecondDenominator);
-
-    if (!IsValid(info))
-    {
-        source.Dispose();
-        return false;
-    }
-
-    // Demon's Souls attract_movie is video-only in Bink. Its AT9 stems
-    // remain SharpEmu-owned and become MediaFramePlayback's master clock.
-    if (string.Equals(
-            Path.GetFileName(hostPath),
-            "attract_movie.bk2",
-            StringComparison.OrdinalIgnoreCase))
-    {
-        BinkHostAudioBridgeV7241.TryStart(
-            hostPath);
-    }
-
-    AttachPlaybackLocked(
-        hostPath,
-        info,
-        source);
-
-    Console.Error.WriteLine(
-        "[BINK-NATIVE][V75.0.0] bridge_attached " +
-        $"file='{Path.GetFileName(hostPath)}' " +
-        $"size={info.Width}x{info.Height} " +
-        $"fps={info.FramesPerSecondNumerator}/" +
-        $"{info.FramesPerSecondDenominator} " +
-        $"tracks={source.AudioTrackCount} " +
-        $"embedded_audio_active={source.EmbeddedAudioActive} " +
-        $"decoder=in-process-sdk " +
-        $"dll='{RadBinkNativeSdkDecoderV7500.RuntimeLibraryPath}'");
-    return true;
-}
     private static bool AttachRadMovieLocked(string hostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
+        // SHARPEMU_BINK_FFMPEG_BLOCK_EXTERNAL_RAD_V75_0_4_8
+        // Belt-and-suspenders guard: an old force route cannot launch RAD while
+        // native-rad is the requested owner.
+        if (NativeFfmpegRouteRequestedV75048())
+        {
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.8] external_rad_blocked " +
+                $"file='{Path.GetFileName(hostPath)}' requested=native-rad");
+            return false;
+        }
+
         if (!TryReadBinkInfo(hostPath, out var info) ||
             !IsValid(info))
         {
@@ -1450,6 +1763,20 @@ private static bool AttachRadNativeMovieLocked(
 
     private static bool AttachNihavMovieLocked(string hostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
+        // SHARPEMU_BINK_FFMPEG_BLOCK_NIHAV_V75_0_4_8
+        if (NativeFfmpegRouteRequestedV75048())
+        {
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.8] nihav_blocked " +
+                $"file='{Path.GetFileName(hostPath)}' requested=native-rad");
+            return false;
+        }
+
         if (!NihavBink2Decoder.TryOpen(
                 hostPath, _presentationWidth, _presentationHeight, out var source) ||
             source is null)
@@ -1481,6 +1808,11 @@ private static bool AttachRadNativeMovieLocked(
 
     private static bool AttachFfmpegMovieLocked(string hostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            return false;
+        }
+
         if (!FfmpegVideoDecoder.TryOpen(
                 hostPath, _presentationWidth, _presentationHeight, out var source) ||
             source is null)
@@ -1513,57 +1845,142 @@ private static bool AttachRadNativeMovieLocked(
         return true;
     }
 
+    // SHARPEMU_BINK_NATIVE_NIHAV_OWNERSHIP_V75_0_4_1
+    private static bool NativeRadExclusiveOwnerEnabledV75041()
+    {
+        var configured = Environment.GetEnvironmentVariable("SHARPEMU_BINK_MODE");
+        if (string.Equals(configured, "nihav", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "bink2", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "external-rad", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return (FfmpegRuntime.IsRuntimeCandidatePresent ||
+               RadBinkNativeSdkDecoderV7500.IsRuntimeAvailable) &&
+               !string.Equals(
+                   Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_EXCLUSIVE"),
+                   "0",
+                   StringComparison.Ordinal) &&
+               !string.Equals(
+                   Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_PREFER"),
+                   "0",
+                   StringComparison.Ordinal);
+    }
+
+    // SHARPEMU_BINK_FFMPEG_EXCLUSIVE_ROUTE_V75_0_4_8
+    // Explicit native-rad ownership is strict: FFmpeg in-process owns every BK2,
+    // including UI movies. RAD/NIHAV remain available only when explicitly
+    // selected through a different SHARPEMU_BINK_MODE.
+    private static bool NativeFfmpegRouteRequestedV75048()
+    {
+        var configured = Environment.GetEnvironmentVariable("SHARPEMU_BINK_MODE");
+
+        if (string.Equals(configured, "external-rad", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "nihav", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "bink2", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "skip", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "guest", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "dummy", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "ffmpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(configured, "native-rad", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "rad-native", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "sdk-rad", StringComparison.OrdinalIgnoreCase))
+        {
+            // Return true even if the runtime is temporarily missing. This
+            // intentionally prevents silent fallback to RAD or NIHAV.
+            return true;
+        }
+
+        if (string.Equals(configured, "rad", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "binkplay", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "radvideo", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "native", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_PREFER") != "0" &&
+                   Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_EXCLUSIVE") != "0";
+        }
+
+        return string.IsNullOrWhiteSpace(configured) &&
+               Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_PREFER") != "0" &&
+               Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_EXCLUSIVE") != "0" &&
+               FfmpegRuntime.IsRuntimeCandidatePresent;
+    }
     private static MovieMode ResolveMode()
     {
-        var v7500Configured =
-            Environment.GetEnvironmentVariable(
-                "SHARPEMU_BINK_MODE");
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return MovieMode.Guest;
+        }
 
-        if (string.Equals(
-                v7500Configured,
-                "native-rad",
-                StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
-                v7500Configured,
-                "rad-native",
-                StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(
-                v7500Configured,
-                "sdk-rad",
-                StringComparison.OrdinalIgnoreCase))
+        // SHARPEMU_BINK_FFMPEG_RESOLVE_GUARD_V75_0_4_8
+        // Must run before V75.0.1.3 RAD_EXTERNAL_FORCE or any historical mode
+        // rewrite. Native-rad now means FFmpeg in-process ownership.
+        if (NativeFfmpegRouteRequestedV75048())
         {
             return MovieMode.NativeRad;
         }
 
+        // SHARPEMU_V75_0_1_3_EXTERNAL_RAD_COMPATIBILITY_FORCE
+        // Keep the accumulated V74 playback/layout work intact and disable
+        // only the experimental V75 native-RAD route. Restoring the complete
+        // pre-V75 MediaFramePlayback removed MediaFramePixelLayout contracts
+        // that are now required by NIHAV and VulkanVideoPresenter.
+        //
+        // All RAD spellings, including old native-rad aliases, resolve to the
+        // proven official external RAD bridge. SHARPEMU_BINK_NATIVE_PREFER is
+        // intentionally ignored here.
+        var v75013Configured =
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_MODE");
+
         if (string.Equals(
-                v7500Configured,
+                v75013Configured,
+                "native-rad",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v75013Configured,
+                "rad-native",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v75013Configured,
+                "sdk-rad",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                "[V75.0.1.3][RAD_EXTERNAL_FORCE] " +
+                $"requested='{v75013Configured}' resolved=external-rad " +
+                "reason=native-runtime-experiment-disabled");
+            return MovieMode.Rad;
+        }
+
+        if (string.Equals(
+                v75013Configured,
                 "external-rad",
                 StringComparison.OrdinalIgnoreCase))
         {
             return MovieMode.Rad;
         }
 
-        if ((string.Equals(
-                 v7500Configured,
-                 "rad",
-                 StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(
-                 v7500Configured,
-                 "binkplay",
-                 StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(
-                 v7500Configured,
-                 "radvideo",
-                 StringComparison.OrdinalIgnoreCase)) &&
-            Environment.GetEnvironmentVariable(
-                "SHARPEMU_BINK_NATIVE_PREFER") != "0" &&
-            RadBinkNativeSdkDecoderV7500.IsRuntimeAvailable)
+        if (string.Equals(
+                v75013Configured,
+                "rad",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v75013Configured,
+                "binkplay",
+                StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+                v75013Configured,
+                "radvideo",
+                StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine(
-                "[BINK-NATIVE][V75.0.0] auto_selected " +
-                "requested=rad resolved=native-rad " +
-                $"dll='{RadBinkNativeSdkDecoderV7500.RuntimeLibraryPath}'");
-            return MovieMode.NativeRad;
+            return MovieMode.Rad;
         }
         var configured = Environment.GetEnvironmentVariable("SHARPEMU_BINK_MODE");
 
@@ -1605,9 +2022,16 @@ private static bool AttachRadNativeMovieLocked(
             return MovieMode.Ffmpeg;
         }
 
-        // Native is the default. KB2 first tries the optional NihAV backend and
-        // then the existing FFmpeg path. If neither host decoder is available,
-        // the guest's statically linked movie code remains untouched.
+        // V75.0.4.1: once the native adapter is installed, it is the normal
+        // runtime owner even when an older caller did not seed SHARPEMU_BINK_MODE.
+        // This prevents silent fallback to NIHAV through MovieMode.Native.
+        if (NativeRadExclusiveOwnerEnabledV75041())
+        {
+            return MovieMode.NativeRad;
+        }
+
+        // Keep the historical generic native/NIHAV lane only when the native
+        // adapter is unavailable or exclusivity was explicitly disabled.
         return MovieMode.Native;
     }
 
@@ -1708,6 +2132,11 @@ private static bool AttachRadNativeMovieLocked(
     {
         get
         {
+            if (BinkGuestOwnedRuntimeV7600.Enabled)
+            {
+                return false;
+            }
+
             lock (Gate)
             {
                 return _directPresentationActive;
@@ -1721,6 +2150,15 @@ private static bool AttachRadNativeMovieLocked(
         out uint height,
         out long frameSerial)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            pixels = [];
+            width = 0;
+            height = 0;
+            frameSerial = 0;
+            return false;
+        }
+
         lock (Gate)
         {
             pixels = [];
@@ -1741,6 +2179,11 @@ private static bool AttachRadNativeMovieLocked(
 
     private static void TryStartConfiguredBootSequence()
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return;
+        }
+
         var configured = Environment.GetEnvironmentVariable("SHARPEMU_BINK_BOOT_SEQUENCE");
         if (!string.IsNullOrWhiteSpace(configured))
         {
@@ -1964,7 +2407,8 @@ private static bool AttachRadNativeMovieLocked(
                         out var height,
                         out var advanced,
                         out var frameSerial,
-                        out var hostPath))
+                        out var hostPath,
+                        out _))
                 {
                     if (advanced)
                     {
@@ -2106,19 +2550,68 @@ private static bool AttachRadNativeMovieLocked(
     }
     private static void CloseActiveLocked()
     {
+        var closingPathV75049 = _activePath ?? string.Empty;
+        var closingWasDecodedPlaybackV75049 = _playback is not null;
+
         _playback?.Dispose();
         _playback = null;
 
-        if (_radPlayback is not null)
+        // SHARPEMU_BINK_FFMPEG_POST_STUDIOS_CLOSE_HANDOFF_V75_0_4_9
+        // Native FFmpeg has no external RAD HWND whose ShowWindow event can
+        // release the old V1.1.4 cover.  End any stale cover defensively, then
+        // publish the normal black handoff.  SubmitHostMovieHandoffBlackV11
+        // arms V31.7.22, which releases as soon as genuinely new guest GPU work
+        // reaches presentation, so the configuration UI is not hidden for 45s.
+        if (closingWasDecodedPlaybackV75049 &&
+            NativeFfmpegRouteRequestedV75048() &&
+            string.Equals(
+                Path.GetFileName(closingPathV75049),
+                "ps_studios_logo.bk2",
+                StringComparison.OrdinalIgnoreCase))
         {
+            VulkanVideoPresenter.EndDemonSoulsPostStudiosBlackCoverV114(
+                "ffmpeg-native-rad-playback-completed");
             VulkanVideoPresenter.SubmitHostMovieHandoffBlackV11(
                 _presentationWidth,
                 _presentationHeight,
-                Path.GetFileName(_activePath ?? string.Empty));
+                Path.GetFileName(closingPathV75049));
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.9] post_studios_fresh_handoff " +
+                "armed=True barrier=V31.7.22 " +
+                "release=first-fresh-guest-presentation");
+        }
+
+        if (_radPlayback is not null)
+        {
+            // SHARPEMU_V74_0_111_RAD_INTERACTIVE_NO_BLACK_HANDOFF
+            // SHARPEMU_V74_0_118_3_RAD_UI_OWNERSHIP_RESTORE
+            // External RAD is again the normal title/menu owner. Keep the V111
+            // no-black handoff so the guest UI remains visible across the RAD
+            // child transition instead of replacing it with a host black frame.
+            if (IsDemonSoulsUiBinkCompositePathV740841(_activePath) &&
+                !string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_DS_UI_BINK_RAD_INTERACTIVE"),
+                    "0",
+                    StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine(
+                    "[V74.0.118.3][UI_BINK_RAD_TRANSITION] " +
+                    $"file='{Path.GetFileName(_activePath ?? string.Empty)}' " +
+                    "action=close-background no_black=True transition_owner=guest");
+            }
+            else
+            {
+                VulkanVideoPresenter.SubmitHostMovieHandoffBlackV11(
+                    _presentationWidth,
+                    _presentationHeight,
+                    Path.GetFileName(_activePath ?? string.Empty));
+            }
         }
         _radPlayback?.Dispose();
         _radPlayback = null;
 
+        Volatile.Write(ref _nativeRadExclusiveOwnerActiveV75041, 0);
         _activePath = null;
         _activeInfo = default;
         _frameBuffer = null;
@@ -2167,6 +2660,13 @@ private static bool AttachRadNativeMovieLocked(
         new(StringComparer.OrdinalIgnoreCase);
     private static void AttachNextQueuedMovieLocked()
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            PendingMoviePaths.Clear();
+            PendingMoviePathSet.Clear();
+            return;
+        }
+
         while (PendingMoviePaths.Count > 0)
         {
             var path = PendingMoviePaths.Dequeue();
@@ -2208,6 +2708,11 @@ private static bool AttachRadNativeMovieLocked(
     /// </summary>
     internal static void WaitForHostPlaybackToFinish(string hostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return;
+        }
+
         var deadline = Environment.TickCount64 + MaxCompletionWaitMilliseconds;
         lock (Gate)
         {
@@ -2398,7 +2903,9 @@ private static bool AttachRadNativeMovieLocked(
             return false;
         }
 
-        if (ResolveMode() != MovieMode.Rad)
+        var completionMode = ResolveMode();
+        if (completionMode != MovieMode.Rad &&
+            completionMode != MovieMode.NativeRad)
         {
             return false;
         }
@@ -2501,8 +3008,9 @@ private static bool AttachRadNativeMovieLocked(
 
 
 
-        if (ResolveMode() != MovieMode.Rad ||
-
+        var completionMode = ResolveMode();
+        if ((completionMode != MovieMode.Rad &&
+             completionMode != MovieMode.NativeRad) ||
             !string.Equals(
 
                 Path.GetFileName(hostPath),
@@ -2594,6 +3102,31 @@ private static bool AttachRadNativeMovieLocked(
     {
 
         completionShim = default;
+
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            observed = true;
+            _ = BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
+            Console.Error.WriteLine(
+                "[BINK-GUEST][V76.0.18][HOST-TAKEOVER-BLOCK] " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "ffmpeg=False nihav=False rad=False completion_shim=False");
+            return false;
+        }
+
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            // V76.0.1: observed=true is NOT host ownership. It is set only for
+            // real Bink assets so the kernel can retain fd/path lifetime while
+            // the generic GPU backend temporarily uses strict ordering. The
+            // original .bk2 is still opened byte-for-byte.
+            observed = BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath);
+            if (observed)
+            {
+                _ = BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
+            }
+            return false;
+        }
 
         observed = ObserveGuestMovie(hostPath);
 
@@ -2718,9 +3251,21 @@ private static bool AttachRadNativeMovieLocked(
                 "guest_open=success num_frames=1 " +
                 "wait_on_header_read=True tail_hold_ms=0");
         }
-        // SHARPEMU_DEMONS_POST_STUDIOS_COVER_ARM_V1_1_4
-        // Arm while the RAD child still owns the visible window.
-        if (IsV114DemonSoulsPostStudiosCoverMovie(hostPath))
+        // SHARPEMU_BINK_FFMPEG_POST_STUDIOS_FRESH_HANDOFF_V75_0_4_9
+        // The V1.1.4 transition cover was designed around an external RAD
+        // attract renderer and can remain active for 45 seconds when NativeRad
+        // is FFmpeg in-process.  For FFmpeg, do not arm that timer cover here;
+        // CloseActiveLocked() will arm the existing V31.7.22 fresh-guest-frame
+        // barrier at the exact PS Studios completion boundary instead.
+        if (IsV114DemonSoulsPostStudiosCoverMovie(hostPath) &&
+            NativeFfmpegRouteRequestedV75048())
+        {
+            Console.Error.WriteLine(
+                "[BINK-FFMPEG][V75.0.4.9] post_studios_legacy_cover_bypassed " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "replacement=V31.7.22-fresh-guest-frame");
+        }
+        else if (IsV114DemonSoulsPostStudiosCoverMovie(hostPath))
         {
             VulkanVideoPresenter.BeginDemonSoulsPostStudiosBlackCoverV114(
                 _presentationWidth,
@@ -2733,6 +3278,11 @@ private static bool AttachRadNativeMovieLocked(
 
     internal static void NotifyGuestMovieClosed(string hostPath)
     {
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return;
+        }
+
         lock (Gate)
         {
             if (PendingMoviePathSet.Remove(hostPath))
@@ -2769,6 +3319,10 @@ private static bool AttachRadNativeMovieLocked(
         out BinkGuestCompletionShim completionShim)
     {
         completionShim = default;
+        if (BinkGuestOwnedRuntimeV7600.Enabled)
+        {
+            return false;
+        }
         Span<byte> header = stackalloc byte[48];
         try
         {

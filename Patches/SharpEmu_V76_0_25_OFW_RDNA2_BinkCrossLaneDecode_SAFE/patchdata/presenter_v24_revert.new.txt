@@ -1,0 +1,5 @@
+            var vkFormat = GetTextureFormat(texture.Format, texture.NumberType);
+            // V76.0.25: preserve the guest descriptor numeric identity. The
+            // guest Bink composite shader declares UINT resources, so sampling
+            // the same image through an UNORM alias changes SPIR-V/image typing.
+            var binkSampleViewFormatV7624 = vkFormat;

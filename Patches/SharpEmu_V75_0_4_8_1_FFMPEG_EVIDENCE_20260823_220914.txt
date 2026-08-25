@@ -1,0 +1,26 @@
+﻿[OPTIONS-SKIP][V1.0] bridge_ready keyboard=TAB gamepad=START/OPTIONS active_movie_only=True
+[OPTIONS-SKIP][V1.0] bridge_ready keyboard=TAB gamepad=START/OPTIONS active_movie_only=True
+[LOADER][INFO] bink2.natural_guest_movie_observed n=1 file='ps_studios_logo.bk2'
+[BINK-FFMPEG][V75.0.4.5] runtime_initialized root='C:\Users\Edpo\Documents\GitHub\sharpemu\artifacts\bin\Release\net10.0\win-x64\plugins' candidate=True
+[BINK-FFMPEG][V75.0.4.5] bridge_attached file='ps_studios_logo.bk2' size=1920x1080 fps=30/1 embedded_audio_active=True decoder=ffmpeg-core-inprocess runtime_root='C:\Users\Edpo\Documents\GitHub\sharpemu\artifacts\bin\Release\net10.0\win-x64\plugins' nihav_owner=False native_rad_owner=True
+[BINK-FFMPEG][V75.0.4.8] route_locked file='ps_studios_logo.bk2' backend=ffmpeg-core-inprocess ui_and_fullscreen=True external_rad=False nihav=False
+[V74.0.13.2][BINK] bink2.startup_completion_shim mode=precise file='ps_studios_logo.bk2'
+[BINK-COMPLETION-SHIM][V1.1.3] ready n=1 file='ps_studios_logo.bk2' guest_open=success num_frames=1 wait_on_header_read=True tail_hold_ms=0
+[BINK-TRANSITION-COVER][V1.1.4] begin source='ps_studios_logo.bk2' size=1920x1080 timeout_ms=45000 until_tick=295330296 guest_execution_continues=True guest_flips_hidden=True
+[V74.0.11][BINK] bink2.descriptorless_direct_fallback_start reason=startup-one-shot-host-frame file='ps_studios_logo.bk2' host=1920x1080 serial=1
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=1 reason=startup-one-shot-host-frame file='ps_studios_logo.bk2' serial=1 size=1920x1080
+[BINK-FFMPEG][V75.0.4.5] first_visible_frame file='ps_studios_logo.bk2' embedded_audio=True backend=ffmpeg-core-inprocess
+[V73.19.1][BINK] bink2.yuv_pair_not_found file='ps_studios_logo.bk2' host=1920x1080 textures=0 []
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=2 reason=pump file='ps_studios_logo.bk2' serial=2 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=3 reason=pump file='ps_studios_logo.bk2' serial=3 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=4 reason=pump file='ps_studios_logo.bk2' serial=4 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=5 reason=pump file='ps_studios_logo.bk2' serial=5 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=6 reason=pump file='ps_studios_logo.bk2' serial=6 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=7 reason=pump file='ps_studios_logo.bk2' serial=7 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=8 reason=pump file='ps_studios_logo.bk2' serial=8 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=16 reason=pump file='ps_studios_logo.bk2' serial=16 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=32 reason=pump file='ps_studios_logo.bk2' serial=32 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=64 reason=pump file='ps_studios_logo.bk2' serial=64 size=1920x1080
+[V74.0.11][BINK] bink2.descriptorless_direct_frame n=128 reason=pump file='ps_studios_logo.bk2' serial=128 size=1920x1080
+[LOADER][INFO] Bink2 bridge completed: ps_studios_logo.bk2 after 10,03s at frame 254
+[V74.0.11][BINK] bink2.descriptorless_direct_fallback_end reason=host-playback-completed file='ps_studios_logo.bk2' serial=255

@@ -1,0 +1,4 @@
+﻿Tag=V76.0.9.1-COMPUTE-ATOMICS-PARTIAL-GROUPS-ADAPTIVE-PREREQ
+RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
+State=BLOCKED
+Reason=Anchor prerequisite V76.0.8 invalida: v8_03_format_store_dispatch em src\SharpEmu.ShaderCompiler.Vulkan\Gen5SpirvTranslator.cs occurrences=0

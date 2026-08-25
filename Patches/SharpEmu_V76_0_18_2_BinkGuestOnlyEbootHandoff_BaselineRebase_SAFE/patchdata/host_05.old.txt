@@ -1,0 +1,3 @@
+    private static bool AttachFfmpegMovieLocked(string hostPath)
+    {
+        if (!FfmpegVideoDecoder.TryOpen(
