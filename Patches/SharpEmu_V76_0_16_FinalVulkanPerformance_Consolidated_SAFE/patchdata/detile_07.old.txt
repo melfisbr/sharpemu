@@ -1,7 +1,0 @@
-        var terms = ToElementTerms(table, shift);
-        var byteSize = (ulong)terms.Length * sizeof(uint);
-        var allocation = CreateBuffer(byteSize, hostVisible: true);
-        UploadUInts(allocation.Memory, terms);
-        var termBuffer = new TermBuffer(allocation.Buffer, byteSize);
-        cache[table] = termBuffer;
-        return termBuffer;

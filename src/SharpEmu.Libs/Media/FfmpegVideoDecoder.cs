@@ -116,7 +116,8 @@ internal sealed unsafe class FfmpegVideoDecoder :
         out FfmpegVideoDecoder? source)
     {
         source = null;
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(path))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(path))
         {
             return false;
         }

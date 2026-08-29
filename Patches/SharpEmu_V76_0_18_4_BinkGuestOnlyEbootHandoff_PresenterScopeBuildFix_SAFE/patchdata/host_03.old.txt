@@ -1,3 +1,0 @@
-    private static bool AttachRadMovieLocked(string hostPath)
-    {
-        // SHARPEMU_BINK_FFMPEG_BLOCK_EXTERNAL_RAD_V75_0_4_8

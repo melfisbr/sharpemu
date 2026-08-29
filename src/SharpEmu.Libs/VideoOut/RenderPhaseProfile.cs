@@ -198,14 +198,26 @@ internal static class RenderPhaseProfile
         }
 
         parts.Sort(static (left, right) => right.Percent.CompareTo(left.Percent));
+        var fps = frames > 0 ? frames / seconds : 0.0;
+        var frameMs = frames > 0 ? seconds * 1000.0 / frames : 0.0;
+        var accountedMsPerFrame = frames > 0
+            ? accounted * 1000.0 / Stopwatch.Frequency / frames
+            : 0.0;
         Console.Error.WriteLine(
-            $"[PERF][RENDER] {seconds:F1}s fps={frames / seconds:F1} " +
+            $"[PERF][RENDER] {seconds:F1}s fps={fps:F1} frame_ms={frameMs:F3} " +
+            $"budget60_ms=16.667 over60={(frameMs > 16.667 ? 1 : 0)} " +
             $"covered={accounted * 100.0 / elapsedTicks:F0}% " +
+            $"accounted_ms_frame={accountedMsPerFrame:F3} " +
             string.Join(
                 " ",
                 parts.Select(part =>
-                    $"{part.Phase}={part.Percent:F1}%" +
-                    (part.Entries > 0 ? $"/n{part.Entries}" : string.Empty))));
+                {
+                    var msPerFrame = frames > 0
+                        ? elapsedTicks * (part.Percent / 100.0) * 1000.0 / Stopwatch.Frequency / frames
+                        : 0.0;
+                    return $"{part.Phase}={part.Percent:F1}%/{msPerFrame:F3}ms" +
+                           (part.Entries > 0 ? $"/n{part.Entries}" : string.Empty);
+                })));
 
         if (OrderedActionDetailsEnabled && _orderedActions.Count != 0)
         {

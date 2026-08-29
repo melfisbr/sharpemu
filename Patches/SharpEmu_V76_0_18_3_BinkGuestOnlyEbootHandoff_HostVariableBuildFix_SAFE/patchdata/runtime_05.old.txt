@@ -1,3 +1,0 @@
-            BinkGuestAvClockV7613.EndSession(
-                Volatile.Read(ref _sessionEpoch),
-                path);

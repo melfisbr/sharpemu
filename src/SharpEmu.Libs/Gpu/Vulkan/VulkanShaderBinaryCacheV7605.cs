@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 // V76.0.5: collision-resistant SPIR-V binary cache for the Vulkan backend.
 
@@ -23,7 +23,7 @@ namespace SharpEmu.Libs.Gpu.Vulkan;
 /// </summary>
 internal static class VulkanShaderBinaryCacheV7605
 {
-    private const string CacheVersion = "V76.0.25-rdna2-crosslane-r1";
+    private const string CacheVersion = "V76.2.8-wave64-control-dpp-r1";
     private const int MaxCachedBinaryBytes = 32 * 1024 * 1024;
 
     private static readonly bool MemoryEnabled =
@@ -84,8 +84,8 @@ internal static class VulkanShaderBinaryCacheV7605
     }
 
     internal static string StatusLine() =>
-        $"[SPIRV-CACHE][V76.0.10] memory={(MemoryEnabled ? 1 : 0)} " +
-        $"disk={(DiskEnabled ? 1 : 0)} live={Memory.Count} " +
+        $"[SPIRV-CACHE][V76.2.8] version={CacheVersion} " +
+        $"memory={(MemoryEnabled ? 1 : 0)} disk={(DiskEnabled ? 1 : 0)} live={Memory.Count} " +
         $"mem_hits={Interlocked.Read(ref _memoryHits)} " +
         $"disk_hits={Interlocked.Read(ref _diskHits)} " +
         $"misses={Interlocked.Read(ref _misses)} stores={Interlocked.Read(ref _stores)} " +
@@ -352,6 +352,17 @@ internal static class VulkanShaderBinaryCacheV7605
             "SHARPEMU_SHADER_METADATA_CACHE_MAX")
         {
             return false;
+        }
+
+        // V76.2.4.15.1: guest Bink ISA-gap policy changes generated SPIR-V.
+        // The compiler is intentionally independent of the Libs lifetime class;
+        // hard guest mode + strict GPU policy + gap mode fully define this seam.
+        if (name is
+            "SHARPEMU_BINK_MODE" or
+            "SHARPEMU_BINK_GUEST_STRICT_GPU" or
+            "SHARPEMU_BINK_ISA_GAP_MODE")
+        {
+            return true;
         }
 
         return name.StartsWith("SHARPEMU_SHADER_", StringComparison.Ordinal) ||

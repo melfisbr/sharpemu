@@ -1,0 +1,17 @@
+ARCHITECTURE NOTE - V76.3.21.3.1.1.2
+===================================
+The first V76.3.21.3.1 package incorrectly made its PRECHECK depend on a V21.3
+CLI environment assignment. That is exactly the assignment the authoritative
+consumer patch was designed not to trust, so the prerequisite was circular.
+
+This revision removes that circular prerequisite. PRECHECK validates the real
+VulkanVideoPresenter weighted-closure field and its V21.2 branch structure.
+APPLY then replaces that consumer with a PPSA01341-authoritative 512 budget.
+
+The runtime semantics are otherwise unchanged: no FIFO bypass, no fake wait
+satisfaction, no queue-family ownership change, no AGC packet semantic change.
+
+V76.3.21.3.1.1.2 fixes packaging only before source mutation: Windows PowerShell
+flattened the nested backup pair array, turning $pair[0] into the character 'C'.
+The source patch itself is unchanged in intent. Backup is now explicit and
+hash-verified before VulkanVideoPresenter.cs is touched.

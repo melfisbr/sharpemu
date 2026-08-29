@@ -1,7 +1,0 @@
-        }
-        finally
-        {
-            _vk.UnmapMemory(_device, memory);
-
-            // SHARPEMU_V74_0_94_5_DETILE_GUEST_UPLOAD_TIMING
-            if (totalBytes >= 8UL * 1024UL * 1024UL)

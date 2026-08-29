@@ -1,2 +1,0 @@
-                        value: () => LoadData(image.VectorData),
-                        comparator: () => LoadData(image.VectorData + 1));

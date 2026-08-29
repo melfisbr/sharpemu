@@ -203,7 +203,10 @@ public static class Gen5ShaderScalarEvaluator
 
         private static uint[][] CreateBuffers()
         {
-            var buffers = new uint[16][];
+            // V76.3.6: V76.3.5 observed rare CFG fan-out beyond the 16-way
+            // scratch bank. Doubling the preallocated thread-local bank removes
+            // fallback Clone() allocations without changing evaluation state.
+            var buffers = new uint[32][];
             for (var index = 0; index < buffers.Length; index++)
             {
                 buffers[index] = new uint[ScalarRegisterCount];

@@ -315,7 +315,8 @@ internal sealed class NihavBink2Decoder : IMediaFrameDecoder, IMediaFramePixelLa
     {
         decoder = null;
 
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(path))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(path))
         {
             return false;
         }

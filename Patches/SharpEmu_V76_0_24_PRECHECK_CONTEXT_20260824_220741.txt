@@ -1,6 +1,0 @@
-﻿Tag=V76.0.24-BINK-GUEST-YUV-NORMALIZED-SAMPLE-VIEW
-RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
-Helper=ReadyCopy
-presenter_01=Ready
-presenter_02=Ready
-presenter_03=Ready

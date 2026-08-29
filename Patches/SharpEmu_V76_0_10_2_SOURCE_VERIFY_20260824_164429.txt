@@ -1,8 +1,0 @@
-﻿Tag=V76.0.10.2-SHADER-CACHE-CRITICAL-PATH-SEMANTIC-SOPP-FIX
-Status=SOURCE_VERIFY_PASSED
-CacheHash=f1cff905d31904a870105aba7ae250f796089cd706a21a5f7a7da2d74f2354fe
-CacheVersion=V76.0.10-r1
-AsyncDiskPersistence=1
-SemanticEnvironmentKey=1
-SClause=1
-SWaitcntDepctr=1

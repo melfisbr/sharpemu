@@ -1,0 +1,49 @@
+﻿SharpEmu shader/FPS restructuring sequence
+
+TURN 1 — V76.3.19.0
+Frontend hotset:
+- 4-way thread shader cache
+- larger shared decode/metadata caches
+- earlier validated immutable global residency
+- descriptor/resident shader hotset
+
+TURN 2 — V76.3.19.1
+Async shader/pipeline compilation:
+- compilation futures
+- singleflight becomes non-blocking
+- parser can continue independent DCB/ACB work
+- exact wait only when a draw/dispatch actually needs the missing pipeline
+
+TURN 3 — V76.3.19.2
+Prepared Compute State:
+- cache stable pipeline/layout/binding plan
+- generation-validated immutable resource bindings
+- dynamic values only on hot dispatch path
+- reduce CreateComputeDispatchResources CPU work
+
+TURN 4 — V76.3.19.3
+Event-driven WAIT_REG_MEM:
+- address/range WaitNode index
+- WRITE_DATA/RELEASE_MEM/CPU-store producer wake
+- timeline semaphore for GPU->GPU
+- full scan becomes watchdog only
+
+TURN 5 — V76.3.19.4
+Persistent scheduler:
+- coherent SAFE/FAST policy
+- persistent/recycled command buffers
+- flush only on real hazard/EOP/host visibility/present
+- retire old conflicting title flags from active policy
+
+TURN 6 — V76.3.19.5
+Upload/transfer architecture:
+- separate transfer lane where Vulkan capability is real
+- ownership/sync by timeline/range
+- device-local immutable assets
+- no forced VRAM reservation
+
+TURN 7 — V76.3.19.6
+Final merge:
+- consolidate successful turns
+- remove superseded flags/telemetry from active path
+- Release build only after A/B evidence.

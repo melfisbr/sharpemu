@@ -1,8 +1,0 @@
-﻿Tag=V76.0.13.2-BINK-GUEST-AV-CLOCK-HANDOFF-STATE-VERIFY-FIX
-Status=SOURCE_VERIFY_PASSED
-RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
-BinkDecodeOwner=guest
-FirstVisualHandoff=neutral-yuv-nonblocking
-GuestAudioClock=observed-not-replaced
-PresentedFrameClock=producer-generation-deduplicated
-HostDecoder=unchanged-disabled-by-default

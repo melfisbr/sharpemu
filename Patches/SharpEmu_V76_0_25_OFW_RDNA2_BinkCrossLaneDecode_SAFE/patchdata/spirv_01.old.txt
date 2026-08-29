@@ -1,6 +1,0 @@
-            if (instruction.Opcode == "DsSwizzleB32")
-            {
-                return TryEmitDsSwizzleB32V7610(instruction, control, out error);
-            }
-
-            if (_lds == 0 || _ldsElementPointer == 0)

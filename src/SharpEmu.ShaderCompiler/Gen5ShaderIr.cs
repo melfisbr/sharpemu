@@ -165,6 +165,24 @@ public readonly record struct Gen5Operand(Gen5OperandKind Kind, uint Value)
 
 public abstract record Gen5InstructionControl;
 
+// V76.2.6: RDNA2 scalar scoreboard wait metadata. Keeping the encoded
+// threshold in IR lets the Vulkan backend preserve wait ordering instead of
+// silently dropping S_WAITCNT and the SOPK counter-specific forms.
+public enum Gen5WaitcntKind
+{
+    Combined,
+    VectorStore,
+    VectorMemory,
+    Export,
+    Lgkm,
+    Dependency,
+}
+
+public sealed record Gen5WaitcntControl(
+    Gen5WaitcntKind Kind,
+    ushort Immediate,
+    uint? ScalarThresholdRegister = null) : Gen5InstructionControl;
+
 public sealed record Gen5ImageControl(
     uint Dmask,
     uint VectorAddress,

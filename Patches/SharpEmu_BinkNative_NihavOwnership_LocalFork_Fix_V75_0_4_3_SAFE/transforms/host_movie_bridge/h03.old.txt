@@ -1,8 +1,0 @@
-        _activeInfo = info;
-
-        Console.Error.WriteLine(
-            $"[V74.0.88.3][MAIN_MENU_LOOP_RESTART] file='{Path.GetFileName(hostPath)}' " +
-            $"result=rewound size={info.Width}x{info.Height} guest_movie_remains_open=True");
-        return true;
-    }
-    internal static bool TryDecodeNextFrame(

@@ -1,0 +1,25 @@
+V76.3.21.4.1 ARCHITECTURE
+
+Observed V21.4 regression:
+Guest/AGC builder activity -> V21.4 cooperative host yield -> earlier normal-run progress end.
+The V21.4 diagnostic itself proved that the GPU was not device-lost:
+timeline drained, pending=0, abandoned=0.
+
+This revision deliberately performs a behavioral rollback instead of another tuning change.
+
+Restored path:
+Guest BPE/job workers
+  -> AGC PM4 builders
+  -> existing driver publish path
+  -> Async AGC ingress
+  -> existing PM4 parser
+  -> queue/range hazard scheduler
+  -> Vulkan graphics/compute queues
+  -> scanout/present
+
+No new host scheduling primitive is inserted.
+
+Diagnostic truth source:
+Existing [V76.3.17.0][AGC_ASYNC_CP] enqueue/processed counters are used as the
+publish/consumer boundary. The broken V21.4 custom driver-submit counter is removed
+from decision making.

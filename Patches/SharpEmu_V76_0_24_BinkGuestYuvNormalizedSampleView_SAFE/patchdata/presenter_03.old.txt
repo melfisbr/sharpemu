@@ -1,3 +1,0 @@
-                            $"generation={binkYuvProducerV7602.ContentGeneration} " +
-                            $"layout={binkYuvProducerV7602.Layout} " +
-                            "source=exact-initialized-storage");

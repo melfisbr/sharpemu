@@ -1,8 +1,0 @@
-﻿Package=V76.0.10.3-RDNA2-DS-SWIZZLE-B32-ADAPTIVE-REBASE
-StateBefore=Ready
-BuildExitCode=0
-MainSHA256=81f81c1d897afbd03e86c6ad2223a6b3e742c57009a363df9ee6657e4f3f89b5
-HelperSHA256=99e575ffd9eab1e275dfa3ad548c5ec994a5f8e1172dfb693270ae4d808a81c1
-V76102SoppPreserved=True
-Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_10_3_PREVIOUS_FILES_20260824_164823.zip
-BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_10_3_BUILD_20260824_164823.log

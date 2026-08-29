@@ -1,6 +1,0 @@
-    private static bool _frameBufferPresented;
-    private static MediaFramePlayback? _playback;
-    private static long _frameSerial;
-    // SHARPEMU_BINK_OPTIONS_START_SKIP_V1_0
-    private static long _optionsStartMovieSkipCount;
-    private static uint _presentationWidth = MaxHostVideoWidth;

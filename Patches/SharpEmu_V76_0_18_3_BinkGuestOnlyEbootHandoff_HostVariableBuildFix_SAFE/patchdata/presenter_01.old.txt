@@ -1,3 +1,0 @@
-        private void PumpHostMovieFrame()
-        {
-            // SHARPEMU_V74_0_83_ACTIVE_MOVIE_RECONCILE

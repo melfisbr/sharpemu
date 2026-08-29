@@ -1,0 +1,20 @@
+﻿tag=V76.3.21.2-GLOBAL-SNAPSHOT-BOUNDS-LOADING-CRASH-RECOVERY
+configuration=Debug
+mode=adaptive-in-place
+full_presenter_replacement=0
+root_exception=System.ArgumentOutOfRangeException
+root_method=TryPrepareWritableGlobalRefreshV74051
+partial_snapshot_contract=Data.Length<Length => deferred/live-backed
+nonblocking_global_refresh=preserved
+dual_queue=preserved
+async_agc=preserved
+compute_chain8=preserved
+draw_cb32=preserved
+ordered_microbatch64=preserved
+residency1536_512=preserved
+resident_shader2048=preserved
+descriptor4096=preserved
+safe_memcpy=preserved
+wait_semantics=preserved
+diagnostic_presenter_failure_detection=1
+rollback=automatic-on-build-failure

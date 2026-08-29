@@ -1,5 +1,0 @@
-        if (BinkGuestOwnedRuntimeV7600.Enabled &&
-            string.Equals(
-                Path.GetExtension(path),
-                ".bk2",
-                StringComparison.OrdinalIgnoreCase))

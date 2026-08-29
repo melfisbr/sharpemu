@@ -1,9 +1,0 @@
-V75.0.4.10 PS STUDIOS GUEST-LIVE AUDIT
-=======================================
-Scope: BinkHostPlaybackAssist.IsTitleTimelinePassthroughMovieV74077 only.
-Condition: SHARPEMU_BINK_MODE=native-rad AND file=ps_studios_logo.bk2.
-Effect: returns true, preserving active decoder lifecycle but bypassing HostMovieExecutionGate Begin/End, GuestCpuPermit park and ShouldThrottleGuestGpu for this movie.
-FFmpeg remains the visual decoder through V75.0.4.8 route lock.
-V75.0.4.9 post-Studios fresh-frame handoff remains enabled.
-RAD explicit behavior is unchanged.
-Git mutation: none.

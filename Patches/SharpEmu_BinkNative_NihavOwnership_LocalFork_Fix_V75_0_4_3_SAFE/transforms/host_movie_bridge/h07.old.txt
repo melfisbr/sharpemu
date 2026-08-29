@@ -1,6 +1,0 @@
-        hostPath,
-        info,
-        source);
-
-    Console.Error.WriteLine(
-        "[BINK-NATIVE][V75.0.0] bridge_attached " +

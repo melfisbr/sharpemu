@@ -1,7 +1,0 @@
-                        $"pipeline={(resources.Pipeline.Handle != 0 ? 1 : 0)}");
-                }
-
-                resources.QueueHazardImagesV7615 = targets;
-                resources.TransientRenderPass = transientRenderPass;
-                resources.TransientFramebuffer = transientFramebuffer;
-                transientRenderPass = default;

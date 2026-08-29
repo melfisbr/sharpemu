@@ -1,5 +1,7 @@
 // Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+// V76.2.5.1: host hybrid default for boot Bink (Demon's Souls logo noise fix).
+// Guest GPU path still runs when SHARPEMU_BINK_FORCE_GUEST=1.
 
 using System.Collections.Concurrent;
 using System.Linq;
@@ -8,16 +10,6 @@ using System.Threading;
 
 namespace SharpEmu.Libs.Media;
 
-/// <summary>
-/// V76 guest-owned Bink2 policy.
-///
-/// V76.0.0 removed host ownership of title-provided Bink2. V76.0.1 added a
-/// guest-only playback lifetime signal used solely to make the generic GPU path
-/// conservative while the title's real Bink decoder is active. V76.0.2 fixes
-/// sampled/storage ownership for final guest Y/UV planes: only initialized GPU
-/// producers may feed those descriptors. No host decoder, frame injection,
-/// header patch or Bink HLE is introduced.
-/// </summary>
 internal static class BinkGuestOwnedRuntimeV7600
 {
     internal const string Marker = "V76.0.2_GUEST_BINK2_EXACT_YUV_PRODUCER";
@@ -32,20 +24,66 @@ internal static class BinkGuestOwnedRuntimeV7600
     private static long _openSerial;
     private static long _closeSerial;
     private static long _sessionEpoch;
+    private static int _hostDecision = -1; // -1 unset, 0 guest, 1 host
+
+    // V76.3.2: a guest title may keep the .bk2 descriptor open after decode
+    // has stopped. Using FD lifetime as the strict GPU-ordering lifetime kept
+    // graphics/compute lane switches serialized for the rest of the title.
+    // Strict ordering now follows actual Bink GPU producer activity instead.
+    private static long _lastStrictGpuActivityTick;
+    private static int _strictGpuActivityState;
+    private static long _strictGpuActivitySerial;
+    private static readonly int StrictGpuIdleLeaseMsV7632 =
+        ReadIntEnvironment(
+            "SHARPEMU_BINK_GUEST_STRICT_IDLE_MS",
+            defaultValue: 500,
+            minimum: 100,
+            maximum: 5000);
 
     /// <summary>
-    /// V76.0.18: title-provided Bink2 is always guest-owned. The legacy
-    /// SHARPEMU_BINK_ALLOW_HOST_DECODER escape hatch is intentionally ignored
-    /// so FFmpeg/NIHAV/RAD host routes cannot steal a .bk2 from the eboot.
+    /// Guest-owned when host decoder is NOT allowed.
     /// </summary>
-    internal static bool Enabled => true;
+    internal static bool Enabled => !HostBinkDecoderAllowed;
 
-    internal static bool HostBinkDecoderAllowed => false;
+    internal static bool HostBinkDecoderAllowed =>
+        ResolveHostBinkDecoderAllowed();
 
-    /// <summary>
-    /// Conservative GPU scheduling is the V76.0.1 default while a real guest
-    /// .bk2 file is open. It can be disabled only for A/B diagnostics.
-    /// </summary>
+    private static bool ResolveHostBinkDecoderAllowed()
+    {
+        var cached = Volatile.Read(ref _hostDecision);
+        if (cached >= 0)
+        {
+            return cached == 1;
+        }
+
+        bool host;
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_FORCE_GUEST"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            host = false;
+        }
+        else if (string.Equals(
+                     Environment.GetEnvironmentVariable(
+                         "SHARPEMU_BINK_ALLOW_HOST_DECODER"),
+                     "0",
+                     StringComparison.Ordinal))
+        {
+            // Explicit opt-out of host.
+            host = false;
+        }
+        else
+        {
+            // Default: host hybrid ON (boot logos / attract). Guest path was
+            // dispatching compute but presenting rainbow noise on NVIDIA.
+            host = true;
+        }
+
+        Interlocked.CompareExchange(ref _hostDecision, host ? 1 : 0, -1);
+        return Volatile.Read(ref _hostDecision) == 1;
+    }
+
     internal static bool StrictGuestGpuEnabled =>
         Enabled &&
         !string.Equals(
@@ -58,15 +96,15 @@ internal static class BinkGuestOwnedRuntimeV7600
         Enabled && !OpenGuestMovieFds.IsEmpty;
 
     internal static bool UseStrictGpuOrdering =>
-        StrictGuestGpuEnabled && IsGuestMovieActive;
+        StrictGuestGpuEnabled &&
+        IsGuestMovieActive &&
+        IsStrictGpuActivityLeaseActiveV7632();
 
-    internal static bool SuppressHostUpscaler =>
-        StrictGuestGpuEnabled && IsGuestMovieActive;
+    // The host upscaler only needs to stay suppressed while guest Bink is
+    // actively producing/consuming its strict YUV pipeline. A stale open FD
+    // must not disable DLSS/FSR for later UI or gameplay.
+    internal static bool SuppressHostUpscaler => UseStrictGpuOrdering;
 
-    /// <summary>
-    /// V76.0.2 exact producer binding is on by default and may be disabled only
-    /// for guest-only A/B diagnostics. Disabling it does not enable host decode.
-    /// </summary>
     internal static bool ExactYuvProducerEnabled =>
         Enabled &&
         !string.Equals(
@@ -75,7 +113,6 @@ internal static class BinkGuestOwnedRuntimeV7600
             "0",
             StringComparison.Ordinal);
 
-    // V76.0.12: final guest Y/UV producers are scoped to one movie session.
     internal static bool YuvSessionEpochEnabled =>
         ExactYuvProducerEnabled &&
         !string.Equals(
@@ -95,31 +132,40 @@ internal static class BinkGuestOwnedRuntimeV7600
     [ModuleInitializer]
     internal static void Initialize()
     {
-        var legacyHostOverrideRequested = string.Equals(
-            Environment.GetEnvironmentVariable(
-                "SHARPEMU_BINK_ALLOW_HOST_DECODER"),
-            "1",
-            StringComparison.Ordinal);
+        var hostAllowed = HostBinkDecoderAllowed;
 
-        // V76.0.18 is a hard ownership rule, not a runtime preference. Keep the
-        // environment coherent for diagnostics even if an old launcher set 1.
-        Set("SHARPEMU_BINK_ALLOW_HOST_DECODER", "0");
-
-        // Keep one owner: the guest. Older initializers must never auto-select
-        // RAD/NIHAV/FFmpeg based on host tools or DLLs.
-        // V76.2.3: leave MODE/HOST_AUDIO alone when hybrid host decode is enabled.
-        if (!string.Equals(
-                Environment.GetEnvironmentVariable("SHARPEMU_BINK_ALLOW_HOST_DECODER"),
-                "1",
-                StringComparison.Ordinal))
+        if (!hostAllowed)
         {
             Set("SHARPEMU_BINK_MODE", "guest");
             Set("SHARPEMU_BINK_HOST_AUDIO", "0");
+            Set("SHARPEMU_BINK_NATIVE_PREFER", "0");
+            Set("SHARPEMU_BINK_NATIVE_EXCLUSIVE", "0");
         }
+        else
+        {
+            if (string.IsNullOrEmpty(
+                    Environment.GetEnvironmentVariable("SHARPEMU_BINK_MODE")))
+            {
+                Set("SHARPEMU_BINK_MODE", "native-rad");
+            }
+
+            if (string.IsNullOrEmpty(
+                    Environment.GetEnvironmentVariable("SHARPEMU_BINK_HOST_AUDIO")))
+            {
+                Set("SHARPEMU_BINK_HOST_AUDIO", "1");
+            }
+
+            if (string.IsNullOrEmpty(
+                    Environment.GetEnvironmentVariable("SHARPEMU_BINK_NATIVE_PREFER")))
+            {
+                Set("SHARPEMU_BINK_NATIVE_PREFER", "1");
+            }
+
+            Set("SHARPEMU_BINK_ALLOW_HOST_DECODER", "1");
+        }
+
         Set("SHARPEMU_BINK_AUTO_BOOT", "0");
         Set("SHARPEMU_BINK_BOOT_SEQUENCE", null);
-        Set("SHARPEMU_BINK_NATIVE_PREFER", "0");
-        Set("SHARPEMU_BINK_NATIVE_EXCLUSIVE", "0");
         Set("SHARPEMU_BINK_THROTTLE_GUEST_CPU", "0");
         Set("SHARPEMU_BINK_THROTTLE_GUEST_GPU", "0");
         Set("SHARPEMU_DS_INTRO_EXTERNAL_AUDIO", "0");
@@ -132,11 +178,11 @@ internal static class BinkGuestOwnedRuntimeV7600
         Set("SHARPEMU_BINK_DIRECT_PRESENT_ONLY", "0");
 
         Console.Error.WriteLine(
-            "[BINK-GUEST][V76.0.18] hard_guest_only=True host_decoder=False " +
-            "ffmpeg_bink=False nihav_bink=False rad_host=False " +
-            "header_shim=False frame_injection=False host_audio=False " +
-            $"legacy_host_override_ignored={(legacyHostOverrideRequested ? 1 : 0)} " +
-            "eboot_handoff=guest-close-no-black");
+            $"[BINK-GUEST][V76.2.5.1] hard_guest_only={!hostAllowed} " +
+            $"host_decoder={hostAllowed} " +
+            $"ffmpeg_bink={hostAllowed} nihav_bink={hostAllowed} rad_host={hostAllowed} " +
+            $"host_audio={hostAllowed} " +
+            "policy=host-hybrid-default-unless-FORCE_GUEST");
     }
 
     internal static bool ObserveGuestMovie(string? hostPath)
@@ -156,39 +202,40 @@ internal static class BinkGuestOwnedRuntimeV7600
                 "host_takeover=False header_patch=False wait=False");
         }
 
-        // False means HostMovieBridge did not take ownership. The caller must
-        // continue opening/reading the original guest asset.
-        return false;
+        return true;
     }
 
-    internal static void GuestMovieOpened(int fd, string? hostPath)
+    internal static bool GuestMovieOpened(int fd, string? hostPath)
     {
         if (!Enabled || fd < 0 || !IsBinkPath(hostPath))
         {
-            return;
+            return false;
         }
 
         var path = hostPath!;
-        if (!OpenGuestMovieFds.TryAdd(fd, path))
-        {
-            return;
-        }
+        var previousPath = Volatile.Read(ref _lastActiveMoviePath);
+        var startsNewSessionV7632 =
+            string.IsNullOrEmpty(previousPath) ||
+            !string.Equals(previousPath, path, StringComparison.OrdinalIgnoreCase) ||
+            !IsStrictGpuActivityLeaseActiveV7632(logExpiry: false);
 
+        OpenGuestMovieFds[fd] = path;
         Volatile.Write(ref _lastActiveMoviePath, path);
-        if (OpenGuestMovieFds.Count == 1)
+        var n = Interlocked.Increment(ref _openSerial);
+        if (n == 1 || OpenGuestMovieFds.Count == 1 || startsNewSessionV7632)
         {
             Interlocked.Increment(ref _sessionEpoch);
-            BinkGuestAvClockV7613.BeginSession(
-                Volatile.Read(ref _sessionEpoch),
-                path);
         }
-        var serial = Interlocked.Increment(ref _openSerial);
+        NoteGuestBinkGpuActivityV7632("movie-open");
+
         Console.Error.WriteLine(
             "[BINK-GUEST][V76.0.2][SESSION] begin " +
-            $"n={serial} fd={fd} file='{Path.GetFileName(path)}' " +
+            $"n={n} fd={fd} file='{Path.GetFileName(path)}' " +
             $"active_fds={OpenGuestMovieFds.Count} " +
             $"strict_gpu={(StrictGuestGpuEnabled ? 1 : 0)} " +
             "decode_owner=guest");
+
+        return true;
     }
 
     internal static void GuestMovieClosed(int fd, string? hostPath)
@@ -198,43 +245,84 @@ internal static class BinkGuestOwnedRuntimeV7600
             return;
         }
 
-        if (!OpenGuestMovieFds.TryRemove(fd, out var openedPath))
+        OpenGuestMovieFds.TryRemove(fd, out _);
+        Interlocked.Increment(ref _closeSerial);
+        if (OpenGuestMovieFds.IsEmpty)
+        {
+            Volatile.Write(ref _lastActiveMoviePath, null);
+        }
+    }
+
+    internal static void NoteGuestBinkGpuActivityV7632(string source)
+    {
+        if (!StrictGuestGpuEnabled)
         {
             return;
         }
 
-        var path = string.IsNullOrWhiteSpace(hostPath) ? openedPath : hostPath!;
-        var serial = Interlocked.Increment(ref _closeSerial);
-        var remaining = OpenGuestMovieFds.Count;
-        if (remaining == 0)
+        Volatile.Write(ref _lastStrictGpuActivityTick, Environment.TickCount64);
+        var serial = Interlocked.Increment(ref _strictGpuActivitySerial);
+        var previousState = Interlocked.Exchange(ref _strictGpuActivityState, 1);
+        if (previousState == 0)
         {
-            Volatile.Write(ref _lastActiveMoviePath, null);
-            var epoch = Volatile.Read(ref _sessionEpoch);
-            BinkGuestAvClockV7613.EndSession(
-                epoch,
-                path);
-            SharpEmu.Libs.VideoOut.VulkanVideoPresenter
-                .CompleteGuestBinkHandoffV7618(path, epoch);
+            Console.Error.WriteLine(
+                "[BINK-GUEST][V76.3.2][STRICT-ACTIVITY] " +
+                $"action=begin serial={serial} source={source} " +
+                $"lease_ms={StrictGpuIdleLeaseMsV7632} " +
+                $"file='{Path.GetFileName(ActiveGuestMoviePath)}'");
         }
-        else if (string.Equals(
-                     Volatile.Read(ref _lastActiveMoviePath),
-                     openedPath,
-                     StringComparison.OrdinalIgnoreCase))
-        {
-            Volatile.Write(
-                ref _lastActiveMoviePath,
-                OpenGuestMovieFds.Values.FirstOrDefault());
-        }
-
-        Console.Error.WriteLine(
-            "[BINK-GUEST][V76.0.2][SESSION] end " +
-            $"n={serial} fd={fd} file='{Path.GetFileName(path)}' " +
-            $"active_fds={remaining} decode_owner=guest");
     }
 
-    internal static bool IsBinkPath(string? path) =>
-        !string.IsNullOrWhiteSpace(path) &&
-        path.EndsWith(".bk2", StringComparison.OrdinalIgnoreCase);
+    private static bool IsStrictGpuActivityLeaseActiveV7632(bool logExpiry = true)
+    {
+        var last = Volatile.Read(ref _lastStrictGpuActivityTick);
+        if (last <= 0)
+        {
+            return false;
+        }
+
+        var idleMs = Environment.TickCount64 - last;
+        if (idleMs <= StrictGpuIdleLeaseMsV7632)
+        {
+            return true;
+        }
+
+        if (Interlocked.Exchange(ref _strictGpuActivityState, 0) != 0 && logExpiry)
+        {
+            Console.Error.WriteLine(
+                "[BINK-GUEST][V76.3.2][STRICT-ACTIVITY] " +
+                $"action=expire idle_ms={idleMs} lease_ms={StrictGpuIdleLeaseMsV7632} " +
+                $"active_fds={OpenGuestMovieFds.Count} " +
+                "effect=restore-normal-graphics-compute-parallelism");
+        }
+
+        return false;
+    }
+
+    private static int ReadIntEnvironment(
+        string name,
+        int defaultValue,
+        int minimum,
+        int maximum)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(raw, out var value)
+            ? Math.Clamp(value, minimum, maximum)
+            : defaultValue;
+    }
+
+    internal static bool IsBinkPath(string? hostPath)
+    {
+        if (string.IsNullOrEmpty(hostPath))
+        {
+            return false;
+        }
+
+        var ext = Path.GetExtension(hostPath);
+        return ext.Equals(".bk2", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".bik", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".bik2", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void Set(string name, string? value) =>
         Environment.SetEnvironmentVariable(

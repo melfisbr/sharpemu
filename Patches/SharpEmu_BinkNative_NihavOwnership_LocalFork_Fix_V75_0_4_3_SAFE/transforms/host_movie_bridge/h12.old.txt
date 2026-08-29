@@ -1,7 +1,0 @@
-            return false;
-        }
-
-        if (ResolveMode() != MovieMode.Rad)
-        {
-            return false;
-        }

@@ -1,7 +1,0 @@
-Runtime policy: use the dependency definition already present in the user's local fork.
-Expected local SharpEmu.CLI.csproj properties/targets:
-- FfmpegRuntimeTag: 3b502d4
-- FfmpegRuntimePackage win-x64: ffmpeg-windows-x64.zip
-- FetchFfmpegRuntime target
-Expected FFmpeg.AutoGen ABI: 7.1.1
-No Git source operation is performed by this package.

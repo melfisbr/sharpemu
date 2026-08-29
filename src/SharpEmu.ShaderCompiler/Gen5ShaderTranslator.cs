@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
@@ -11,6 +11,9 @@ namespace SharpEmu.ShaderCompiler;
 
 public static class Gen5ShaderTranslator
 {
+    // V76.3.7.3/V76.3.7.8: retain DEV validation, but execute this self-check
+    // only once per process instead of once per shader state creation.
+    private static int _userSgprCountDecodingValidated;
     private static int _dppVectorsValidated;
     /// <summary>
     /// Bitmask (256 bits) of scalar registers whose values the program can
@@ -130,23 +133,44 @@ public static class Gen5ShaderTranslator
 
     // SHARPEMU_V74_0_117_10_SHADER_THREAD_CACHE_L2
     // V117.9 proved a one-entry L1 only catches ~25% of repeated decodes.
-    // Keep a 256-slot per-thread direct-mapped L2 ahead of the shared cache
-    // lock. Entries remain keyed by guest-memory identity + exact address.
-    // SHARPEMU_V74_0_117_11_SHADER_THREAD_CACHE_L2_SCALE
-    // V117.10 measured only 35.73% L1+L2 locality with 256 direct-mapped slots.
-    // Increase capacity only; cache key, decoded program, metadata and shared
-    // authoritative fallback remain unchanged.
-    private const int V11710ThreadCacheSlots = 4096;
+    // V76.3.19.0_SHADER_FRONTEND_SET_ASSOC_L2
+    //
+    // The old 4096-entry cache was direct-mapped: unrelated shader addresses
+    // hashing to the same slot evicted one another even though the frontend
+    // repeatedly revisits a small working set. Keep exact memory+address keys,
+    // but use a 4-way per-thread set-associative cache. No decoded program or
+    // metadata semantics change; the shared cache remains authoritative.
+    private const int V190ThreadCacheWays = 4;
+    private static readonly int V190ThreadCacheSets =
+        NormalizeV190ThreadCacheSets(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_SHADER_THREAD_CACHE_SETS_V190"),
+                out var setsV190)
+                ? setsV190
+                : 4096);
+    private static readonly int V11710ThreadCacheSlots =
+        V190ThreadCacheSets * V190ThreadCacheWays;
+
     [ThreadStatic] private static ShaderThreadCacheV11710? _v11710ThreadCache;
 
     private sealed class ShaderThreadCacheV11710
     {
         internal object? Memory;
-        internal readonly ulong[] ProgramAddresses = new ulong[V11710ThreadCacheSlots];
-        internal readonly Gen5ShaderProgram?[] Programs = new Gen5ShaderProgram?[V11710ThreadCacheSlots];
-        internal readonly ulong[] MetadataAddresses = new ulong[V11710ThreadCacheSlots];
-        internal readonly Gen5ShaderMetadata?[] Metadata = new Gen5ShaderMetadata?[V11710ThreadCacheSlots];
-        internal readonly bool[] MetadataKnown = new bool[V11710ThreadCacheSlots];
+        internal readonly ulong[] ProgramAddresses =
+            new ulong[V11710ThreadCacheSlots];
+        internal readonly Gen5ShaderProgram?[] Programs =
+            new Gen5ShaderProgram?[V11710ThreadCacheSlots];
+        internal readonly ulong[] MetadataAddresses =
+            new ulong[V11710ThreadCacheSlots];
+        internal readonly Gen5ShaderMetadata?[] Metadata =
+            new Gen5ShaderMetadata?[V11710ThreadCacheSlots];
+        internal readonly bool[] MetadataKnown =
+            new bool[V11710ThreadCacheSlots];
+        internal readonly byte[] ProgramVictim =
+            new byte[V190ThreadCacheSets];
+        internal readonly byte[] MetadataVictim =
+            new byte[V190ThreadCacheSets];
 
         internal void Reset(object memory)
         {
@@ -156,6 +180,8 @@ public static class Gen5ShaderTranslator
             Array.Clear(MetadataAddresses, 0, MetadataAddresses.Length);
             Array.Clear(Metadata, 0, Metadata.Length);
             Array.Clear(MetadataKnown, 0, MetadataKnown.Length);
+            Array.Clear(ProgramVictim, 0, ProgramVictim.Length);
+            Array.Clear(MetadataVictim, 0, MetadataVictim.Length);
         }
     }
 
@@ -163,12 +189,29 @@ public static class Gen5ShaderTranslator
     public static long V11710ProgramL2Misses;
     public static long V11710MetadataL2Hits;
     public static long V11710MetadataL2Misses;
+    public static long V7636ProgramL2ConflictEvictions;
+    public static long V7636MetadataL2ConflictEvictions;
+    public static long V190ProgramSetAssocHits;
+    public static long V190MetadataSetAssocHits;
+
+    private static int NormalizeV190ThreadCacheSets(int requested)
+    {
+        requested = Math.Clamp(requested, 256, 8192);
+        var normalized = 1;
+        while (normalized < requested)
+        {
+            normalized <<= 1;
+        }
+
+        return normalized;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetV11710ThreadCacheSlot(ulong address)
     {
         var mixed = address ^ (address >> 17) ^ (address >> 33);
-        return (int)(mixed & (V11710ThreadCacheSlots - 1));
+        var set = (int)(mixed & (ulong)(V190ThreadCacheSets - 1));
+        return set * V190ThreadCacheWays;
     }
 
     private static ShaderThreadCacheV11710 GetV11710ThreadCache(object memory)
@@ -188,12 +231,18 @@ public static class Gen5ShaderTranslator
         out Gen5ShaderProgram? program)
     {
         var cache = GetV11710ThreadCache(memory);
-        var slot = GetV11710ThreadCacheSlot(address);
-        program = cache.Programs[slot];
-        if (program is not null && cache.ProgramAddresses[slot] == address)
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        for (var way = 0; way < V190ThreadCacheWays; way++)
         {
-            Interlocked.Increment(ref V11710ProgramL2Hits);
-            return true;
+            var slot = baseSlot + way;
+            program = cache.Programs[slot];
+            if (program is not null &&
+                cache.ProgramAddresses[slot] == address)
+            {
+                Interlocked.Increment(ref V11710ProgramL2Hits);
+                Interlocked.Increment(ref V190ProgramSetAssocHits);
+                return true;
+            }
         }
 
         Interlocked.Increment(ref V11710ProgramL2Misses);
@@ -207,9 +256,41 @@ public static class Gen5ShaderTranslator
         Gen5ShaderProgram program)
     {
         var cache = GetV11710ThreadCache(memory);
-        var slot = GetV11710ThreadCacheSlot(address);
-        cache.ProgramAddresses[slot] = address;
-        cache.Programs[slot] = program;
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        var set = baseSlot / V190ThreadCacheWays;
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.Programs[slot] is not null &&
+                cache.ProgramAddresses[slot] == address)
+            {
+                cache.Programs[slot] = program;
+                return;
+            }
+        }
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.Programs[slot] is null)
+            {
+                cache.ProgramAddresses[slot] = address;
+                cache.Programs[slot] = program;
+                cache.ProgramVictim[set] =
+                    (byte)((way + 1) & (V190ThreadCacheWays - 1));
+                return;
+            }
+        }
+
+        var victimWay = cache.ProgramVictim[set] &
+            (V190ThreadCacheWays - 1);
+        var victimSlot = baseSlot + victimWay;
+        Interlocked.Increment(ref V7636ProgramL2ConflictEvictions);
+        cache.ProgramAddresses[victimSlot] = address;
+        cache.Programs[victimSlot] = program;
+        cache.ProgramVictim[set] =
+            (byte)((victimWay + 1) & (V190ThreadCacheWays - 1));
     }
 
     private static bool TryGetMetadataV11710(
@@ -218,12 +299,18 @@ public static class Gen5ShaderTranslator
         out Gen5ShaderMetadata? metadata)
     {
         var cache = GetV11710ThreadCache(memory);
-        var slot = GetV11710ThreadCacheSlot(address);
-        if (cache.MetadataKnown[slot] && cache.MetadataAddresses[slot] == address)
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        for (var way = 0; way < V190ThreadCacheWays; way++)
         {
-            Interlocked.Increment(ref V11710MetadataL2Hits);
-            metadata = cache.Metadata[slot];
-            return true;
+            var slot = baseSlot + way;
+            if (cache.MetadataKnown[slot] &&
+                cache.MetadataAddresses[slot] == address)
+            {
+                Interlocked.Increment(ref V11710MetadataL2Hits);
+                Interlocked.Increment(ref V190MetadataSetAssocHits);
+                metadata = cache.Metadata[slot];
+                return true;
+            }
         }
 
         Interlocked.Increment(ref V11710MetadataL2Misses);
@@ -237,10 +324,43 @@ public static class Gen5ShaderTranslator
         Gen5ShaderMetadata? metadata)
     {
         var cache = GetV11710ThreadCache(memory);
-        var slot = GetV11710ThreadCacheSlot(address);
-        cache.MetadataAddresses[slot] = address;
-        cache.Metadata[slot] = metadata;
-        cache.MetadataKnown[slot] = true;
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        var set = baseSlot / V190ThreadCacheWays;
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.MetadataKnown[slot] &&
+                cache.MetadataAddresses[slot] == address)
+            {
+                cache.Metadata[slot] = metadata;
+                return;
+            }
+        }
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (!cache.MetadataKnown[slot])
+            {
+                cache.MetadataAddresses[slot] = address;
+                cache.Metadata[slot] = metadata;
+                cache.MetadataKnown[slot] = true;
+                cache.MetadataVictim[set] =
+                    (byte)((way + 1) & (V190ThreadCacheWays - 1));
+                return;
+            }
+        }
+
+        var victimWay = cache.MetadataVictim[set] &
+            (V190ThreadCacheWays - 1);
+        var victimSlot = baseSlot + victimWay;
+        Interlocked.Increment(ref V7636MetadataL2ConflictEvictions);
+        cache.MetadataAddresses[victimSlot] = address;
+        cache.Metadata[victimSlot] = metadata;
+        cache.MetadataKnown[victimSlot] = true;
+        cache.MetadataVictim[set] =
+            (byte)((victimWay + 1) & (V190ThreadCacheWays - 1));
     }
 
     private static readonly uint[] FullscreenBarycentricEs =
@@ -536,6 +656,11 @@ public static class Gen5ShaderTranslator
     [Conditional("DEBUG")]
     private static void ValidateUserSgprCountDecoding()
     {
+        if (Interlocked.Exchange(ref _userSgprCountDecodingValidated, 1) != 0)
+        {
+            return;
+        }
+
         static int Decode(uint baseRegister, uint rsrc2)
         {
             var registers = new Dictionary<uint, uint>
@@ -1103,6 +1228,11 @@ public static class Gen5ShaderTranslator
             0x0E => "SCmpkLeU32",
             0x0F => "SAddkI32",
             0x10 => "SMulkI32",
+            // RDNA2 SOPK scoreboard waits (ISA opcodes 23..26).
+            0x17 => "SWaitcntVscnt",
+            0x18 => "SWaitcntVmcnt",
+            0x19 => "SWaitcntExpcnt",
+            0x1A => "SWaitcntLgkmcnt",
             _ => string.Empty,
         };
 
@@ -2117,10 +2247,55 @@ public static class Gen5ShaderTranslator
                     Gen5Operand.Source((word >> 8) & 0xFF, literal),
                 ];
                 break;
-            case Gen5ShaderEncoding.Sopk:
-                sources = [new Gen5Operand(Gen5OperandKind.EncodedConstant, word & 0xFFFF)];
-                destinations = [Gen5Operand.Scalar((word >> 16) & 0x7F)];
+            case Gen5ShaderEncoding.Sopp:
+                if (opcode == "SWaitcnt")
+                {
+                    control = new Gen5WaitcntControl(
+                        Gen5WaitcntKind.Combined,
+                        (ushort)(word & 0xFFFF));
+                }
+                else if (opcode == "SWaitcntDepctr")
+                {
+                    control = new Gen5WaitcntControl(
+                        Gen5WaitcntKind.Dependency,
+                        (ushort)(word & 0xFFFF));
+                }
                 break;
+            case Gen5ShaderEncoding.Sopk:
+            {
+                var simm16 = (ushort)(word & 0xFFFF);
+                var scalarField = (word >> 16) & 0x7F;
+                var scalarSource = Gen5Operand.Source(scalarField);
+                var waitKind = opcode switch
+                {
+                    "SWaitcntVscnt" => Gen5WaitcntKind.VectorStore,
+                    "SWaitcntVmcnt" => Gen5WaitcntKind.VectorMemory,
+                    "SWaitcntExpcnt" => Gen5WaitcntKind.Export,
+                    "SWaitcntLgkmcnt" => Gen5WaitcntKind.Lgkm,
+                    _ => (Gen5WaitcntKind?)null,
+                };
+                if (waitKind is { } kind)
+                {
+                    // For these SOPK waits SDST is an optional scalar source
+                    // (NULL means literal threshold only), not a destination.
+                    sources = scalarSource.Kind == Gen5OperandKind.ScalarRegister
+                        ? [scalarSource]
+                        : [];
+                    destinations = [];
+                    control = new Gen5WaitcntControl(
+                        kind,
+                        simm16,
+                        scalarSource.Kind == Gen5OperandKind.ScalarRegister
+                            ? scalarSource.Value
+                            : null);
+                }
+                else
+                {
+                    sources = [new Gen5Operand(Gen5OperandKind.EncodedConstant, simm16)];
+                    destinations = [Gen5Operand.Scalar(scalarField)];
+                }
+                break;
+            }
             case Gen5ShaderEncoding.Smrd:
             {
                 var scalarBase = ((word >> 9) & 0x3F) * 2;

@@ -1,4 +1,0 @@
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(moviePath))
-        {
-            return false;
-        }

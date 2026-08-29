@@ -1,6 +1,0 @@
-                "file='logo_intro_loop.bk2' mode=nihav " +
-                "reason=guest-ui-composition-and-no-rad-relaunch");
-        }
-        // SHARPEMU_V74_0_82_TITLE_LOOP_NO_HOST_AUDIO_PROBE
-        // logo_intro_loop.bk2 has no audio stream in the observed title asset.
-        // Do not launch NIHAV/FFmpeg audio probes every time the persistent loop

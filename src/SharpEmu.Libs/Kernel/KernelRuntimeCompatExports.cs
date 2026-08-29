@@ -968,6 +968,50 @@ public static class KernelRuntimeCompatExports
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
+    // V76.3.6: PS5Dev/PS5SDK exposes the paired PRT aperture getter.
+    // The state was already tracked by sceKernelSetPrtAperture; expose it
+    // instead of forcing guests to rely on write-only compatibility state.
+    [SysAbiExport(
+        Nid = "L0v2Go5jOuM",
+        ExportName = "sceKernelGetPrtAperture",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int KernelGetPrtApertureV7636(CpuContext ctx)
+    {
+        var apertureId = unchecked((int)ctx[CpuRegister.Rdi]);
+        var addressOut = ctx[CpuRegister.Rsi];
+        var sizeOut = ctx[CpuRegister.Rdx];
+        if (apertureId < 0 || apertureId >= _prtApertures.Length ||
+            addressOut == 0 || sizeOut == 0)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        (ulong Base, ulong Size) aperture;
+        lock (_prtApertureGate)
+        {
+            aperture = _prtApertures[apertureId];
+        }
+
+        if (!ctx.TryWriteUInt64(addressOut, aperture.Base) ||
+            !ctx.TryWriteUInt64(sizeOut, aperture.Size))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_KERNEL_POOL_LOG"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(
+                $"[KERNEL-POOL][V76.3.6] prt_get id={apertureId} base=0x{aperture.Base:X16} size=0x{aperture.Size:X16}");
+        }
+
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
     [SysAbiExport(
         Nid = "f7KBOafysXo",
         ExportName = "sceKernelGetModuleInfoFromAddr",

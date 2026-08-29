@@ -18,6 +18,48 @@ namespace SharpEmu.Libs.Kernel;
 
 public static partial class KernelMemoryCompatExports
 {
+    // V76.3.7.11.1: output-only rate limit for the repeated Demon's Souls
+    // sample-player assertion. Guest return values and memory semantics remain
+    // unchanged; only host console I/O is sampled after the first 8 repeats.
+    private static long _v7637111SamplePlayerAssertionSeen;
+    private static long _v7637111AssertionFailedSeen;
+    private static long _v7637111GuestAssertionSuppressed;
+
+    internal static bool WriteGuestConsoleTextV7637111(string text, bool error = false)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return true;
+        }
+
+        long seen = 0;
+        if (text.Contains("sample_player_1.cpp @ line: 1652", StringComparison.Ordinal))
+        {
+            seen = Interlocked.Increment(ref _v7637111SamplePlayerAssertionSeen);
+        }
+        else if (text.Contains("Assertion failed: 0", StringComparison.Ordinal))
+        {
+            seen = Interlocked.Increment(ref _v7637111AssertionFailedSeen);
+        }
+
+        if (seen > 8 && (seen & (seen - 1)) != 0)
+        {
+            Interlocked.Increment(ref _v7637111GuestAssertionSuppressed);
+            return false;
+        }
+
+        if (error) Console.Error.Write(text); else Console.Out.Write(text);
+
+        if (seen >= 16 && (seen & (seen - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V76.3.7.11.1][GUEST_ASSERT_RATE_LIMIT] seen={seen} " +
+                $"suppressed={Volatile.Read(ref _v7637111GuestAssertionSuppressed)} " +
+                "pattern=sample_player_1652 output_only=1 guest_return_unchanged=1");
+        }
+
+        return true;
+    }
     // SHARPEMU_IO_HOTPATH_V1_8_2_1
     [ThreadStatic]
     private static byte[]? _kernelReadScratchV1821;
@@ -509,7 +551,7 @@ public static partial class KernelMemoryCompatExports
 
     private readonly record struct DirectAllocation(ulong Start, ulong Length, int MemoryType);
     private readonly record struct LibcHeapAllocation(nint BaseAddress, nuint Size, nuint Alignment);
-    private readonly record struct MappedRegion(ulong Address, ulong Length, int Protection, bool IsFlexible, bool IsDirect, ulong DirectStart);
+    private readonly record struct MappedRegion(ulong Address, ulong Length, int Protection, bool IsFlexible, bool IsDirect, ulong DirectStart, int MemoryType);
     private readonly record struct BatchMapEntry(ulong Start, ulong Offset, ulong Length, byte Protection, byte Type, int Operation);
 
     public static void RegisterGuestPathMount(string guestMountPoint, string hostRoot)
@@ -585,7 +627,8 @@ public static partial class KernelMemoryCompatExports
                 OrbisProtCpuReadWrite,
                 IsFlexible: false,
                 IsDirect: false,
-                DirectStart: 0));
+                DirectStart: 0,
+                MemoryType: 0));
         }
 
         for (ulong offset = 0; offset < mappedLength;)
@@ -617,7 +660,8 @@ public static partial class KernelMemoryCompatExports
                 Protection: 0,
                 IsFlexible: false,
                 IsDirect: false,
-                DirectStart: 0));
+                DirectStart: 0,
+                MemoryType: 0));
         }
     }
 
@@ -1072,7 +1116,7 @@ public static partial class KernelMemoryCompatExports
             rendered = FormatString(ctx, format, ref vaCursor);
         }
 
-        Console.Write(rendered);
+        WriteGuestConsoleTextV7637111(rendered);
         ctx[CpuRegister.Rax] = unchecked((ulong)Encoding.UTF8.GetByteCount(rendered));
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
@@ -1759,13 +1803,17 @@ public static partial class KernelMemoryCompatExports
 
         if (stream == 0)
         {
-            Console.Error.Write(text);
-            Console.Error.Flush();
+            if (WriteGuestConsoleTextV7637111(text, error: true))
+            {
+                Console.Error.Flush();
+            }
         }
         else
         {
-            Console.Out.Write(text);
-            Console.Out.Flush();
+            if (WriteGuestConsoleTextV7637111(text))
+            {
+                Console.Out.Flush();
+            }
         }
 
         ctx[CpuRegister.Rax] = unchecked((ulong)text.Length);
@@ -1901,7 +1949,11 @@ public static partial class KernelMemoryCompatExports
             // KernelReadUnderscore patches NumFrames=1 and waits on the exact
             // header read until host playback completes.
             HostMovieBridge.BinkGuestCompletionShim binkCompletionShim = default;
+            // V76.3.0: .bk2 is guest-only only while guest ownership is actually
+            // enabled.  The old V76.0.18 test used the file extension alone, so an
+            // explicit host-decoder opt-in could never reach HostMovieBridge.
             var guestOnlyBinkV7618 =
+                BinkGuestOwnedRuntimeV7600.Enabled &&
                 BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath);
             var observedBinkMovie = guestOnlyBinkV7618;
             var useBinkCompletionShim = false;
@@ -3083,14 +3135,7 @@ public static partial class KernelMemoryCompatExports
             try
             {
                 var text = Encoding.UTF8.GetString(payload);
-                if (fd == 1)
-                {
-                    Console.Out.Write(text);
-                }
-                else
-                {
-                    Console.Error.Write(text);
-                }
+                WriteGuestConsoleTextV7637111(text, error: fd == 2);
             }
             catch (IOException)
             {
@@ -3738,7 +3783,8 @@ public static partial class KernelMemoryCompatExports
             protection: unchecked((int)ctx[CpuRegister.Rdx]),
             flags: ctx[CpuRegister.Rcx],
             directMemoryStart: ctx[CpuRegister.R8],
-            alignment: ctx[CpuRegister.R9]);
+            alignment: ctx[CpuRegister.R9],
+            requestedMemoryType: null);
     }
 
     [SysAbiExport(
@@ -3751,9 +3797,13 @@ public static partial class KernelMemoryCompatExports
         // The "2" variant inserts a memoryType argument (rdx) ahead of v1's
         // protection, shifting protection/flags/directMemoryStart down one
         // register each and pushing alignment onto the stack (the 7th argument,
-        // at [rsp + 8], above the return address). The memoryType only selects
-        // cache/GPU access attributes, which this HLE does not model per
-        // mapping, so it is accepted but does not affect placement.
+        // at [rsp + 8], above the return address). On PS5 this argument is
+        // part of the mapping's cache/GPU-access contract. V76.3.1 preserves
+        // it per virtual mapping and through mtypeprotect/VirtualQuery. Host
+        // PAGE_NOCACHE/PAGE_WRITECOMBINE is deliberately NOT inferred here:
+        // the supplied retail OFW does not expose the proprietary enum values
+        // in plaintext, and guessing them could make normal atomics unsafe.
+        var memoryType = unchecked((int)ctx[CpuRegister.Rdx]);
         ulong alignment = 0;
         _ = ctx.TryReadUInt64(ctx[CpuRegister.Rsp] + sizeof(ulong), out alignment);
 
@@ -3764,7 +3814,8 @@ public static partial class KernelMemoryCompatExports
             protection: unchecked((int)ctx[CpuRegister.Rcx]),
             flags: ctx[CpuRegister.R8],
             directMemoryStart: ctx[CpuRegister.R9],
-            alignment: alignment);
+            alignment: alignment,
+            requestedMemoryType: memoryType);
     }
 
     private static int MapDirectMemoryCore(
@@ -3774,12 +3825,13 @@ public static partial class KernelMemoryCompatExports
         int protection,
         ulong flags,
         ulong directMemoryStart,
-        ulong alignment)
+        ulong alignment,
+        int? requestedMemoryType)
     {
         if (ShouldTraceDirectMemory())
         {
             Console.Error.WriteLine(
-                $"[LOADER][TRACE] map_direct: inout=0x{inOutAddressPointer:X16} len=0x{length:X16} prot=0x{protection:X8} flags=0x{flags:X16} direct=0x{directMemoryStart:X16} align=0x{alignment:X16}");
+                $"[LOADER][TRACE] map_direct: inout=0x{inOutAddressPointer:X16} len=0x{length:X16} prot=0x{protection:X8} flags=0x{flags:X16} direct=0x{directMemoryStart:X16} align=0x{alignment:X16} memtype={(requestedMemoryType.HasValue ? $"0x{requestedMemoryType.Value:X8}" : "allocation")}");
         }
         if (inOutAddressPointer == 0 || length == 0)
         {
@@ -3897,13 +3949,21 @@ public static partial class KernelMemoryCompatExports
             }
 
             _nextVirtualAddress = Math.Max(_nextVirtualAddress, mappedAddress + length);
+            var mappedMemoryType = requestedMemoryType ?? 0;
+            if (!requestedMemoryType.HasValue &&
+                TryFindDirectAllocationLocked(directMemoryStart, out var directAllocation))
+            {
+                mappedMemoryType = directAllocation.MemoryType;
+            }
+
             ReplaceMappedRegionRangeLocked(new MappedRegion(
                 mappedAddress,
                 length,
                 protection,
                 IsFlexible: false,
                 IsDirect: true,
-                DirectStart: directMemoryStart));
+                DirectStart: directMemoryStart,
+                MemoryType: mappedMemoryType));
         }
 
         if (!ctx.TryWriteUInt64(inOutAddressPointer, mappedAddress))
@@ -3995,7 +4055,8 @@ public static partial class KernelMemoryCompatExports
                 protection,
                 IsFlexible: true,
                 IsDirect: false,
-                DirectStart: 0));
+                DirectStart: 0,
+                MemoryType: 0));
         }
 
         if (!ctx.TryWriteUInt64(inOutAddressPointer, mappedAddress))
@@ -4204,19 +4265,14 @@ public static partial class KernelMemoryCompatExports
         }
 
         MappedRegion region;
-        var memoryType = 0;
         lock (_memoryGate)
         {
             if (!TryFindVirtualQueryRegionLocked(queryAddress, findNext: (flags & 0x1) != 0, out region))
             {
                 return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
             }
-
-            if (region.IsDirect && TryFindDirectAllocationLocked(region.DirectStart, out var allocation))
-            {
-                memoryType = allocation.MemoryType;
-            }
         }
+        var memoryType = region.MemoryType;
 
         Span<byte> payload = stackalloc byte[OrbisVirtualQueryInfoSize];
         payload.Clear();
@@ -4235,7 +4291,22 @@ public static partial class KernelMemoryCompatExports
             stateFlags |= 0x02u;
         }
 
-        stateFlags |= 0x10u;
+        // V76.3.6: memory-pool reservations are a distinct VMA state. The
+        // public SCE layout uses bit 3 for pooled and bit 4 for committed.
+        // Ordinary SharpEmu mappings remain committed exactly as before.
+        var poolStateV7636 = GetMemoryPoolVirtualStateV7636(region.Address, region.Length);
+        if (poolStateV7636.IsPooled)
+        {
+            stateFlags |= 0x08u;
+            if (poolStateV7636.IsCommitted)
+            {
+                stateFlags |= 0x10u;
+            }
+        }
+        else
+        {
+            stateFlags |= 0x10u;
+        }
 
         BinaryPrimitives.WriteUInt64LittleEndian(payload[0..8], region.Address);
         BinaryPrimitives.WriteUInt64LittleEndian(payload[8..16], regionEnd);
@@ -7131,7 +7202,7 @@ public static partial class KernelMemoryCompatExports
                 AddMappedRegionSliceLocked(region, region.Address, protectStart, region.Protection);
             }
 
-            AddMappedRegionSliceLocked(region, protectStart, protectEnd, protection);
+            AddMappedRegionSliceLocked(region, protectStart, protectEnd, protection, memoryType);
 
             if (protectEnd < regionEnd)
             {
@@ -7219,7 +7290,8 @@ public static partial class KernelMemoryCompatExports
         MappedRegion source,
         ulong start,
         ulong end,
-        int protection)
+        int protection,
+        int? memoryType = null)
     {
         if (end <= start)
         {
@@ -7236,6 +7308,7 @@ public static partial class KernelMemoryCompatExports
             Length = end - start,
             Protection = protection,
             DirectStart = directStart,
+            MemoryType = memoryType ?? source.MemoryType,
         };
     }
 

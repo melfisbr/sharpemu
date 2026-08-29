@@ -1,9 +1,0 @@
-﻿Tag=V76.0.7.2-GFX10-MTBUF-D16-MIMG-ADAPTIVE-REBASE
-Status=BUILD_PASSED
-RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
-InitialState=ReadyAdaptive
-Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_7_2_PREVIOUS_FILES_20260824_135448.zip
-BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_7_2_BUILD_20260824_135448.log
-ApplyMode=adaptive-in-place; no whole-file replacement
-Scope=GFX10 MTBUF 4-bit decode + D16 typed loads + instruction FORMAT + non-MinLod MIMG sample coverage
-TypedStores=decoded but explicit pending conversion (next stage)

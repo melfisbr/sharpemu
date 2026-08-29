@@ -204,6 +204,33 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 	[ThreadStatic]
 	private static int _nestedGuestCallbackDepth;
 
+	// SHARPEMU_V76_3_1_5_CPU_CACHE_AFFINITY_FASTPATH
+	// RunGuestThread can re-enter this path tens of thousands of times while the
+	// same host worker keeps executing the same guest affinity. Keep the last
+	// guest->host mapping and the last successfully applied host mask per host
+	// thread so the steady state does not take the topology lock or cross into
+	// kernel32 SetThreadAffinityMask again. A real guest-mask change still goes
+	// through the full mapper, affinity syscall and optional verification.
+	[ThreadStatic]
+	private static bool _cpuCacheAffinityFastPathValidV76315;
+
+	[ThreadStatic]
+	private static ulong _cpuCacheAffinityLastGuestMaskV76315;
+
+	[ThreadStatic]
+	private static ulong _cpuCacheAffinityLastMappedHostMaskV76315;
+
+	[ThreadStatic]
+	private static ulong _cpuCacheAffinityLastAppliedHostMaskV76315;
+
+	private static long _cpuCacheAffinityMapHitsV76315;
+	private static long _cpuCacheAffinityMapMissesV76315;
+	private static long _cpuCacheAffinityApplyCallsV76315;
+	private static long _cpuCacheAffinityApplySkipsV76315;
+	private static long _cpuCacheAffinityVerifyCallsV76315;
+	private static long _cpuCacheAffinityApplyFailuresV76315;
+	private static long _cpuCacheAffinityMaskChangesV76315;
+
 	private const uint PAGE_EXECUTE_READWRITE = 64u;
 
 	private const uint PAGE_READWRITE = 4u;
@@ -980,6 +1007,38 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 		return required;
 	}
+
+	// SHARPEMU_V76_3_14_4_BOOT_LEGACY_THREAD_CONTRACT_AB
+	// Restore the historical guest-thread execution contract without rolling
+	// back modern pthread/TLS/wait/JIT/GPU code.  The known-good backend kept
+	// only tbb_thead on the NativeGuestExecutor path; every other guest pthread
+	// executed its synthesized entry/continuation through CallNativeEntry on
+	// the scheduler-owned runner.  Source history explicitly records splash
+	// hangs / UnmanagedCallersOnly regressions after broad native-worker
+	// migration.  This A/B is independently reversible with env=0.
+	private static readonly bool LegacyThreadContractV763144 =
+		!string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_BOOT_LEGACY_THREAD_CONTRACT"),
+			"0",
+			StringComparison.Ordinal);
+
+	private static int _v763144LegacyThreadTraceCount;
+
+	private static bool UseLegacyDirectThreadV763144(string name) =>
+		LegacyThreadContractV763144 &&
+		!string.Equals(name, "tbb_thead", StringComparison.Ordinal);
+
+	private static void TraceLegacyThreadV763144(string phase, string name)
+	{
+		var n = Interlocked.Increment(ref _v763144LegacyThreadTraceCount);
+		if (n <= 96)
+		{
+			Console.Error.WriteLine(
+				$"[V76.3.14.4][BOOT_THREAD_EXEC] phase={phase} path=legacy-direct " +
+				$"name='{name}' managed_tid={Environment.CurrentManagedThreadId}");
+		}
+	}
+
 	// SHARPEMU_V73_20_2_PREFERRED_NATIVE_GUEST_EXECUTION
 	// Every guest pthread now enters through RunGuestEntryStub, whose preferred
 	// Windows path is the pooled raw-OS-thread NativeGuestExecutor. The V73.20.1
@@ -1237,8 +1296,11 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 				"[LOADER][WARN] Worker abort stub unavailable; TBB execute-fault recover will use host_exit");
 		}
 		SetupExceptionHandler();
-		// Cover the Astro TBB spawn storm (often 8â€“12 concurrent tbb_thead).
-		PrewarmNativeGuestWorkers(Math.Min(NativeWorkerMaxConcurrent, 8));
+		// V76.3.14.4: match the historical selective-native contract.
+		// Only tbb_thead consumes this pool while the A/B is enabled; prewarming
+		// the configured bound covers the title's TBB spawn storm without putting
+		// ordinary guest pthreads behind NativeGuestExecutor acquisition.
+		PrewarmNativeGuestWorkers(Math.Max(NativeWorkerMaxConcurrent, 4));
 	}
 
 	public bool TryExecute(CpuContext context, ulong entryPoint, Generation generation, IReadOnlyDictionary<ulong, string> importStubs, IReadOnlyDictionary<string, ulong> runtimeSymbols, CpuExecutionOptions executionOptions, out OrbisGen2Result result)
@@ -5657,18 +5719,119 @@ if (offset > (int)stubSize)
 
 	private void ApplyGuestThreadAffinity(ulong guestAffinityMask)
 	{
-		var hostAffinityMask = MapGuestThreadAffinity(guestAffinityMask);
+		ulong hostAffinityMask;
+		if (_cpuCacheAffinityFastPathValidV76315 &&
+			_cpuCacheAffinityLastGuestMaskV76315 == guestAffinityMask)
+		{
+			hostAffinityMask = _cpuCacheAffinityLastMappedHostMaskV76315;
+			Interlocked.Increment(ref _cpuCacheAffinityMapHitsV76315);
+		}
+		else
+		{
+			hostAffinityMask = MapGuestThreadAffinity(guestAffinityMask);
+			_cpuCacheAffinityLastGuestMaskV76315 = guestAffinityMask;
+			_cpuCacheAffinityLastMappedHostMaskV76315 = hostAffinityMask;
+			_cpuCacheAffinityFastPathValidV76315 = true;
+			Interlocked.Increment(ref _cpuCacheAffinityMapMissesV76315);
+		}
+
 		if (hostAffinityMask == 0)
 		{
 			return;
 		}
 
-		if (SetThreadAffinityMask(GetCurrentThread(), (nuint)hostAffinityMask) == 0 && _logGuestThreads)
+		// The common path: this host scheduler thread is already pinned to the
+		// exact cache-aware mask requested for the guest. Do not enter kernel32
+		// and do not query topology/affinity again.
+		if (_cpuCacheAffinityLastAppliedHostMaskV76315 == hostAffinityMask)
 		{
-			Console.Error.WriteLine(
-				$"[LOADER][WARN] Failed to set guest thread affinity guest=0x{guestAffinityMask:X} " +
-				$"host=0x{hostAffinityMask:X} error={Marshal.GetLastWin32Error()}");
+			var skips = Interlocked.Increment(ref _cpuCacheAffinityApplySkipsV76315);
+			TraceCpuCacheAffinityFastPathV76315(skips);
+			return;
 		}
+
+		var currentThread = GetCurrentThread();
+		var previousAffinityMask = SetThreadAffinityMask(currentThread, (nuint)hostAffinityMask);
+		Interlocked.Increment(ref _cpuCacheAffinityApplyCallsV76315);
+		if (previousAffinityMask == 0)
+		{
+			_cpuCacheAffinityLastAppliedHostMaskV76315 = 0;
+			Interlocked.Increment(ref _cpuCacheAffinityApplyFailuresV76315);
+			if (_logGuestThreads || HostCpuCacheTopology.VerificationEnabled)
+			{
+				Console.Error.WriteLine(
+					$"[CPU-CACHE][WARN] affinity-apply-failed guest=0x{guestAffinityMask:X} " +
+					$"requested=0x{hostAffinityMask:X} error={Marshal.GetLastWin32Error()}");
+			}
+			return;
+		}
+
+		var previousMask = unchecked((ulong)previousAffinityMask);
+		if (previousMask != hostAffinityMask)
+		{
+			Interlocked.Increment(ref _cpuCacheAffinityMaskChangesV76315);
+		}
+		_cpuCacheAffinityLastAppliedHostMaskV76315 = hostAffinityMask;
+
+		if (!HostCpuCacheTopology.VerificationEnabled || !OperatingSystem.IsWindows())
+		{
+			return;
+		}
+
+		Interlocked.Increment(ref _cpuCacheAffinityVerifyCallsV76315);
+		var queryOk = Win32GetThreadGroupAffinity(currentThread, out var effectiveAffinity);
+		var effectiveMask = queryOk && effectiveAffinity.Group == 0
+			? unchecked((ulong)effectiveAffinity.Mask)
+			: 0UL;
+		var currentLogicalProcessor = unchecked((int)Win32GetCurrentProcessorNumber());
+		var effectiveMatchesRequested = queryOk && effectiveAffinity.Group == 0 && effectiveMask == hostAffinityMask;
+		var currentInsideMask =
+			(uint)currentLogicalProcessor < 64u &&
+			(hostAffinityMask & (1UL << currentLogicalProcessor)) != 0;
+		var placementKnown = HostCpuCacheTopology.TryDescribeLogicalProcessor(
+			currentLogicalProcessor,
+			out var physicalCoreIndex,
+			out var l3Index);
+		var requestedL3Domains = HostCpuCacheTopology.CountL3Domains(hostAffinityMask);
+
+		Console.Error.WriteLine(
+			$"[CPU-CACHE][AFFINITY] guest=0x{guestAffinityMask:X} requested=0x{hostAffinityMask:X} " +
+			$"effective=0x{effectiveMask:X} previous=0x{previousMask:X} " +
+			$"query_ok={queryOk} group={(queryOk ? effectiveAffinity.Group : ushort.MaxValue)} " +
+			$"mask_match={effectiveMatchesRequested} current_cpu={currentLogicalProcessor} current_in_mask={currentInsideMask} " +
+			$"core={(placementKnown ? physicalCoreIndex : -1)} l3={(placementKnown ? l3Index : -1)} " +
+			$"requested_l3_domains={requestedL3Domains} " +
+			$"placement=[{HostCpuCacheTopology.DescribeHostAffinity(hostAffinityMask)}]");
+
+		if (!effectiveMatchesRequested)
+		{
+			// Do not trust the fast-path cache after a failed verification. The
+			// next scheduler entry must retry the real affinity application.
+			_cpuCacheAffinityLastAppliedHostMaskV76315 = 0;
+			Console.Error.WriteLine(
+				$"[CPU-CACHE][WARN] affinity-verify-mismatch guest=0x{guestAffinityMask:X} " +
+				$"requested=0x{hostAffinityMask:X} effective=0x{effectiveMask:X} query_ok={queryOk} " +
+				$"group={(queryOk ? effectiveAffinity.Group : ushort.MaxValue)}");
+		}
+	}
+
+	private static void TraceCpuCacheAffinityFastPathV76315(long skips)
+	{
+		if (!HostCpuCacheTopology.LoggingEnabled || skips <= 0 || (skips & (skips - 1)) != 0)
+		{
+			return;
+		}
+
+		// Power-of-two milestones keep the diagnostic useful without recreating
+		// the V76.3.1.4 log flood that this fast path is meant to remove.
+		Console.Error.WriteLine(
+			$"[CPU-CACHE][FASTPATH] skips={skips} " +
+			$"applies={Volatile.Read(ref _cpuCacheAffinityApplyCallsV76315)} " +
+			$"map_hits={Volatile.Read(ref _cpuCacheAffinityMapHitsV76315)} " +
+			$"map_misses={Volatile.Read(ref _cpuCacheAffinityMapMissesV76315)} " +
+			$"verifies={Volatile.Read(ref _cpuCacheAffinityVerifyCallsV76315)} " +
+			$"changes={Volatile.Read(ref _cpuCacheAffinityMaskChangesV76315)} " +
+			$"failures={Volatile.Read(ref _cpuCacheAffinityApplyFailuresV76315)}");
 	}
 
 	private static ulong MapGuestThreadAffinity(ulong guestAffinityMask)
@@ -5676,6 +5839,22 @@ if (offset > (int)stubSize)
 		if (guestAffinityMask == 0 || guestAffinityMask == ulong.MaxValue)
 		{
 			return 0;
+		}
+
+		// V76.3.1.5 FASTPATH keeps the result of this mapper per host scheduler
+		// thread; this method is therefore reached only when that thread sees a new
+		// guest affinity mask.
+		// V76.3.1.1 CPU-CACHE-TOPOLOGY REBASE: prefer the host topology reported by
+		// Windows instead of assuming logical CPUs are laid out as adjacent SMT
+		// pairs. The helper only returns masks inside this process' existing
+		// affinity and automatically falls back to the legacy mapper on any
+		// discovery/API failure.
+		if (HostCpuCacheTopology.TryMapGuestAffinity(
+				guestAffinityMask,
+				EmulatorReservedLanes,
+				out var cacheAwareMask))
+		{
+			return cacheAwareMask;
 		}
 
 		var processorCount = Math.Min(Environment.ProcessorCount, 64);
@@ -6171,8 +6350,31 @@ private static readonly int EmulatorReservedLanes =
 				// TBB execute-AV recover needs native-worker TLS (eligible/done).
 				// Other guests stay on CallNativeEntry â€” full native-worker migration
 				// increased splash hangs / UnmanagedCallersOnly (tLTN/tLTO).
-				int nativeReturn; 				if (RequiresNativeGuestWorker(name)) 				{ 				    nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true); 				} 				else 				{ 				    if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot)) 				    { 				        reason = "failed to bind host-RSP storage for guest thread stub"; 				        return GuestNativeCallExitReason.Exception; 				    } 				    // SHARPEMU_V73_20_4_1_DEDICATED_GUEST_EXECUTOR_CALL
-					nativeReturn = RunGuestEntryStubDedicated(ptr, hostRspSlot); 				}
+				int nativeReturn;
+				if (UseLegacyDirectThreadV763144(name))
+				{
+					if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot))
+					{
+						reason = "failed to bind host-RSP storage for legacy-direct guest thread stub";
+						return GuestNativeCallExitReason.Exception;
+					}
+					TraceLegacyThreadV763144("entry", name);
+					nativeReturn = CallNativeEntry(ptr);
+				}
+				else if (RequiresNativeGuestWorker(name))
+				{
+					nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true);
+				}
+				else
+				{
+					if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot))
+					{
+						reason = "failed to bind host-RSP storage for guest thread stub";
+						return GuestNativeCallExitReason.Exception;
+					}
+					// SHARPEMU_V73_20_4_1_DEDICATED_GUEST_EXECUTOR_CALL
+					nativeReturn = RunGuestEntryStubDedicated(ptr, hostRspSlot);
+				}
 				if (ActiveGuestThreadYieldRequested)
 				{
 					reason = ActiveGuestThreadYieldReason ?? "guest thread blocked";
@@ -6322,8 +6524,31 @@ private static readonly int EmulatorReservedLanes =
 			ActiveGuestThreadYieldReason = null;
 			try
 			{
-				int nativeReturn; 				if (RequiresNativeGuestWorker(name)) 				{ 				    nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true); 				} 				else 				{ 				    if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot)) 				    { 				        reason = "failed to bind host-RSP storage for guest continuation stub"; 				        return GuestNativeCallExitReason.Exception; 				    } 				    // SHARPEMU_V73_20_4_1_DEDICATED_GUEST_EXECUTOR_CALL
-					nativeReturn = RunGuestEntryStubDedicated(ptr, hostRspSlot); 				}
+				int nativeReturn;
+				if (UseLegacyDirectThreadV763144(name))
+				{
+					if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot))
+					{
+						reason = "failed to bind host-RSP storage for legacy-direct guest continuation stub";
+						return GuestNativeCallExitReason.Exception;
+					}
+					TraceLegacyThreadV763144("continuation", name);
+					nativeReturn = CallNativeEntry(ptr);
+				}
+				else if (RequiresNativeGuestWorker(name))
+				{
+					nativeReturn = RunGuestEntryStub(ptr, hostRspSlot, requireNativeWorker: true);
+				}
+				else
+				{
+					if (!TlsSetValue(_hostRspSlotTlsIndex, (nint)hostRspSlot))
+					{
+						reason = "failed to bind host-RSP storage for guest continuation stub";
+						return GuestNativeCallExitReason.Exception;
+					}
+					// SHARPEMU_V73_20_4_1_DEDICATED_GUEST_EXECUTOR_CALL
+					nativeReturn = RunGuestEntryStubDedicated(ptr, hostRspSlot);
+				}
 				if (ActiveGuestThreadYieldRequested)
 				{
 					reason = ActiveGuestThreadYieldReason ?? "guest thread blocked";
@@ -7856,6 +8081,16 @@ private static readonly int EmulatorReservedLanes =
 	private static nint GetCurrentThread() =>
 		OperatingSystem.IsWindows() ? Win32GetCurrentThread() : 0;
 
+	[StructLayout(LayoutKind.Sequential)]
+	private struct GroupAffinityV76314
+	{
+		public nuint Mask;
+		public ushort Group;
+		public ushort Reserved0;
+		public ushort Reserved1;
+		public ushort Reserved2;
+	}
+
 	private static nuint SetThreadAffinityMask(nint hThread, nuint dwThreadAffinityMask) =>
 		OperatingSystem.IsWindows() ? Win32SetThreadAffinityMask(hThread, dwThreadAffinityMask) : 1;
 
@@ -7909,6 +8144,15 @@ private static readonly int EmulatorReservedLanes =
 
 	[DllImport("kernel32.dll", EntryPoint = "SetThreadAffinityMask", SetLastError = true)]
 	private static extern nuint Win32SetThreadAffinityMask(nint hThread, nuint dwThreadAffinityMask);
+
+	[DllImport("kernel32.dll", EntryPoint = "GetThreadGroupAffinity", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool Win32GetThreadGroupAffinity(
+		nint hThread,
+		out GroupAffinityV76314 groupAffinity);
+
+	[DllImport("kernel32.dll", EntryPoint = "GetCurrentProcessorNumber")]
+	private static extern uint Win32GetCurrentProcessorNumber();
 
 	[DllImport("kernel32.dll", EntryPoint = "OpenThread", SetLastError = true)]
 	private static extern nint Win32OpenThread(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwThreadId);

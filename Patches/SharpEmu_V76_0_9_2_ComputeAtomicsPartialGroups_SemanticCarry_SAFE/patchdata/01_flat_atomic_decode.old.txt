@@ -1,5 +1,0 @@
-            0x24 => "LoadShortD16",
-            0x25 => "LoadShortD16Hi",
-            0x32 => "AtomicAdd",
-            0x38 => "AtomicUMax",
-            _ => string.Empty,

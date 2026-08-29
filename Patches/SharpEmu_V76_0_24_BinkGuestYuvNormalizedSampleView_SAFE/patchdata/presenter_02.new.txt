@@ -1,4 +1,0 @@
-                    TryGetOrCreateGuestImageView(
-                        binkYuvProducerV7602,
-                        binkSampleViewFormatV7624,
-                        mipLevel: texture.BaseMipLevel,

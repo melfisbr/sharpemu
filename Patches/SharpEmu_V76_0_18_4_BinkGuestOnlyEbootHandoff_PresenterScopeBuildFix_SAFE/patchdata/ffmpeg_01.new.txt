@@ -1,1 +1,0 @@
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(path))

@@ -1,7 +1,0 @@
-    private static void AttachMovieLocked(string hostPath, MovieMode mode)
-    {
-        if (BinkGuestOwnedRuntimeV7600.Enabled)
-        {
-            BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
-            return;
-        }

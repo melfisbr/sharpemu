@@ -1,5 +1,0 @@
-﻿Tag=V76.0.12-BINK-GUEST-YUV-STORAGE-EPOCH
-RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
-BinkRuntime=ReadySemanticInsert
-Presenter=ReadySemanticInsert
-YuvEpochHelper=Applied hash=

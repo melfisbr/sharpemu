@@ -1,7 +1,0 @@
-
-    // SHARPEMU_V74_0_90_CONTIGUOUS_TILED_GUEST_READ
-    private bool UploadGuestTextureSlicesV74088(
-        DeviceMemory memory,
-        SharpEmu.HLE.ICpuMemory guestMemory,
-        ulong guestBaseAddress,
-        ulong guestSliceStride,

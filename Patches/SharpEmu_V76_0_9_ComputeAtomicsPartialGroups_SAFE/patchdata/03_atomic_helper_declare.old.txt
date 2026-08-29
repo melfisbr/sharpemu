@@ -1,2 +1,0 @@
-                DeclareModule();
-                var blocks = BuildBasicBlocks(_state.Program.Instructions);

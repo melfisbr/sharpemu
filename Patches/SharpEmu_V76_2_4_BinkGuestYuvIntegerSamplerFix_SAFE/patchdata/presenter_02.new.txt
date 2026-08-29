@@ -1,4 +1,0 @@
-            var neutral = texture with
-            {
-                Sampler = binkSamplerV7624,
-                Address = 0,

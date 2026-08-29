@@ -1,0 +1,297 @@
+﻿tag=V76.3.18.5-ADAPTIVE-FULL-PERFORMANCE-MERGE
+runtime_seconds=202.822
+main_loop_detected=True
+first_frame_detected=True
+dual_physical_enabled=True
+dual_graphics_submit_max=8192
+dual_compute_submit_max=8192
+max_compute_in_batch=4
+payload_batch_last_avg=1,23
+async_cp_faults=0
+global_residency_samples=44
+descriptor_cache_samples=41
+resident_shader_samples=41
+slow_wait_lines=8
+nvidia_samples=12
+nvidia_gpu_util_avg=9.33
+nvidia_gpu_util_max=24
+nvidia_vram_used_max_mb=4183
+device_lost_markers=0
+access_violation_markers=0
+fatal_markers=0
+
+--- ACTIVE V18.5 PROFILE ---
+[V76.3.18.5][ADAPTIVE_FULL_MERGE] queue_mode=dual-capability-resource wait_fullscan_ms=32 async_agc=1 chain4=1 cb_pool=256 fence_pool=256 global_residency=1024/512MB descriptor_cache=4096 resident_shader=2048 parallel_compile=1 prewarm=512/128MB host_buffer_cache_mb=256 cpu=compact16/8 sideband=off microbatch=on safe_memcpy=1
+[V76.3.18.5][ADAPTIVE_FULL_MERGE] queue_mode=dual-capability-resource wait_fullscan_ms=32 async_agc=1 chain4=1 cb_pool=256 fence_pool=256 global_residency=1024/512MB descriptor_cache=4096 resident_shader=2048 parallel_compile=1 prewarm=512/128MB host_buffer_cache_mb=256 cpu=compact16/8 sideband=off microbatch=on safe_memcpy=1
+
+--- BOOT ---
+[MSG-Init] Starting Initialization: 310.3576ms
+[MSG-Init] ResourcePool::RecordResourceDependencies() took 1.2943s
+[MSG-Init] Finished Initialization: 16.5716s
+[MSG-Init] Starting Script: $/scripts/cp11/_cmn/cp11main.cgpr : 16.5724s
+[MSG-Init] Starting main loop: 46.3225s
+[MSG-Init] ResourcePool::GatherResourceFileInfo() took 00:01:28.05
+
+--- DUAL QUEUE LAST ---
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=4 switch=0 switch_count=0 wait=0 signal=4 queue=dcb.graphics submission=2
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=5 switch=0 switch_count=0 wait=0 signal=5 queue=dcb.graphics submission=2
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=6 switch=0 switch_count=0 wait=0 signal=6 queue=dcb.graphics submission=2
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=7 switch=0 switch_count=0 wait=0 signal=7 queue=dcb.graphics submission=2
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=2 switch=1 switch_count=0 wait=0 signal=2 queue=acb.compute[80] submission=11
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=8 switch=1 switch_count=0 wait=0 signal=8 queue=dcb.graphics submission=2
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=3 switch=1 switch_count=0 wait=0 signal=3 queue=acb.compute[80] submission=11
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=9 switch=1 switch_count=0 wait=0 signal=9 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=10 switch=0 switch_count=0 wait=0 signal=10 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=4 switch=1 switch_count=0 wait=0 signal=4 queue=acb.compute[80] submission=11
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=11 switch=1 switch_count=0 wait=0 signal=11 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=5 switch=1 switch_count=0 wait=0 signal=5 queue=acb.compute[80] submission=11
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=12 switch=1 switch_count=0 wait=0 signal=12 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=6 switch=1 switch_count=0 wait=0 signal=6 queue=acb.compute[80] submission=11
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=13 switch=1 switch_count=0 wait=0 signal=13 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=14 switch=0 switch_count=0 wait=0 signal=14 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=15 switch=0 switch_count=0 wait=0 signal=15 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=7 switch=1 switch_count=0 wait=0 signal=7 queue=acb.compute[56] submission=18
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=16 switch=1 switch_count=0 wait=0 signal=16 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=32 switch=0 switch_count=0 wait=0 signal=32 queue=dcb.graphics submission=4
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=8 switch=1 switch_count=1 wait=37 signal=8 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=9 switch=0 switch_count=2 wait=43 signal=9 queue=acb.compute[48] submission=7
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=55 switch=1 switch_count=2 wait=0 signal=55 queue=dcb.graphics submission=6
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=10 switch=1 switch_count=3 wait=37 signal=10 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=11 switch=0 switch_count=3 wait=0 signal=11 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=12 switch=0 switch_count=4 wait=37 signal=12 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=13 switch=0 switch_count=5 wait=37 signal=13 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=14 switch=0 switch_count=6 wait=37 signal=14 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=15 switch=0 switch_count=6 wait=0 signal=15 queue=acb.compute[64] submission=9
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=16 switch=0 switch_count=6 wait=0 signal=16 queue=acb.compute[64] submission=19
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=64 switch=1 switch_count=6 wait=0 signal=64 queue=dcb.graphics submission=14
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=22 switch=1 switch_count=6 wait=0 signal=22 queue=acb.compute[48] submission=17
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=76 switch=1 switch_count=8 wait=0 signal=76 queue=dcb.graphics submission=14
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=25 switch=1 switch_count=8 wait=0 signal=25 queue=acb.compute[64] submission=19
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=78 switch=1 switch_count=10 wait=0 signal=78 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=29 switch=1 switch_count=10 wait=0 signal=29 queue=acb.compute[64] submission=19
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=79 switch=1 switch_count=11 wait=0 signal=79 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=31 switch=1 switch_count=11 wait=0 signal=31 queue=acb.compute[56] submission=18
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=32 switch=0 switch_count=12 wait=85 signal=32 queue=acb.compute[56] submission=18
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=86 switch=1 switch_count=12 wait=0 signal=86 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=33 switch=1 switch_count=14 wait=0 signal=33 queue=acb.compute[32] submission=22
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=103 switch=1 switch_count=14 wait=0 signal=103 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=35 switch=1 switch_count=14 wait=0 signal=35 queue=acb.compute[32] submission=22
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=104 switch=1 switch_count=14 wait=0 signal=104 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=36 switch=1 switch_count=14 wait=0 signal=36 queue=acb.compute[32] submission=22
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=108 switch=1 switch_count=14 wait=0 signal=108 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=128 switch=0 switch_count=15 wait=0 signal=128 queue=dcb.graphics submission=24
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=64 switch=0 switch_count=38 wait=0 signal=64 queue=acb.compute[56] submission=42
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=256 switch=0 switch_count=88 wait=0 signal=256 queue=dcb.graphics submission=50
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=128 switch=0 switch_count=90 wait=0 signal=128 queue=acb.compute[32] submission=46
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=256 switch=1 switch_count=210 wait=425 signal=256 queue=acb.compute[48] submission=113
+[V74.0.113.1][DUAL_QUEUE_PRESENT_JOIN] graphics_count=512 compute_wait=300 graphics_signal=512
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=521 switch=1 switch_count=256 wait=260 signal=521 queue=dcb.graphics submission=133
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=512 switch=0 switch_count=454 wait=0 signal=512 queue=acb.compute[32] submission=214
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=1024 switch=0 switch_count=557 wait=0 signal=1024 queue=dcb.graphics submission=266
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=1024 switch=0 switch_count=929 wait=1619 signal=1024 queue=acb.compute[48] submission=449
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=2048 switch=1 switch_count=1163 wait=0 signal=2048 queue=dcb.graphics submission=554
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=2048 switch=0 switch_count=1869 wait=0 signal=2048 queue=acb.compute[80] submission=899
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=2244 switch=1 switch_count=2048 wait=3431 signal=2244 queue=acb.compute[40] submission=983
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=3492 switch=1 switch_count=2048 wait=0 signal=3492 queue=dcb.graphics submission=984
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=4096 switch=1 switch_count=2427 wait=0 signal=4096 queue=dcb.graphics submission=1152
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=4096 switch=0 switch_count=3834 wait=6313 signal=4096 queue=acb.compute[48] submission=1793
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=graphics lane_count=8192 switch=0 switch_count=4995 wait=5233 signal=8192 queue=dcb.graphics submission=2308
+[V74.0.113.1][DUAL_QUEUE_SUBMIT] lane=compute lane_count=8192 switch=1 switch_count=7849 wait=0 signal=8192 queue=acb.compute[32] submission=3581
+
+--- ASYNC AGC LAST ---
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=27 ingress=27 kind=ComputeAcb depth=1 command=0x000000060A292600 dwords=56
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=27 ingress=27 kind=ComputeAcb age_ms=0,015 process_ms=1,907 depth=0 max_depth=10 busy_ms=402,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=28 ingress=28 kind=GraphicsDcb depth=1 command=0x0000000443100000 dwords=818
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=29 ingress=29 kind=GraphicsDcb depth=1 command=0x0000000444300000 dwords=101
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=30 ingress=30 kind=GraphicsDcb depth=2 command=0x0000000444800000 dwords=147
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=31 ingress=31 kind=ComputeAcb depth=3 command=0x000000060A2D2700 dwords=89
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=32 ingress=32 kind=ComputeAcb depth=4 command=0x000000060A2F2800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=28 ingress=28 kind=GraphicsDcb age_ms=0,015 process_ms=1,731 depth=7 max_depth=10 busy_ms=404,0 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=29 ingress=29 kind=GraphicsDcb age_ms=2,119 process_ms=0,523 depth=6 max_depth=10 busy_ms=404,5 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=30 ingress=30 kind=GraphicsDcb age_ms=2,741 process_ms=0,240 depth=5 max_depth=10 busy_ms=404,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=31 ingress=31 kind=ComputeAcb age_ms=2,971 process_ms=0,146 depth=4 max_depth=10 busy_ms=404,9 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=32 ingress=32 kind=ComputeAcb age_ms=2,960 process_ms=0,261 depth=3 max_depth=10 busy_ms=405,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=64 ingress=64 kind=ComputeAcb depth=4 command=0x000000060A69D300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=64 ingress=64 kind=ComputeAcb age_ms=1,579 process_ms=2,053 depth=8 max_depth=15 busy_ms=461,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=128 ingress=128 kind=ComputeAcb depth=4 command=0x000000060ACBA800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=128 ingress=128 kind=ComputeAcb age_ms=38,866 process_ms=0,312 depth=3 max_depth=15 busy_ms=575,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=256 ingress=256 kind=ComputeAcb depth=4 command=0x000000060BA2D300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=256 ingress=256 kind=ComputeAcb age_ms=92,354 process_ms=0,002 depth=8 max_depth=15 busy_ms=993,0 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=512 ingress=512 kind=ComputeAcb depth=4 command=0x000000060D3DA800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=512 ingress=512 kind=ComputeAcb age_ms=5,056 process_ms=0,122 depth=3 max_depth=15 busy_ms=1559,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=1024 ingress=1024 kind=ComputeAcb depth=4 command=0x000000061086D300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=1024 ingress=1024 kind=ComputeAcb age_ms=5,830 process_ms=0,017 depth=8 max_depth=15 busy_ms=3539,6 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=2048 ingress=2048 kind=ComputeAcb depth=4 command=0x000000060EE60100 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=2048 ingress=2048 kind=ComputeAcb age_ms=14,058 process_ms=0,135 depth=3 max_depth=15 busy_ms=5982,0 backpressure=0
+
+--- COMPUTE CHAIN LAST ---
+[V76.3.17.1][COMPUTE_CHAIN] count=108 queue=dcb.graphics submission=254 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=109 queue=dcb.graphics submission=254 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=110 queue=dcb.graphics submission=254 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=111 queue=dcb.graphics submission=254 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=112 queue=dcb.graphics submission=254 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=113 queue=acb.compute[40] submission=263 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=114 queue=dcb.graphics submission=268 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=115 queue=dcb.graphics submission=268 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=116 queue=dcb.graphics submission=268 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=117 queue=dcb.graphics submission=268 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=118 queue=dcb.graphics submission=278 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=119 queue=dcb.graphics submission=278 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=120 queue=dcb.graphics submission=278 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=121 queue=dcb.graphics submission=278 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=122 queue=dcb.graphics submission=278 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=123 queue=dcb.graphics submission=278 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=124 queue=dcb.graphics submission=278 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=125 queue=dcb.graphics submission=278 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=126 queue=dcb.graphics submission=278 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=127 queue=dcb.graphics submission=278 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=128 queue=dcb.graphics submission=292 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=256 queue=dcb.graphics submission=542 compute_in_batch=3 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=512 queue=dcb.graphics submission=1036 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+[V76.3.17.1][COMPUTE_CHAIN] count=1024 queue=dcb.graphics submission=2030 compute_in_batch=4 max=4 edge=write-overlap-barrier barrier=all-commands-memory-rw
+
+--- PAYLOAD LAST ---
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=120 work=1 total_work=141 avg=1,18 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=121 work=1 total_work=142 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=122 work=1 total_work=143 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=123 work=1 total_work=144 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=124 work=1 total_work=145 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=125 work=1 total_work=146 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=126 work=1 total_work=147 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=127 work=1 total_work=148 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=128 work=2 total_work=150 avg=1,17 queue=dcb.graphics submission=24
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=256 work=1 total_work=299 avg=1,17 queue=dcb.graphics submission=48
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=512 work=1 total_work=596 avg=1,16 queue=dcb.graphics submission=96
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=1024 work=1 total_work=1186 avg=1,16 queue=acb.compute[48] submission=185
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=2048 work=1 total_work=2361 avg=1,15 queue=dcb.graphics submission=360
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=4096 work=1 total_work=4757 avg=1,16 queue=dcb.graphics submission=720
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=8192 work=1 total_work=9615 avg=1,17 queue=dcb.graphics submission=1452
+[V74.0.56.20][PAYLOAD_BATCH_SUBMIT] count=16384 work=1 total_work=20100 avg=1,23 queue=dcb.graphics submission=2884
+
+--- GLOBAL RESIDENCY LAST ---
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=45 misses=12 creates=12 generation_changes=2 range_mismatch=0 budget_fallback=0 entries=12 resident_mb=3,00 saved_mb=11,25 created_mb=3,00 candidate_stable=64 candidate_changes=3 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=45 misses=13 creates=13 generation_changes=2 range_mismatch=0 budget_fallback=0 entries=13 resident_mb=3,25 saved_mb=11,25 created_mb=3,25 candidate_stable=65 candidate_changes=3 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=48 misses=14 creates=14 generation_changes=2 range_mismatch=0 budget_fallback=0 entries=14 resident_mb=3,75 saved_mb=12,00 created_mb=3,75 candidate_stable=70 candidate_changes=3 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=48 misses=15 creates=15 generation_changes=2 range_mismatch=0 budget_fallback=0 entries=15 resident_mb=4,00 saved_mb=12,00 created_mb=4,00 candidate_stable=75 candidate_changes=3 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=48 misses=16 creates=16 generation_changes=2 range_mismatch=0 budget_fallback=0 entries=16 resident_mb=4,25 saved_mb=12,00 created_mb=4,25 candidate_stable=76 candidate_changes=3 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=64 misses=20 creates=20 generation_changes=3 range_mismatch=0 budget_fallback=0 entries=20 resident_mb=5,25 saved_mb=16,49 created_mb=5,25 candidate_stable=191 candidate_changes=25 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=99 misses=32 creates=32 generation_changes=3 range_mismatch=0 budget_fallback=0 entries=32 resident_mb=15,79 saved_mb=26,14 created_mb=15,79 candidate_stable=290 candidate_changes=42 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=128 misses=60 creates=60 generation_changes=7 range_mismatch=0 budget_fallback=0 entries=60 resident_mb=26,42 saved_mb=41,58 created_mb=26,42 candidate_stable=500 candidate_changes=82 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=135 misses=64 creates=64 generation_changes=7 range_mismatch=0 budget_fallback=0 entries=64 resident_mb=27,42 saved_mb=43,21 created_mb=27,42 candidate_stable=512 candidate_changes=82 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=256 misses=115 creates=115 generation_changes=32 range_mismatch=0 budget_fallback=0 entries=115 resident_mb=71,51 saved_mb=74,66 created_mb=71,51 candidate_stable=947 candidate_changes=225 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=292 misses=128 creates=128 generation_changes=33 range_mismatch=0 budget_fallback=0 entries=128 resident_mb=74,76 saved_mb=83,56 created_mb=74,76 candidate_stable=992 candidate_changes=302 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=434 misses=256 creates=256 generation_changes=86 range_mismatch=1 budget_fallback=0 entries=256 resident_mb=122,36 saved_mb=120,08 created_mb=122,36 candidate_stable=1774 candidate_changes=459 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=512 misses=383 creates=383 generation_changes=171 range_mismatch=1 budget_fallback=0 entries=383 resident_mb=181,37 saved_mb=140,24 created_mb=181,37 candidate_stable=2175 candidate_changes=546 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=726 misses=512 creates=512 generation_changes=362 range_mismatch=1 budget_fallback=0 entries=512 resident_mb=213,32 saved_mb=195,91 created_mb=213,32 candidate_stable=2718 candidate_changes=767 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=1024 misses=632 creates=631 generation_changes=412 range_mismatch=1 budget_fallback=0 entries=631 resident_mb=297,59 saved_mb=274,52 created_mb=297,59 candidate_stable=4117 candidate_changes=1196 candidate_probe_fail=0
+[V74.0.117.13][SHADER_GLOBAL_RESIDENCY] hits=1343 misses=1026 creates=1024 generation_changes=676 range_mismatch=1 budget_fallback=0 entries=1024 resident_mb=399,46 saved_mb=347,82 created_mb=399,46 candidate_stable=6166 candidate_changes=2745 candidate_probe_fail=0
+
+--- DESCRIPTOR CACHE LAST ---
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=128 hits=87 block_alloc_calls=41 cached_sets=328 fallbacks=0 in_use=1 peak=6 alloc_calls_saved=87 reset_calls_saved=128
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=256 hits=205 block_alloc_calls=51 cached_sets=408 fallbacks=0 in_use=4 peak=6 alloc_calls_saved=205 reset_calls_saved=256
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=512 hits=457 block_alloc_calls=55 cached_sets=440 fallbacks=0 in_use=1 peak=6 alloc_calls_saved=457 reset_calls_saved=512
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=1024 hits=968 block_alloc_calls=56 cached_sets=448 fallbacks=0 in_use=1 peak=10 alloc_calls_saved=968 reset_calls_saved=1024
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=2048 hits=1989 block_alloc_calls=59 cached_sets=472 fallbacks=0 in_use=1 peak=10 alloc_calls_saved=1989 reset_calls_saved=2048
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=4096 hits=4034 block_alloc_calls=62 cached_sets=496 fallbacks=0 in_use=2 peak=18 alloc_calls_saved=4034 reset_calls_saved=4096
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=8192 hits=8130 block_alloc_calls=62 cached_sets=496 fallbacks=0 in_use=2 peak=18 alloc_calls_saved=8130 reset_calls_saved=8192
+[V74.0.117.16][DESCRIPTOR_SET_CACHE] acquires=16384 hits=16319 block_alloc_calls=65 cached_sets=520 fallbacks=0 in_use=4 peak=18 alloc_calls_saved=16319 reset_calls_saved=16384
+
+--- RESIDENT SHADER LAST ---
+[V74.0.118.0][RESIDENT_SHADER] lookups=128 address_hits=67 reference_hits=67 byte_compare_hits=0 compare_avoided_mb=4,12 content_changes=0 digest_hits=0 registered=61 resident=61 compute_pipeline_fast_hits=67 graphics_pipeline_fast_hits=0 module_create_saved=0 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=256 address_hits=163 reference_hits=163 byte_compare_hits=0 compare_avoided_mb=11,59 content_changes=2 digest_hits=8 registered=85 resident=85 compute_pipeline_fast_hits=161 graphics_pipeline_fast_hits=0 module_create_saved=9 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=512 address_hits=394 reference_hits=394 byte_compare_hits=0 compare_avoided_mb=35,49 content_changes=4 digest_hits=27 registered=91 resident=91 compute_pipeline_fast_hits=378 graphics_pipeline_fast_hits=15 module_create_saved=12 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=1024 address_hits=861 reference_hits=861 byte_compare_hits=0 compare_avoided_mb=80,21 content_changes=10 digest_hits=72 registered=91 resident=91 compute_pipeline_fast_hits=812 graphics_pipeline_fast_hits=54 module_create_saved=12 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=2048 address_hits=1786 reference_hits=1786 byte_compare_hits=0 compare_avoided_mb=169,75 content_changes=23 digest_hits=164 registered=98 resident=98 compute_pipeline_fast_hits=1669 graphics_pipeline_fast_hits=131 module_create_saved=17 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=4096 address_hits=3634 reference_hits=3631 byte_compare_hits=3 compare_avoided_mb=374,35 content_changes=55 digest_hits=358 registered=104 resident=104 compute_pipeline_fast_hits=3382 graphics_pipeline_fast_hits=296 module_create_saved=17 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=8192 address_hits=7369 reference_hits=7366 byte_compare_hits=3 compare_avoided_mb=733,03 content_changes=103 digest_hits=719 registered=104 resident=104 compute_pipeline_fast_hits=6852 graphics_pipeline_fast_hits=609 module_create_saved=17 fallbacks=0
+[V74.0.118.0][RESIDENT_SHADER] lookups=16384 address_hits=14286 reference_hits=14283 byte_compare_hits=3 compare_avoided_mb=1339,70 content_changes=183 digest_hits=1990 registered=108 resident=108 compute_pipeline_fast_hits=12658 graphics_pipeline_fast_hits=1800 module_create_saved=17 fallbacks=0
+
+--- WAIT FAST LAST ---
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=119 resumed=1 fast_collects=119 full_collects=3896 outstanding=7
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=120 resumed=2 fast_collects=120 full_collects=3944 outstanding=7
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=121 resumed=1 fast_collects=121 full_collects=3950 outstanding=6
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=122 resumed=6 fast_collects=122 full_collects=3959 outstanding=4
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=123 resumed=2 fast_collects=123 full_collects=3989 outstanding=1
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=124 resumed=1 fast_collects=124 full_collects=4020 outstanding=5
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=125 resumed=2 fast_collects=125 full_collects=4021 outstanding=4
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=126 resumed=1 fast_collects=126 full_collects=4021 outstanding=4
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=127 resumed=2 fast_collects=127 full_collects=4166 outstanding=2
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=128 resumed=2 fast_collects=128 full_collects=4242 outstanding=1
+[V74.0.94.3][WAIT_REGISTRY_FAST_ONLY] count=4096 full_collects=5044 outstanding=0
+[V74.0.94.3][WAIT_REGISTRY_FAST_ONLY] count=8192 full_collects=10016 outstanding=3
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=256 resumed=2 fast_collects=256 full_collects=10656 outstanding=1
+[V74.0.94.3][WAIT_REGISTRY_FAST_ONLY] count=16384 full_collects=20029 outstanding=7
+[V74.0.94.2][WAIT_REGISTRY_FAST_DRAIN] count=512 resumed=2 fast_collects=512 full_collects=23529 outstanding=1
+[V74.0.94.3][WAIT_REGISTRY_FAST_ONLY] count=32768 full_collects=40978 outstanding=1
+
+--- WAIT DRAIN LAST ---
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=30675 resumed=7 gate_wait_ms=1,191 pending=1 slow_gate=0 handoffs=23265 coalesced=107889
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=30676 resumed=1 gate_wait_ms=1,604 pending=1 slow_gate=0 handoffs=23267 coalesced=107922
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=30720 resumed=1 gate_wait_ms=0,008 pending=1 slow_gate=0 handoffs=23271 coalesced=107973
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=30825 resumed=1 gate_wait_ms=0,793 pending=1 slow_gate=0 handoffs=23349 coalesced=108231
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=30860 resumed=2 gate_wait_ms=0,169 pending=1 slow_gate=0 handoffs=23366 coalesced=108472
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=30898 resumed=6 gate_wait_ms=1,035 pending=1 slow_gate=0 handoffs=23384 coalesced=108583
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31080 resumed=3 gate_wait_ms=1,572 pending=1 slow_gate=0 handoffs=23512 coalesced=109240
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31146 resumed=2 gate_wait_ms=0,750 pending=1 slow_gate=0 handoffs=23535 coalesced=109417
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31185 resumed=4 gate_wait_ms=0,404 pending=1 slow_gate=0 handoffs=23567 coalesced=109568
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31289 resumed=1 gate_wait_ms=0,003 pending=1 slow_gate=0 handoffs=23578 coalesced=109624
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31321 resumed=2 gate_wait_ms=1,187 pending=1 slow_gate=0 handoffs=23592 coalesced=109713
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31426 resumed=2 gate_wait_ms=0,457 pending=1 slow_gate=0 handoffs=23647 coalesced=110043
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31498 resumed=1 gate_wait_ms=1,900 pending=1 slow_gate=0 handoffs=23667 coalesced=110146
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31499 resumed=3 gate_wait_ms=0,852 pending=1 slow_gate=0 handoffs=23674 coalesced=110262
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31591 resumed=2 gate_wait_ms=0,243 pending=1 slow_gate=0 handoffs=23702 coalesced=110403
+[V74.0.71][DEDICATED_WAIT_DRAIN] count=31593 resumed=2 gate_wait_ms=0,930 pending=1 slow_gate=0 handoffs=23707 coalesced=110536
+
+--- SLOW WAIT LAST ---
+[V74.0.27][SLOW_WAIT_PRODUCER] count=1 wait_kind=wait-reg-mem label=0x0000000456CFF360 waited_ms=1391,777 waiter_queue=acb.compute[56] waiter_submission=18 producer_found=True producer_state=completed producer_seq=253 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x0000000442500750 producer_range=0x0000000456CFF360+0x8 producer_completed_after_wait=1 producer_complete_ms=1391,257 post_complete_wait_ms=0,526 renderer_work_sequence=0 action='write_data dst=0x0000000456CFF360 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=2 wait_kind=wait-reg-mem label=0x0000000456CFF700 waited_ms=1729,594 waiter_queue=acb.compute[32] waiter_submission=22 producer_found=True producer_state=completed producer_seq=272 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x00000004425015DC producer_range=0x0000000456CFF700+0x8 producer_completed_after_wait=1 producer_complete_ms=1592,033 post_complete_wait_ms=137,567 renderer_work_sequence=718 action='write_data dst=0x0000000456CFF700 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=3 wait_kind=wait-reg-mem label=0x0000000456CFF580 waited_ms=2520,590 waiter_queue=acb.compute[72] waiter_submission=20 producer_found=True producer_state=completed producer_seq=315 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x000000044250253C producer_range=0x0000000456CFF580+0x8 producer_completed_after_wait=1 producer_complete_ms=2510,417 post_complete_wait_ms=10,178 renderer_work_sequence=828 action='write_data dst=0x0000000456CFF580 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=4 wait_kind=wait-reg-mem label=0x0000000456CFF4C0 waited_ms=2726,182 waiter_queue=acb.compute[40] waiter_submission=23 producer_found=True producer_state=completed producer_seq=347 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x0000000442503478 producer_range=0x0000000456CFF4C0+0x8 producer_completed_after_wait=1 producer_complete_ms=2641,486 post_complete_wait_ms=84,702 renderer_work_sequence=938 action='write_data dst=0x0000000456CFF4C0 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=5 wait_kind=wait-reg-mem label=0x0000000400257E00 waited_ms=1175,886 waiter_queue=acb.compute[56] waiter_submission=32 producer_found=True producer_state=completed producer_seq=387 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x0000000442504A90 producer_range=0x0000000400257E00+0x8 producer_completed_after_wait=1 producer_complete_ms=1160,298 post_complete_wait_ms=15,590 renderer_work_sequence=1137 action='write_data dst=0x0000000400257E00 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=6 wait_kind=wait-reg-mem label=0x0000000400257E00 waited_ms=1400,084 waiter_queue=acb.compute[64] waiter_submission=33 producer_found=True producer_state=completed producer_seq=387 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x0000000442504A90 producer_range=0x0000000400257E00+0x8 producer_completed_after_wait=1 producer_complete_ms=1380,047 post_complete_wait_ms=20,039 renderer_work_sequence=1137 action='write_data dst=0x0000000400257E00 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=7 wait_kind=wait-reg-mem label=0x0000000400257E00 waited_ms=2084,550 waiter_queue=acb.compute[48] waiter_submission=31 producer_found=True producer_state=completed producer_seq=387 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x0000000442504A90 producer_range=0x0000000400257E00+0x8 producer_completed_after_wait=1 producer_complete_ms=2063,812 post_complete_wait_ms=20,740 renderer_work_sequence=1137 action='write_data dst=0x0000000400257E00 count=2'
+[V74.0.27][SLOW_WAIT_PRODUCER] count=8 wait_kind=wait-reg-mem label=0x0000000400257E00 waited_ms=2850,110 waiter_queue=acb.compute[80] waiter_submission=35 producer_found=True producer_state=completed producer_seq=387 producer_queue=dcb.graphics producer_submission=24 producer_packet=0x0000000442504A90 producer_range=0x0000000400257E00+0x8 producer_completed_after_wait=1 producer_complete_ms=2828,424 post_complete_wait_ms=21,688 renderer_work_sequence=1137 action='write_data dst=0x0000000400257E00 count=2'
+
+--- PERF LAST ---
+[PERF][RENDER] 31,8s fps=0,1 frame_ms=15896,808 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=15896,653 Idle=87,1%/13850,614ms/n19230 Unattributed=11,9%/1892,951ms Collect=0,7%/115,877ms/n38462 TakeWork=0,1%/10,241ms/n19231 TakePresentation=0,1%/8,515ms/n19229 Present=0,0%/6,293ms/n2 Evict=0,0%/4,909ms/n19231 FrameSlotWait=0,0%/3,524ms/n19231 QueuePresent=0,0%/1,841ms/n2 Flush=0,0%/1,503ms/n19231 QueueSubmit=0,0%/0,235ms/n2 Acquire=0,0%/0,148ms/n2
+[PERF][RENDER] 13,7s fps=0,1 frame_ms=13737,451 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=13737,450 Idle=81,3%/11172,396ms/n7519 Compute=7,9%/1086,945ms/n181 Unattributed=6,1%/837,214ms Collect=1,5%/201,817ms/n15974 OrderedAction=1,2%/165,565ms/n658 Draw=0,8%/114,789ms/n10 TakeWork=0,7%/94,148ms/n8455 QueueSubmit=0,1%/17,450ms/n229 Present=0,1%/12,005ms/n1 Flip=0,1%/7,926ms/n2 TakePresentation=0,1%/6,913ms/n7519 Evict=0,0%/4,995ms/n7519 CompleteWork=0,0%/4,753ms/n851 FrameSlotWait=0,0%/2,914ms/n7519 Describe=0,0%/2,868ms/n851 Flush=0,0%/2,586ms/n7519 QueuePresent=0,0%/2,114ms/n1 Acquire=0,0%/0,051ms/n1
+[PERF][RENDER] 5,6s fps=1,8 frame_ms=559,588 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=559,589 Idle=40,5%/226,439ms/n1650 Compute=22,7%/126,801ms/n1462 OrderedAction=12,9%/72,304ms/n5366 Unattributed=10,8%/60,559ms Draw=7,2%/40,346ms/n127 Collect=1,9%/10,737ms/n11033 TakeWork=1,2%/6,758ms/n9383 QueueSubmit=1,1%/6,278ms/n1426 Present=0,5%/2,851ms/n10 Flip=0,4%/2,259ms/n20 CompleteWork=0,2%/1,023ms/n6975 FrameSlotWait=0,2%/1,021ms/n1650 QueuePresent=0,1%/0,642ms/n10 Describe=0,1%/0,609ms/n6975 Flush=0,1%/0,507ms/n1650 Evict=0,0%/0,259ms/n1650 TakePresentation=0,0%/0,163ms/n1650 Acquire=0,0%/0,032ms/n10
+[PERF][RENDER] 5,3s fps=1,5 frame_ms=658,417 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=658,417 Idle=55,1%/363,028ms/n2119 Compute=13,6%/89,373ms/n1148 Unattributed=12,4%/81,774ms OrderedAction=10,3%/67,803ms/n4232 Draw=3,8%/24,887ms/n100 QueueSubmit=1,4%/9,317ms/n1104 Collect=1,2%/8,227ms/n11314 TakeWork=1,0%/6,439ms/n9195 Flip=0,3%/2,188ms/n16 Present=0,2%/1,226ms/n8 FrameSlotWait=0,2%/1,131ms/n2119 CompleteWork=0,1%/0,851ms/n5496 QueuePresent=0,1%/0,618ms/n8 Describe=0,1%/0,587ms/n5496 Evict=0,1%/0,444ms/n2119 TakePresentation=0,0%/0,270ms/n2119 Flush=0,0%/0,137ms/n2119 Acquire=0,0%/0,116ms/n8
+[PERF][RENDER] 45,5s fps=0,0 frame_ms=45453,149 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=45453,150 Idle=94,0%/42742,859ms/n28862 Unattributed=4,6%/2083,576ms Collect=0,7%/312,417ms/n58504 Compute=0,2%/105,866ms/n144 OrderedAction=0,2%/72,473ms/n535 Evict=0,1%/42,884ms/n28862 TakeWork=0,1%/28,210ms/n29642 TakePresentation=0,0%/21,585ms/n28862 Draw=0,0%/18,313ms/n12 FrameSlotWait=0,0%/10,900ms/n28862 QueueSubmit=0,0%/4,900ms/n136 Flush=0,0%/3,335ms/n28862 Flip=0,0%/2,171ms/n2 Present=0,0%/1,613ms/n1 CompleteWork=0,0%/0,868ms/n693 Describe=0,0%/0,572ms/n693 QueuePresent=0,0%/0,569ms/n1 Acquire=0,0%/0,036ms/n1
+[PERF][RENDER] 5,2s fps=1,7 frame_ms=574,593 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=574,593 Idle=54,1%/311,007ms/n2051 Compute=16,0%/91,767ms/n1335 Unattributed=10,5%/60,144ms OrderedAction=10,4%/59,565ms/n4867 Draw=3,6%/20,600ms/n115 Collect=1,9%/10,855ms/n13577 TakeWork=1,3%/7,475ms/n11526 QueueSubmit=1,0%/6,022ms/n1264 Flip=0,3%/1,998ms/n18 Present=0,2%/1,059ms/n9 FrameSlotWait=0,2%/0,997ms/n2051 CompleteWork=0,2%/0,946ms/n6335 QueuePresent=0,1%/0,694ms/n9 Describe=0,1%/0,592ms/n6335 Evict=0,1%/0,408ms/n2051 Flush=0,0%/0,222ms/n2051 TakePresentation=0,0%/0,217ms/n2051 Acquire=0,0%/0,026ms/n9
+[PERF][RENDER] 5,2s fps=2,5 frame_ms=399,132 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=399,132 Idle=37,2%/148,667ms/n1516 Compute=20,8%/83,017ms/n1863 Unattributed=15,3%/60,906ms OrderedAction=15,2%/60,834ms/n6896 Draw=4,9%/19,487ms/n157 Collect=1,9%/7,646ms/n13038 TakeWork=1,6%/6,256ms/n11522 QueueSubmit=1,4%/5,488ms/n1775 Flip=0,5%/2,146ms/n26 Present=0,3%/1,114ms/n13 FrameSlotWait=0,3%/1,085ms/n1516 CompleteWork=0,2%/0,864ms/n8942 QueuePresent=0,1%/0,599ms/n13 Describe=0,1%/0,560ms/n8942 Evict=0,1%/0,212ms/n1516 Flush=0,0%/0,120ms/n1516 TakePresentation=0,0%/0,117ms/n1516 Acquire=0,0%/0,013ms/n13
+[PERF][RENDER] 5,2s fps=2,1 frame_ms=473,904 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=473,904 Idle=44,6%/211,364ms/n1712 Compute=18,6%/88,333ms/n1593 OrderedAction=13,9%/65,780ms/n5928 Unattributed=11,1%/52,390ms Draw=5,5%/26,194ms/n132 Collect=2,2%/10,658ms/n12996 TakeWork=1,3%/6,157ms/n11284 QueueSubmit=1,1%/5,259ms/n1520 Flip=0,5%/2,409ms/n22 FrameSlotWait=0,3%/1,574ms/n1712 Present=0,2%/1,038ms/n11 CompleteWork=0,2%/0,947ms/n7675 QueuePresent=0,1%/0,643ms/n11 Describe=0,1%/0,580ms/n7675 Evict=0,1%/0,283ms/n1712 TakePresentation=0,0%/0,147ms/n1712 Flush=0,0%/0,130ms/n1712 Acquire=0,0%/0,016ms/n11
+[PERF][RENDER] 5,0s fps=3,2 frame_ms=315,470 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=315,470 Idle=25,6%/80,776ms/n1043 Compute=24,6%/77,645ms/n2304 OrderedAction=20,4%/64,462ms/n8548 Unattributed=12,6%/39,639ms Draw=9,0%/28,395ms/n500 Collect=1,9%/6,010ms/n18834 TakeWork=1,8%/5,578ms/n17791 QueueSubmit=1,7%/5,216ms/n2246 Flip=0,8%/2,632ms/n32 FrameSlotWait=0,4%/1,419ms/n1043 Present=0,3%/1,010ms/n16 CompleteWork=0,3%/0,890ms/n11384 Describe=0,2%/0,695ms/n11384 QueuePresent=0,2%/0,695ms/n16 Flush=0,1%/0,183ms/n1043 Evict=0,0%/0,129ms/n1043 TakePresentation=0,0%/0,081ms/n1043 Acquire=0,0%/0,013ms/n16
+[PERF][RENDER] 5,0s fps=3,2 frame_ms=314,952 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=314,952 Compute=26,2%/82,405ms/n2304 Idle=25,7%/80,873ms/n1055 OrderedAction=19,3%/60,803ms/n8544 Unattributed=12,0%/37,797ms Draw=8,0%/25,088ms/n512 Collect=2,6%/8,293ms/n14771 TakeWork=1,8%/5,777ms/n13716 QueueSubmit=1,6%/5,133ms/n2246 CompleteWork=0,8%/2,551ms/n11392 Flip=0,8%/2,509ms/n32 Present=0,3%/1,068ms/n16 FrameSlotWait=0,3%/0,984ms/n1055 QueuePresent=0,2%/0,675ms/n16 Describe=0,2%/0,579ms/n11392 Flush=0,1%/0,177ms/n1055 Evict=0,0%/0,130ms/n1055 TakePresentation=0,0%/0,095ms/n1055 Acquire=0,0%/0,014ms/n16
+[PERF][RENDER] 5,5s fps=2,7 frame_ms=364,442 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=364,442 Idle=29,0%/105,791ms/n1223 Compute=20,7%/75,466ms/n2072 Draw=16,8%/61,283ms/n444 OrderedAction=15,9%/57,836ms/n7691 Unattributed=10,8%/39,494ms Collect=1,8%/6,629ms/n13875 TakeWork=1,5%/5,476ms/n12652 QueueSubmit=1,4%/4,929ms/n1984 Flip=0,7%/2,509ms/n28 Present=0,3%/1,099ms/n15 FrameSlotWait=0,2%/0,900ms/n1223 CompleteWork=0,2%/0,845ms/n10235 QueuePresent=0,2%/0,673ms/n15 TakePresentation=0,2%/0,554ms/n1223 Describe=0,2%/0,552ms/n10235 Flush=0,1%/0,214ms/n1223 Evict=0,0%/0,165ms/n1223 Acquire=0,0%/0,027ms/n15
+[PERF][RENDER] 5,0s fps=22,5 frame_ms=44,428 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=44,428 Unattributed=83,9%/37,295ms Present=2,8%/1,258ms/n113 Compute=2,6%/1,140ms/n223 Evict=2,4%/1,079ms/n119476 Collect=1,6%/0,703ms/n240341 Idle=1,3%/0,597ms/n119476 OrderedAction=1,1%/0,496ms/n986 TakeWork=0,9%/0,396ms/n120865 Draw=0,9%/0,394ms/n59 QueuePresent=0,9%/0,390ms/n113 TakePresentation=0,5%/0,227ms/n119476 QueueSubmit=0,4%/0,187ms/n338 FrameSlotWait=0,3%/0,114ms/n119476 Flush=0,2%/0,069ms/n119476 Flip=0,1%/0,047ms/n4 CompleteWork=0,0%/0,016ms/n1272 Describe=0,0%/0,011ms/n1272 Acquire=0,0%/0,010ms/n113
+[PERF][RENDER] 5,9s fps=24,2 frame_ms=41,352 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=41,352 Unattributed=61,0%/25,231ms Idle=16,0%/6,598ms/n99975 QueuePresent=9,9%/4,112ms/n142 Compute=3,8%/1,580ms/n158 Present=2,8%/1,166ms/n142 Evict=1,7%/0,694ms/n99975 Collect=1,6%/0,649ms/n200821 OrderedAction=1,0%/0,421ms/n589 TakeWork=0,6%/0,229ms/n100846 Draw=0,5%/0,211ms/n33 TakePresentation=0,4%/0,151ms/n99975 QueueSubmit=0,3%/0,143ms/n301 FrameSlotWait=0,2%/0,082ms/n99975 Flush=0,1%/0,048ms/n99975 Flip=0,0%/0,017ms/n2 Acquire=0,0%/0,008ms/n142 CompleteWork=0,0%/0,007ms/n782 Describe=0,0%/0,005ms/n782
+[PERF][RENDER] 5,3s fps=2,9 frame_ms=350,417 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=350,417 Idle=32,9%/115,366ms/n1344 Compute=22,9%/80,179ms/n2160 OrderedAction=17,9%/62,896ms/n8023 Unattributed=12,0%/42,056ms Draw=6,6%/22,970ms/n474 Collect=2,2%/7,725ms/n14627 TakeWork=1,8%/6,145ms/n13283 QueueSubmit=1,6%/5,748ms/n2118 Flip=0,6%/2,153ms/n30 FrameSlotWait=0,4%/1,316ms/n1344 Present=0,3%/1,158ms/n15 CompleteWork=0,2%/0,868ms/n10687 QueuePresent=0,2%/0,684ms/n15 Describe=0,2%/0,618ms/n10687 Flush=0,1%/0,221ms/n1344 Evict=0,1%/0,198ms/n1344 TakePresentation=0,0%/0,108ms/n1344 Acquire=0,0%/0,009ms/n15
+[PERF][RENDER] 5,3s fps=2,8 frame_ms=353,178 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=353,178 Idle=34,1%/120,604ms/n1388 Compute=22,5%/79,345ms/n2160 OrderedAction=16,8%/59,196ms/n8048 Unattributed=12,4%/43,620ms Draw=6,7%/23,680ms/n481 Collect=2,1%/7,327ms/n14744 TakeWork=1,8%/6,455ms/n13356 QueueSubmit=1,6%/5,681ms/n2113 Flip=0,6%/1,973ms/n30 FrameSlotWait=0,4%/1,433ms/n1388 Present=0,3%/1,129ms/n15 CompleteWork=0,3%/0,972ms/n10719 QueuePresent=0,2%/0,657ms/n15 Describe=0,2%/0,615ms/n10719 Evict=0,1%/0,201ms/n1388 Flush=0,0%/0,168ms/n1388 TakePresentation=0,0%/0,106ms/n1388 Acquire=0,0%/0,013ms/n15
+[PERF][RENDER] 5,2s fps=2,9 frame_ms=348,714 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=348,714 Idle=33,7%/117,367ms/n1346 Compute=23,2%/80,896ms/n2160 OrderedAction=17,0%/59,121ms/n8034 Unattributed=11,5%/40,041ms Draw=7,3%/25,593ms/n432 Collect=1,9%/6,609ms/n14593 TakeWork=1,8%/6,328ms/n13247 QueueSubmit=1,6%/5,572ms/n2101 Flip=0,6%/2,001ms/n30 FrameSlotWait=0,4%/1,376ms/n1346 Present=0,3%/1,182ms/n15 CompleteWork=0,2%/0,851ms/n10656 QueuePresent=0,2%/0,675ms/n15 Describe=0,2%/0,603ms/n10656 Flush=0,1%/0,199ms/n1346 Evict=0,1%/0,192ms/n1346 TakePresentation=0,0%/0,099ms/n1346 Acquire=0,0%/0,007ms/n15
+[PERF][RENDER] 5,0s fps=21,7 frame_ms=46,143 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=46,143 Unattributed=58,8%/27,146ms Idle=12,0%/5,560ms/n79890 Compute=9,8%/4,542ms/n855 OrderedAction=6,3%/2,912ms/n3353 Draw=3,2%/1,479ms/n72 Present=2,5%/1,161ms/n109 Evict=1,5%/0,706ms/n79890 Collect=1,5%/0,697ms/n164558 TakeWork=1,3%/0,608ms/n84668 QueueSubmit=0,9%/0,420ms/n912 QueuePresent=0,7%/0,346ms/n109 TakePresentation=0,3%/0,147ms/n79890 FrameSlotWait=0,3%/0,138ms/n79890 Flip=0,2%/0,110ms/n12 CompleteWork=0,1%/0,057ms/n4292 Flush=0,1%/0,051ms/n79890 Describe=0,1%/0,036ms/n4292 Acquire=0,1%/0,027ms/n109
+[PERF][RENDER] 5,0s fps=30,0 frame_ms=33,313 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=33,313 Unattributed=89,4%/29,768ms Present=3,5%/1,180ms/n151 Evict=2,6%/0,853ms/n134112 Collect=1,4%/0,473ms/n268224 QueuePresent=0,9%/0,299ms/n151 TakeWork=0,7%/0,218ms/n134112 TakePresentation=0,5%/0,173ms/n134112 Idle=0,3%/0,112ms/n134112 QueueSubmit=0,3%/0,090ms/n151 FrameSlotWait=0,2%/0,083ms/n134112 Flush=0,2%/0,052ms/n134112 Acquire=0,0%/0,012ms/n151
+[PERF][RENDER] 5,0s fps=29,7 frame_ms=33,629 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=33,629 Unattributed=89,3%/30,040ms Present=3,6%/1,200ms/n149 Evict=2,7%/0,895ms/n136598 Collect=1,3%/0,422ms/n273196 QueuePresent=0,9%/0,299ms/n149 TakeWork=0,7%/0,229ms/n136598 TakePresentation=0,5%/0,181ms/n136598 Idle=0,4%/0,119ms/n136598 QueueSubmit=0,3%/0,090ms/n149 FrameSlotWait=0,3%/0,090ms/n136598 Flush=0,2%/0,055ms/n136598 Acquire=0,0%/0,007ms/n149
+[PERF][RENDER] 5,0s fps=29,2 frame_ms=34,301 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=34,301 Unattributed=88,0%/30,172ms Present=3,8%/1,318ms/n146 Evict=2,6%/0,878ms/n124414 Collect=1,5%/0,522ms/n248828 QueuePresent=1,2%/0,420ms/n146 TakeWork=0,7%/0,234ms/n124414 Acquire=0,6%/0,213ms/n146 TakePresentation=0,5%/0,183ms/n124414 Idle=0,3%/0,119ms/n124414 QueueSubmit=0,3%/0,093ms/n146 FrameSlotWait=0,3%/0,091ms/n124414 Flush=0,2%/0,057ms/n124414
+[PERF][RENDER] 5,0s fps=28,9 frame_ms=34,603 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=34,603 Unattributed=88,9%/30,752ms Present=4,0%/1,391ms/n145 Evict=2,5%/0,873ms/n118887 Collect=1,3%/0,448ms/n237774 QueuePresent=0,9%/0,329ms/n145 TakeWork=0,7%/0,242ms/n118887 TakePresentation=0,5%/0,185ms/n118887 Idle=0,4%/0,123ms/n118887 QueueSubmit=0,3%/0,099ms/n145 FrameSlotWait=0,3%/0,093ms/n118887 Flush=0,2%/0,059ms/n118887 Acquire=0,0%/0,008ms/n145
+[PERF][RENDER] 5,0s fps=32,2 frame_ms=31,054 budget60_ms=16.667 over60=1 covered=100% accounted_ms_frame=31,054 Unattributed=88,9%/27,599ms Present=3,9%/1,208ms/n162 Evict=2,6%/0,800ms/n130950 Collect=1,4%/0,429ms/n261900 QueuePresent=1,0%/0,301ms/n162 TakeWork=0,7%/0,207ms/n130950 TakePresentation=0,5%/0,163ms/n130950 Idle=0,3%/0,106ms/n130950 QueueSubmit=0,3%/0,092ms/n162 FrameSlotWait=0,3%/0,079ms/n130950 Flush=0,2%/0,050ms/n130950 Acquire=0,1%/0,021ms/n162
+
+--- NVIDIA LAST ---
+2026/08/28 14:49:34.722, 10, 2, 1872, 16311
+2026/08/28 14:49:49.479, 0, 3, 1931, 16311
+2026/08/28 14:50:04.430, 1, 58, 1931, 16311
+2026/08/28 14:50:19.088, 11, 3, 1931, 16311
+2026/08/28 14:50:34.453, 6, 4, 3340, 16311
+2026/08/28 14:50:49.336, 1, 32, 3389, 16311
+2026/08/28 14:51:04.062, 1, 32, 3387, 16311
+2026/08/28 14:51:18.648, 0, 26, 3389, 16311
+2026/08/28 14:51:33.780, 23, 2, 3704, 16311
+2026/08/28 14:51:49.631, 24, 3, 4028, 16311
+2026/08/28 14:52:06.413, 13, 2, 4001, 16311
+2026/08/28 14:52:22.809, 22, 3, 4183, 16311
+
+--- DEVICE LOST ---
+
+--- ACCESS VIOLATION ---
+
+--- FATAL ---

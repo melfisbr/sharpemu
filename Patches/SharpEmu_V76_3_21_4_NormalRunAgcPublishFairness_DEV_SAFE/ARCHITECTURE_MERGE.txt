@@ -1,0 +1,9 @@
+V76.3.21.4 architecture
+
+Evidence from V21.3.1.1.2:
+- authoritative sync_budget=512: PASS
+- diagnostic: AGC processed 2048, draw submission 2813, scanout 112, natural ps_studios request
+- normal pasted run: continued past AGC 1024 but ended around draw submission 1536 / scanout 59 with timeline fully drained 9246/9246
+- heavy diagnostic logging changes timing enough to escape the normal-run stop
+
+This revision targets only host CPU fairness at the guest AGC builder -> driver submit boundary. It never creates, skips, reorders, or completes guest GPU commands.

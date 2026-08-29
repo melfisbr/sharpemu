@@ -69,15 +69,11 @@ internal static unsafe partial class VulkanVideoPresenter
                 return true;
             }
 
-            // V76.2.3: if the image was written this session (generation>0),
-            // accept it â€” missing MarkGuestBinkYuvProducer caused false rejects
-            // and black Bink output while GPU work continued slowly.
-            if (candidate.ContentGeneration > 0)
-            {
-                _v7612GuestBinkYuvProducerEpochs[
-                    (candidate.Address, candidate.Image.Handle)] = epoch;
-                return true;
-            }
+            // V76.2.4.13: ContentGeneration is process-global provenance, not
+            // Bink-session ownership.  After an address/image is reused, a stale
+            // producer can have generation>0 even though this movie never wrote it.
+            // Accept only the explicit producer stamp emitted by the current
+            // guest Bink storage write.
 
             var reject = Interlocked.Increment(
                 ref _v7612GuestBinkStaleProducerRejectCount);
@@ -110,6 +106,14 @@ internal static unsafe partial class VulkanVideoPresenter
             {
                 return;
             }
+
+            // V76.3.2: refresh strict-ordering activity on every real YUV
+            // storage write, not only on the first producer stamp. This keeps
+            // strict mode continuously active during 30/60 fps decode but lets
+            // it expire shortly after decode stops even if the guest retains
+            // the movie file descriptor.
+            BinkGuestOwnedRuntimeV7600.NoteGuestBinkGpuActivityV7632(
+                "yuv-storage-producer");
 
             var key = (texture.Address, guestImage.Image.Handle);
             var changed =
@@ -144,6 +148,46 @@ internal static unsafe partial class VulkanVideoPresenter
             if (!IsFinalGuestBinkYuvStorageV7602(texture))
             {
                 return false;
+            }
+
+            // V76.2.5: only suppress CPU upload when this session actually
+            // stamped a GPU producer for the plane. Blind suppression left
+            // Demon's Souls boot logos sampling empty/garbage integer YUV
+            // (rainbow noise at ~2–3 FPS) while guest compute still ran.
+            if (BinkGuestOwnedRuntimeV7600.YuvSessionEpochEnabled)
+            {
+                RefreshGuestBinkYuvEpochV7612();
+                var epoch = BinkGuestOwnedRuntimeV7600.ActiveSessionEpoch;
+                if (epoch > 0)
+                {
+                    var hasStamp = false;
+                    foreach (var kv in _v7612GuestBinkYuvProducerEpochs)
+                    {
+                        if (kv.Key.Address == texture.Address &&
+                            kv.Value == epoch)
+                        {
+                            hasStamp = true;
+                            break;
+                        }
+                    }
+
+                    if (!hasStamp)
+                    {
+                        var allow = Interlocked.Increment(
+                            ref _v7612GuestBinkCpuUploadSuppressCount);
+                        if (allow <= 16 || (allow & (allow - 1)) == 0)
+                        {
+                            Console.Error.WriteLine(
+                                "[BINK-GUEST][V76.2.5][YUV-STORAGE-CPU-UPLOAD] " +
+                                $"count={allow} plane={(texture.Format == 1 ? "Y" : "UV")} " +
+                                $"addr=0x{texture.Address:X16} " +
+                                $"size={texture.Width}x{texture.Height} " +
+                                "action=allow reason=no-gpu-producer-stamp-this-epoch");
+                        }
+
+                        return false;
+                    }
+                }
             }
 
             var count = Interlocked.Increment(

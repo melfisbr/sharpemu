@@ -2071,7 +2071,11 @@ public static partial class Gen5SpirvTranslator
             var left = GetRawSource(instruction, 0);
             if (instruction.Opcode.EndsWith("SaveexecB32", StringComparison.Ordinal))
             {
-                var oldExec64 = BooleanToWaveMask(Load(_boolType, _exec));
+                // V76.2.8: SAVEEXEC is scalar and reads the architectural EXEC
+                // register. Re-balloting the per-lane _exec boolean here was
+                // both redundant and, for a guest wave64 split over subgroup32,
+                // forced an avoidable cross-subgroup rendezvous.
+                var oldExec64 = LoadS64(126);
                 var oldExec = _module.AddInstruction(
                     SpirvOp.UConvert,
                     _uintType,
@@ -2699,7 +2703,11 @@ public static partial class Gen5SpirvTranslator
             var left = GetRawSource64(instruction, 0);
             if (instruction.Opcode.EndsWith("SaveexecB64", StringComparison.Ordinal))
             {
-                var oldExec = BooleanToWaveMask(Load(_boolType, _exec));
+                // V76.2.8: use the guest-visible 64-bit EXEC pair directly.
+                // This keeps both subgroup32 fragments on the same scalar mask
+                // and avoids rebuilding EXEC through a ballot/rendezvous on
+                // every SAVEEXEC instruction.
+                var oldExec = LoadS64(126);
                 var notLeft = _module.AddInstruction(SpirvOp.Not, _ulongType, left);
                 var newExec = instruction.Opcode switch
                 {
@@ -3078,14 +3086,14 @@ public static partial class Gen5SpirvTranslator
                     _module.AddInstruction(
                         SpirvOp.Select,
                         _uintType,
-                        LogicalNot(SubgroupAny(Load(_boolType, _vcc))),
+                        LogicalNot(IsNotZero64(LoadS64(106))),
                         UInt(1),
                         UInt(0)),
                 Gen5OperandKind.EncodedConstant when operand.Value == 252 =>
                     _module.AddInstruction(
                         SpirvOp.Select,
                         _uintType,
-                        LogicalNot(SubgroupAny(Load(_boolType, _exec))),
+                        LogicalNot(IsNotZero64(LoadS64(126))),
                         UInt(1),
                         UInt(0)),
                 Gen5OperandKind.EncodedConstant when operand.Value == 253 =>
@@ -3445,51 +3453,15 @@ public static partial class Gen5SpirvTranslator
             var bankEnabled = IsNotZero(BitwiseAnd(
                 UInt(control.BankMask),
                 ShiftLeftLogical(UInt(1), bank)));
-            uint sourceAllowsWrite;
-            if (control.BoundControl)
-            {
-                // DPP_BOUND_ZERO: invalid/out-of-range or inactive sources
-                // still execute the destination write; ApplyDppSource supplies
-                // zero when the source itself is unavailable.
-                sourceAllowsWrite = _module.ConstantBool(true);
-            }
-            else if (control.FetchInactive)
-            {
-                // FI ignores EXEC inactivity, but it cannot make an
-                // out-of-range lane valid.  BOUND_OFF suppresses that write.
-                sourceAllowsWrite = inRange;
-            }
-            else
-            {
-                // DPP_BOUND_OFF + FI=0: an inactive source lane disables the
-                // write instead of writing zero.  Preserve VDST by feeding this
-                // predicate into the existing destination select above.
-                var safeTarget = _module.AddInstruction(
-                    SpirvOp.Select,
-                    _uintType,
-                    inRange,
-                    targetLane,
-                    lane);
-                safeTarget = BitwiseAnd(safeTarget, UInt(31));
-                var activeWord = _module.AddInstruction(
-                    SpirvOp.Select,
-                    _uintType,
-                    Load(_boolType, _exec),
-                    UInt(1),
-                    UInt(0));
-                var sourceActive = IsNotZero(
-                    _module.AddInstruction(
-                        SpirvOp.GroupNonUniformShuffle,
-                        _uintType,
-                        UInt(3),
-                        activeWord,
-                        safeTarget));
-                sourceAllowsWrite = _module.AddInstruction(
-                    SpirvOp.LogicalAnd,
-                    _boolType,
-                    inRange,
-                    sourceActive);
-            }
+            // V76.2.8 / RDNA2 DPP16 semantics:
+            // FI controls the VALUE fetched from an inactive source lane
+            // (FI=0 => zero, FI=1 => fetch VGPR anyway). It does not suppress
+            // the destination write. BC=0 suppresses a write only when the
+            // DPP source is OUT OF RANGE; BC=1 writes the bound value.
+            // ApplyDppSource already implements the FI data selection.
+            var sourceAllowsWrite = control.BoundControl
+                ? _module.ConstantBool(true)
+                : inRange;
 
             return _module.AddInstruction(
                 SpirvOp.LogicalAnd,
@@ -3952,7 +3924,9 @@ public static partial class Gen5SpirvTranslator
         {
             if (_multiWave64Bridge)
             {
-                var multiWaveActiveMask = BooleanToWaveMask(Load(_boolType, _exec));
+                // V76.2.8: EXEC_LO:HI already contains the complete guest
+                // wave mask. Do not reconstruct it through another ballot.
+                var multiWaveActiveMask = LoadS64(126);
                 var multiWaveLowMask = _module.AddInstruction(
                     SpirvOp.UConvert,
                     _uintType,
@@ -3991,7 +3965,8 @@ public static partial class Gen5SpirvTranslator
                 () => Store(WaveBroadcastScratchPointer(), UInt(0)));
             EmitWave64Barrier();
 
-            var activeMask = BooleanToWaveMask(Load(_boolType, _exec));
+            // V76.2.8: use the architectural EXEC pair for first-active-lane.
+            var activeMask = LoadS64(126);
             var lowMask = _module.AddInstruction(
                 SpirvOp.UConvert,
                 _uintType,
@@ -4093,11 +4068,38 @@ public static partial class Gen5SpirvTranslator
                 // OpGroupNonUniformBroadcast cannot cross that boundary, so
                 // publish all 64 VGPR lane values to workgroup scratch and
                 // read the requested guest lane after a rendezvous.
-                Store(WaveLaneScratchPointer(GuestWaveLane()), src0);
-                EmitWave64Barrier();
                 var laneSelect = BitwiseAnd(
                     GetRawSource(instruction, 1),
                     UInt(63));
+                if (_singleWave64ActiveLanesV762414 < 64)
+                {
+                    // V76.2.4.14: a partial wave has no Vulkan invocation for
+                    // inactive guest lanes. Initialize an inactive READLANE
+                    // selection to zero before the rendezvous so no stale
+                    // workgroup value can enter scalar decode/control state.
+                    var lane = GuestWaveLane();
+                    var laneZero = _module.AddInstruction(
+                        SpirvOp.IEqual,
+                        _boolType,
+                        lane,
+                        UInt(0));
+                    var inactiveSelection = _module.AddInstruction(
+                        SpirvOp.UGreaterThanEqual,
+                        _boolType,
+                        laneSelect,
+                        UInt(_singleWave64ActiveLanesV762414));
+                    EmitConditional(
+                        _module.AddInstruction(
+                            SpirvOp.LogicalAnd,
+                            _boolType,
+                            laneZero,
+                            inactiveSelection),
+                        () => Store(
+                            WaveLaneScratchPointer(laneSelect),
+                            UInt(0)));
+                }
+                Store(WaveLaneScratchPointer(GuestWaveLane()), src0);
+                EmitWave64Barrier();
                 var broadcast = Load(
                     _uintType,
                     WaveLaneScratchPointer(laneSelect));
@@ -4187,13 +4189,11 @@ public static partial class Gen5SpirvTranslator
                 UInt(3),
                 value,
                 targetLane);
-            // GFX10 PERMLANE overloads OP_SEL[0:1] as DPP FI/BOUND_CTRL.
-            // FI=1 fetches an inactive source lane anyway.  With FI=0, an
-            // inactive source is resolved by BOUND_CTRL: BC=1 supplies zero,
-            // while BC=0 disables the destination write and therefore keeps
-            // VDST's pre-instruction value.  The old lowering always supplied
-            // zero here, corrupting saveexec/permlanex sequences used by the
-            // guest Bink compute path.
+            // V76.2.8: GFX10 PERMLANE overloads OP_SEL[0] as DPP FI.
+            // As with DPP16, FI=0 means an inactive source lane contributes
+            // zero; it does NOT mean preserve the old destination. The selector
+            // is always a valid lane within its 16-lane row (or paired row for
+            // PERMLANEX16), so BC does not create an out-of-range case here.
             var fetchInactive = (control.OperandSelect & 1) != 0;
             if (fetchInactive)
             {
@@ -4213,16 +4213,12 @@ public static partial class Gen5SpirvTranslator
                     UInt(3),
                     activeWord,
                     targetLane));
-            var boundControl = (control.OperandSelect & 2) != 0;
-            var inactiveValue = boundControl
-                ? UInt(0)
-                : LoadV(instruction.Destinations[0].Value);
             return _module.AddInstruction(
                 SpirvOp.Select,
                 _uintType,
                 sourceActive,
                 shuffled,
-                inactiveValue);
+                UInt(0));
         }
 
         private uint EmitFloatResult(

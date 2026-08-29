@@ -1,8 +1,0 @@
-V118.0 source review
-- Existing pipeline caches use SHA256 digest strings.
-- GetShaderDigest is only reference-cached; equivalent new arrays can repeat hashing.
-- New pipeline variants recreate and immediately destroy VkShaderModule.
-- Compute has a stable guest ShaderAddress.
-- Offscreen graphics carries ShaderAddress for the pixel program.
-V118.0 assigns immutable ShaderId versions and resident modules after exact-content validation.
-The direct execution maps use ShaderId + PipelineLayout and never alter command ordering.

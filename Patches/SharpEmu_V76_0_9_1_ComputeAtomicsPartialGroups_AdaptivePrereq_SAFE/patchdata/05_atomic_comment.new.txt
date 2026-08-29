@@ -1,4 +1,0 @@
-        // Maps the AMD atomic-op name suffix shared by buffer/image atomics to a SPIR-V opcode.
-        // INC/DEC are identified with the native SPIR-V op names here, but EmitAtomic
-        // redirects them through the V76.0.9 bounded CAS helper so DATA remains semantic.
-        private static bool TryGetAtomicOp(string name, out SpirvOp op)

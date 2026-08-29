@@ -1,0 +1,193 @@
+﻿tag=V76.3.21.4.1.1-ROLLBACK-YIELD-GUARD-FIX-NORMAL-RUN-RECOVERY-DEV-SAFE
+runtime_seconds=161.251
+exit_code=
+process_left_running=True
+process_id=15640
+v214_runtime_marker_lines=0
+natural_ps_studios_request=True
+max_agc_enqueue_count=2048
+max_agc_processed_count=2048
+max_draw_submission=3292
+max_direct_scanout_frame=128
+passed_v214_regression_threshold=True
+last_timeline=18642/18642
+last_pending=0
+gpu_drained=True
+stall_class=progressed-to-ps-studios
+device_lost_markers=0
+access_violation_markers=0
+fatal_markers=0
+
+--- NATURAL PS STUDIOS ---
+[BINK-HOST][V76.3.0][NATURAL-REQUEST] file='ps_studios_logo.bk2' host_decoder_allowed=True route=HostMovieBridge
+[LOADER][INFO] bink2.natural_guest_movie_observed n=1 file='ps_studios_logo.bk2'
+
+--- ASYNC AGC LAST ---
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=1 ingress=1 kind=ComputeAcb depth=1 command=0x000000060A000300 dwords=76
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=2 ingress=2 kind=GraphicsDcb depth=1 command=0x0000000456800280 dwords=191
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=3 ingress=3 kind=ComputeAcb depth=2 command=0x000000060A020600 dwords=56
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=4 ingress=4 kind=GraphicsDcb depth=2 command=0x0000000456D00500 dwords=3289
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=5 ingress=5 kind=GraphicsDcb depth=3 command=0x0000000457200780 dwords=249
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=6 ingress=6 kind=GraphicsDcb depth=4 command=0x0000000440E00000 dwords=218
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=7 ingress=7 kind=ComputeAcb depth=5 command=0x000000060A060700 dwords=89
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=8 ingress=8 kind=ComputeAcb depth=6 command=0x000000060A080800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=9 ingress=9 kind=ComputeAcb depth=7 command=0x000000060A088B00 dwords=465
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=10 ingress=10 kind=ComputeAcb depth=8 command=0x000000060A090C00 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=11 ingress=11 kind=ComputeAcb depth=9 command=0x000000060A098F00 dwords=558
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=12 ingress=12 kind=GraphicsDcb depth=1 command=0x0000000457700C80 dwords=351
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=13 ingress=13 kind=GraphicsDcb depth=1 command=0x0000000441400000 dwords=727
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=14 ingress=14 kind=GraphicsDcb depth=2 command=0x0000000441D00000 dwords=1094
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=15 ingress=15 kind=ComputeAcb depth=2 command=0x000000060A199200 dwords=96
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=16 ingress=16 kind=ComputeAcb depth=3 command=0x000000060A1B9300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=17 ingress=17 kind=ComputeAcb depth=4 command=0x000000060A1C1600 dwords=122
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=18 ingress=18 kind=ComputeAcb depth=5 command=0x000000060A1E1B00 dwords=232
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=19 ingress=19 kind=ComputeAcb depth=6 command=0x000000060A201C00 dwords=416
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=20 ingress=20 kind=ComputeAcb depth=6 command=0x000000060A221D00 dwords=24
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=21 ingress=21 kind=ComputeAcb depth=7 command=0x000000060A241E00 dwords=33
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=22 ingress=22 kind=ComputeAcb depth=8 command=0x000000060A261F00 dwords=1758
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=23 ingress=23 kind=ComputeAcb depth=8 command=0x000000060A26A000 dwords=777
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=24 ingress=24 kind=GraphicsDcb depth=9 command=0x0000000442500000 dwords=4784
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=25 ingress=25 kind=ComputeAcb depth=1 command=0x000000060A272300 dwords=76
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=26 ingress=26 kind=GraphicsDcb depth=2 command=0x0000000442D00000 dwords=136
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=27 ingress=27 kind=ComputeAcb depth=3 command=0x000000060A292600 dwords=56
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=28 ingress=28 kind=GraphicsDcb depth=1 command=0x0000000443300000 dwords=818
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=29 ingress=29 kind=GraphicsDcb depth=1 command=0x0000000444400000 dwords=101
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=30 ingress=30 kind=GraphicsDcb depth=2 command=0x0000000444900000 dwords=147
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=31 ingress=31 kind=ComputeAcb depth=3 command=0x000000060A2D2700 dwords=89
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=32 ingress=32 kind=ComputeAcb depth=3 command=0x000000060A2F2800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=64 ingress=64 kind=ComputeAcb depth=4 command=0x000000060A69D300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=128 ingress=128 kind=ComputeAcb depth=4 command=0x000000060ACBA800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=256 ingress=256 kind=ComputeAcb depth=4 command=0x000000060BA2D300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=512 ingress=512 kind=ComputeAcb depth=4 command=0x000000060D3DA800 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=1024 ingress=1024 kind=ComputeAcb depth=4 command=0x000000061086D300 dwords=17
+[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue count=2048 ingress=2048 kind=ComputeAcb depth=4 command=0x000000060EE60100 dwords=57
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=1 ingress=1 kind=ComputeAcb age_ms=0,857 process_ms=189,665 depth=2 max_depth=2 busy_ms=189,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=2 ingress=2 kind=GraphicsDcb age_ms=41,800 process_ms=121,755 depth=9 max_depth=9 busy_ms=311,4 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=3 ingress=3 kind=ComputeAcb age_ms=164,104 process_ms=1,621 depth=8 max_depth=9 busy_ms=313,0 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=4 ingress=4 kind=GraphicsDcb age_ms=24,908 process_ms=42,964 depth=7 max_depth=9 busy_ms=356,0 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=5 ingress=5 kind=GraphicsDcb age_ms=67,327 process_ms=0,500 depth=6 max_depth=9 busy_ms=356,5 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=6 ingress=6 kind=GraphicsDcb age_ms=69,210 process_ms=0,210 depth=5 max_depth=9 busy_ms=356,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=7 ingress=7 kind=ComputeAcb age_ms=66,223 process_ms=5,010 depth=4 max_depth=9 busy_ms=361,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=8 ingress=8 kind=ComputeAcb age_ms=64,357 process_ms=5,020 depth=3 max_depth=9 busy_ms=366,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=9 ingress=9 kind=ComputeAcb age_ms=60,641 process_ms=1,005 depth=2 max_depth=9 busy_ms=367,8 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=10 ingress=10 kind=ComputeAcb age_ms=61,154 process_ms=0,593 depth=1 max_depth=9 busy_ms=368,3 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=11 ingress=11 kind=ComputeAcb age_ms=61,592 process_ms=117,852 depth=0 max_depth=9 busy_ms=486,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=12 ingress=12 kind=GraphicsDcb age_ms=0,014 process_ms=0,387 depth=1 max_depth=9 busy_ms=486,6 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=13 ingress=13 kind=GraphicsDcb age_ms=0,503 process_ms=0,277 depth=2 max_depth=9 busy_ms=486,9 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=14 ingress=14 kind=GraphicsDcb age_ms=1,057 process_ms=2,491 depth=7 max_depth=9 busy_ms=489,4 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=15 ingress=15 kind=ComputeAcb age_ms=3,519 process_ms=0,739 depth=9 max_depth=9 busy_ms=490,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=16 ingress=16 kind=ComputeAcb age_ms=4,108 process_ms=1,627 depth=8 max_depth=9 busy_ms=491,7 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=17 ingress=17 kind=ComputeAcb age_ms=5,721 process_ms=0,244 depth=7 max_depth=9 busy_ms=492,0 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=18 ingress=18 kind=ComputeAcb age_ms=6,282 process_ms=12,840 depth=6 max_depth=9 busy_ms=504,8 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=19 ingress=19 kind=ComputeAcb age_ms=19,407 process_ms=0,365 depth=5 max_depth=9 busy_ms=505,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=20 ingress=20 kind=ComputeAcb age_ms=19,629 process_ms=5,017 depth=4 max_depth=9 busy_ms=510,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=21 ingress=21 kind=ComputeAcb age_ms=22,581 process_ms=3,647 depth=3 max_depth=9 busy_ms=513,8 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=22 ingress=22 kind=ComputeAcb age_ms=26,832 process_ms=1,651 depth=2 max_depth=9 busy_ms=515,5 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=23 ingress=23 kind=ComputeAcb age_ms=28,358 process_ms=1,901 depth=1 max_depth=9 busy_ms=517,4 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=24 ingress=24 kind=GraphicsDcb age_ms=30,168 process_ms=3,751 depth=3 max_depth=9 busy_ms=521,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=25 ingress=25 kind=ComputeAcb age_ms=2,663 process_ms=0,473 depth=2 max_depth=9 busy_ms=521,6 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=26 ingress=26 kind=GraphicsDcb age_ms=2,988 process_ms=0,302 depth=1 max_depth=9 busy_ms=521,9 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=27 ingress=27 kind=ComputeAcb age_ms=3,514 process_ms=12,153 depth=0 max_depth=9 busy_ms=534,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=28 ingress=28 kind=GraphicsDcb age_ms=0,015 process_ms=0,557 depth=2 max_depth=9 busy_ms=534,6 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=29 ingress=29 kind=GraphicsDcb age_ms=0,941 process_ms=5,488 depth=3 max_depth=9 busy_ms=540,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=30 ingress=30 kind=GraphicsDcb age_ms=6,770 process_ms=0,668 depth=5 max_depth=9 busy_ms=540,8 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=31 ingress=31 kind=ComputeAcb age_ms=6,987 process_ms=0,187 depth=4 max_depth=9 busy_ms=541,0 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=32 ingress=32 kind=ComputeAcb age_ms=1,923 process_ms=0,280 depth=3 max_depth=9 busy_ms=541,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=64 ingress=64 kind=ComputeAcb age_ms=5,536 process_ms=0,212 depth=8 max_depth=12 busy_ms=595,2 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=128 ingress=128 kind=ComputeAcb age_ms=3,170 process_ms=0,034 depth=3 max_depth=12 busy_ms=632,1 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=256 ingress=256 kind=ComputeAcb age_ms=114,003 process_ms=0,001 depth=11 max_depth=15 busy_ms=785,9 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=512 ingress=512 kind=ComputeAcb age_ms=6,985 process_ms=0,393 depth=3 max_depth=18 busy_ms=1014,9 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=1024 ingress=1024 kind=ComputeAcb age_ms=2,738 process_ms=0,009 depth=8 max_depth=18 busy_ms=1625,8 backpressure=0
+[V76.3.17.0][AGC_ASYNC_CP] phase=processed count=2048 ingress=2048 kind=ComputeAcb age_ms=8,560 process_ms=0,079 depth=3 max_depth=18 busy_ms=2506,3 backpressure=0
+
+--- GRAPHICS/SCANOUT LAST ---
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=65 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=12603 frame_floor=12408
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=66 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=12798 frame_floor=12603
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=67 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=12993 frame_floor=12798
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=68 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=13188 frame_floor=12993
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=69 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=13383 frame_floor=13188
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=70 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=13578 frame_floor=13383
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=71 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=13773 frame_floor=13578
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=72 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=13968 frame_floor=13773
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=73 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=14163 frame_floor=13968
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=74 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=14358 frame_floor=14163
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=75 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=14553 frame_floor=14358
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=76 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=14748 frame_floor=14553
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=77 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=14943 frame_floor=14748
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=78 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=15138 frame_floor=14943
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=79 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=15333 frame_floor=15138
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=80 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=15528 frame_floor=15333
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=81 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=15723 frame_floor=15528
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=82 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=15918 frame_floor=15723
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=83 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=16113 frame_floor=15918
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=84 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=16308 frame_floor=16113
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=85 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=16503 frame_floor=16308
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=86 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=16698 frame_floor=16503
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=87 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=16893 frame_floor=16698
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=88 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=17088 frame_floor=16893
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=89 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=17283 frame_floor=17088
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=90 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=17477 frame_floor=17283
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=91 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=17671 frame_floor=17477
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=92 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=17865 frame_floor=17671
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=93 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=18059 frame_floor=17865
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=94 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=18253 frame_floor=18059
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=95 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=18447 frame_floor=18253
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=96 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=18641 frame_floor=18447
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=97 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=18828 frame_floor=18641
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=98 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=19022 frame_floor=18828
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=99 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=19224 frame_floor=19022
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=100 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=19425 frame_floor=19224
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=101 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=19620 frame_floor=19425
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=102 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=19814 frame_floor=19620
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=103 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=20008 frame_floor=19814
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=104 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=20202 frame_floor=20008
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=105 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=20396 frame_floor=20202
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=106 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=20590 frame_floor=20396
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=107 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=20784 frame_floor=20590
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=108 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=20979 frame_floor=20784
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=109 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=21174 frame_floor=20979
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=110 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=21369 frame_floor=21174
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=111 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=21564 frame_floor=21369
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=112 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=21759 frame_floor=21564
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=113 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=21954 frame_floor=21759
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=114 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=22149 frame_floor=21954
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=115 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=22344 frame_floor=22149
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=116 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=22539 frame_floor=22344
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=117 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=22728 frame_floor=22539
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=118 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=22929 frame_floor=22728
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=119 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=23124 frame_floor=22929
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=120 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=23319 frame_floor=23124
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=121 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=23514 frame_floor=23319
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=122 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=23709 frame_floor=23514
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=123 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=23904 frame_floor=23709
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=124 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=24099 frame_floor=23904
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=125 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=24294 frame_floor=24099
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=126 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=24489 frame_floor=24294
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=127 pending=2 processed=2 dst=0x0000000459C00000 size=3840x2160 direct_writer=24684 frame_floor=24489
+[V74.0.56.28][DIRECT_SCANOUT] action=suppress-targetless-after-direct-writer frame_count=128 pending=2 processed=2 dst=0x0000000457C00000 size=3840x2160 direct_writer=24879 frame_floor=24684
+
+--- LAST MEMORY STATE ---
+[V74.0.8.1][MEM] gc_mb=1599 heap_mb=1659 frag_mb=67 gc_load_mb=18967 system_load_mb=18967 gc_high_mb=29431 gc_avail_mb=32701 gen0=390 gen1=124 gen2=9 alloc2s_mb=89 working_mb=5975 private_mb=12148 process_working_mb=5975 process_private_mb=12148 virtual_mb=82154 paged_mb=12148 handles=2464 threads=86 tex_cache_mb=490 tex_deferred_mb=0 tex_entries=22 deferred_tex=0 sampled_mb=7 guest_image_total_mb=595 guest_image_deferred_mb=0 guest_images=80 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=83 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=20 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=7154/7155
+[V74.0.8.1][MEM] gc_mb=1657 heap_mb=1723 frag_mb=67 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=400 gen1=127 gen2=9 alloc2s_mb=136 working_mb=6144 private_mb=12404 process_working_mb=6144 process_private_mb=12404 virtual_mb=82345 paged_mb=12404 handles=2465 threads=86 tex_cache_mb=490 tex_deferred_mb=0 tex_entries=22 deferred_tex=0 sampled_mb=71 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=83 pending_img_mb=0 pending_img_data=0 pending_img_uploads=1 frame_retire=0 gfx_pipelines=20 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=7725/7725
+[V74.0.8.1][MEM] gc_mb=1662 heap_mb=1724 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=414 gen1=128 gen2=9 alloc2s_mb=113 working_mb=6147 private_mb=12439 process_working_mb=6147 process_private_mb=12439 virtual_mb=82408 paged_mb=12439 handles=2466 threads=86 tex_cache_mb=490 tex_deferred_mb=0 tex_entries=22 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=86 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=21 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=8610/8610
+[V74.0.8.1][MEM] gc_mb=1692 heap_mb=1724 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=429 gen1=133 gen2=9 alloc2s_mb=146 working_mb=6248 private_mb=12509 process_working_mb=6248 process_private_mb=12509 virtual_mb=82488 paged_mb=12509 handles=2466 threads=86 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=90 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=4 abandoned=0 batch_resources=0 timeline=9556/9560
+[V74.0.8.1][MEM] gc_mb=1692 heap_mb=1756 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=443 gen1=136 gen2=9 alloc2s_mb=109 working_mb=6250 private_mb=12541 process_working_mb=6250 process_private_mb=12541 virtual_mb=82518 paged_mb=12541 handles=2466 threads=85 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=93 pending_img_mb=0 pending_img_data=0 pending_img_uploads=11 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=0 abandoned=0 batch_resources=1 timeline=10438/10438
+[V74.0.8.1][MEM] gc_mb=1696 heap_mb=1757 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=458 gen1=140 gen2=9 alloc2s_mb=121 working_mb=6237 private_mb=12559 process_working_mb=6237 process_private_mb=12559 virtual_mb=82537 paged_mb=12559 handles=2466 threads=85 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=96 pending_img_mb=0 pending_img_data=0 pending_img_uploads=2 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=11418/11418
+[V74.0.8.1][MEM] gc_mb=1695 heap_mb=1758 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=472 gen1=144 gen2=9 alloc2s_mb=107 working_mb=6243 private_mb=12595 process_working_mb=6243 process_private_mb=12595 virtual_mb=82566 paged_mb=12595 handles=2466 threads=83 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=96 pending_img_mb=0 pending_img_data=0 pending_img_uploads=6 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=0 abandoned=0 batch_resources=1 timeline=12280/12280
+[V74.0.8.1][MEM] gc_mb=1692 heap_mb=1758 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=488 gen1=149 gen2=9 alloc2s_mb=121 working_mb=6244 private_mb=12563 process_working_mb=6244 process_private_mb=12563 virtual_mb=82534 paged_mb=12563 handles=2466 threads=83 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=96 pending_img_mb=0 pending_img_data=0 pending_img_uploads=1 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=1 abandoned=0 batch_resources=0 timeline=13263/13264
+[V74.0.8.1][MEM] gc_mb=1697 heap_mb=1759 frag_mb=66 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=501 gen1=151 gen2=9 alloc2s_mb=105 working_mb=6234 private_mb=12584 process_working_mb=6234 process_private_mb=12584 virtual_mb=82566 paged_mb=12584 handles=2466 threads=83 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=96 pending_img_mb=0 pending_img_data=0 pending_img_uploads=1 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=14111/14111
+[V74.0.8.1][MEM] gc_mb=774 heap_mb=923 frag_mb=158 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=511 gen1=156 gen2=10 alloc2s_mb=320 working_mb=6286 private_mb=12586 process_working_mb=6286 process_private_mb=12586 virtual_mb=82587 paged_mb=12586 handles=2511 threads=103 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=2 guest_buffer_mb=34 guest_buffers=96 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=14532/14534
+[V74.0.8.1][MEM] gc_mb=863 heap_mb=947 frag_mb=140 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=515 gen1=157 gen2=11 alloc2s_mb=363 working_mb=6291 private_mb=12625 process_working_mb=6291 process_private_mb=12625 virtual_mb=82593 paged_mb=12625 handles=2511 threads=91 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=7 guest_image_total_mb=659 guest_image_deferred_mb=0 guest_images=81 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=96 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=22 compute_pipelines=81 pending=0 abandoned=0 batch_resources=0 timeline=14598/14598
+[V74.0.8.1][MEM] gc_mb=1066 heap_mb=1160 frag_mb=94 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=532 gen1=158 gen2=11 alloc2s_mb=331 working_mb=6426 private_mb=12759 process_working_mb=6426 process_private_mb=12759 virtual_mb=82692 paged_mb=12759 handles=2514 threads=92 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=19 guest_image_total_mb=747 guest_image_deferred_mb=0 guest_images=86 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=98 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=23 compute_pipelines=86 pending=0 abandoned=0 batch_resources=0 timeline=15329/15329
+[V74.0.8.1][MEM] gc_mb=1070 heap_mb=1158 frag_mb=92 gc_load_mb=19621 system_load_mb=19621 gc_high_mb=29431 gc_avail_mb=32701 gen0=545 gen1=161 gen2=11 alloc2s_mb=106 working_mb=6426 private_mb=12883 process_working_mb=6426 process_private_mb=12883 virtual_mb=82820 paged_mb=12883 handles=2514 threads=92 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=19 guest_image_total_mb=747 guest_image_deferred_mb=0 guest_images=86 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=99 pending_img_mb=0 pending_img_data=0 pending_img_uploads=0 frame_retire=0 gfx_pipelines=23 compute_pipelines=86 pending=0 abandoned=0 batch_resources=0 timeline=16186/16186
+[V74.0.8.1][MEM] gc_mb=1069 heap_mb=1157 frag_mb=91 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=559 gen1=165 gen2=11 alloc2s_mb=108 working_mb=6420 private_mb=12907 process_working_mb=6420 process_private_mb=12907 virtual_mb=82852 paged_mb=12907 handles=2514 threads=92 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=19 guest_image_total_mb=747 guest_image_deferred_mb=0 guest_images=86 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=99 pending_img_mb=0 pending_img_data=0 pending_img_uploads=9 frame_retire=0 gfx_pipelines=23 compute_pipelines=86 pending=1 abandoned=0 batch_resources=0 timeline=17034/17035
+[V74.0.8.1][MEM] gc_mb=1074 heap_mb=1157 frag_mb=91 gc_load_mb=19294 system_load_mb=19294 gc_high_mb=29431 gc_avail_mb=32701 gen0=572 gen1=167 gen2=11 alloc2s_mb=105 working_mb=6413 private_mb=12887 process_working_mb=6413 process_private_mb=12887 virtual_mb=82852 paged_mb=12887 handles=2514 threads=92 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=19 guest_image_total_mb=747 guest_image_deferred_mb=0 guest_images=86 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=99 pending_img_mb=0 pending_img_data=0 pending_img_uploads=8 frame_retire=0 gfx_pipelines=23 compute_pipelines=86 pending=0 abandoned=0 batch_resources=0 timeline=17895/17895
+[V74.0.8.1][MEM] gc_mb=1068 heap_mb=1158 frag_mb=91 gc_load_mb=19621 system_load_mb=19621 gc_high_mb=29431 gc_avail_mb=32701 gen0=585 gen1=167 gen2=11 alloc2s_mb=95 working_mb=6414 private_mb=12887 process_working_mb=6414 process_private_mb=12887 virtual_mb=82884 paged_mb=12887 handles=2514 threads=92 tex_cache_mb=522 tex_deferred_mb=0 tex_entries=23 deferred_tex=0 sampled_mb=19 guest_image_total_mb=747 guest_image_deferred_mb=0 guest_images=86 variants=3 versions=0 guest_buffer_mb=34 guest_buffers=99 pending_img_mb=0 pending_img_data=0 pending_img_uploads=1 frame_retire=0 gfx_pipelines=23 compute_pipelines=86 pending=0 abandoned=0 batch_resources=0 timeline=18642/18642
+
+--- V21.4 RUNTIME RESIDUE ---
+
+--- DEVICE LOST ---
+
+--- ACCESS VIOLATION ---
+
+--- FATAL ---

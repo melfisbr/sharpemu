@@ -1,8 +1,0 @@
-                    return;
-                }
-
-                if (Environment.GetEnvironmentVariable(
-                        "SHARPEMU_BINK_NATIVE_FALLBACK") != "0" &&
-                    AttachRadMovieLocked(hostPath))
-                {
-                    Console.Error.WriteLine(

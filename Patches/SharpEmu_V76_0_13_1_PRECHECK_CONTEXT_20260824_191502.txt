@@ -1,6 +1,0 @@
-﻿Tag=V76.0.13.1-BINK-GUEST-AV-CLOCK-HANDOFF-PREREQFIX
-RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
-AvHelper=ReadyCopy
-BinkRuntime=ReadySemanticInsert
-Presenter=ReadySemanticInsert
-Baseline=V76.0.12.3 semantic + exact YUV helper

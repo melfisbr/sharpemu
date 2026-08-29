@@ -1,3 +1,0 @@
-                    "DsReadB32" or "DsReadAddtidB32" or "DsSwizzleB32" => [
-                        Gen5Operand.Vector(vectorDestination),
-                    ],

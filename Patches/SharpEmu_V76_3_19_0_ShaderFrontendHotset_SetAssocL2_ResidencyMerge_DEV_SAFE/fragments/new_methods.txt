@@ -1,0 +1,137 @@
+    private static bool TryGetProgramV11710(
+        object memory,
+        ulong address,
+        out Gen5ShaderProgram? program)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            program = cache.Programs[slot];
+            if (program is not null &&
+                cache.ProgramAddresses[slot] == address)
+            {
+                Interlocked.Increment(ref V11710ProgramL2Hits);
+                Interlocked.Increment(ref V190ProgramSetAssocHits);
+                return true;
+            }
+        }
+
+        Interlocked.Increment(ref V11710ProgramL2Misses);
+        program = null;
+        return false;
+    }
+
+    private static void PutProgramV11710(
+        object memory,
+        ulong address,
+        Gen5ShaderProgram program)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        var set = baseSlot / V190ThreadCacheWays;
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.Programs[slot] is not null &&
+                cache.ProgramAddresses[slot] == address)
+            {
+                cache.Programs[slot] = program;
+                return;
+            }
+        }
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.Programs[slot] is null)
+            {
+                cache.ProgramAddresses[slot] = address;
+                cache.Programs[slot] = program;
+                cache.ProgramVictim[set] =
+                    (byte)((way + 1) & (V190ThreadCacheWays - 1));
+                return;
+            }
+        }
+
+        var victimWay = cache.ProgramVictim[set] &
+            (V190ThreadCacheWays - 1);
+        var victimSlot = baseSlot + victimWay;
+        Interlocked.Increment(ref V7636ProgramL2ConflictEvictions);
+        cache.ProgramAddresses[victimSlot] = address;
+        cache.Programs[victimSlot] = program;
+        cache.ProgramVictim[set] =
+            (byte)((victimWay + 1) & (V190ThreadCacheWays - 1));
+    }
+
+    private static bool TryGetMetadataV11710(
+        object memory,
+        ulong address,
+        out Gen5ShaderMetadata? metadata)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.MetadataKnown[slot] &&
+                cache.MetadataAddresses[slot] == address)
+            {
+                Interlocked.Increment(ref V11710MetadataL2Hits);
+                Interlocked.Increment(ref V190MetadataSetAssocHits);
+                metadata = cache.Metadata[slot];
+                return true;
+            }
+        }
+
+        Interlocked.Increment(ref V11710MetadataL2Misses);
+        metadata = null;
+        return false;
+    }
+
+    private static void PutMetadataV11710(
+        object memory,
+        ulong address,
+        Gen5ShaderMetadata? metadata)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var baseSlot = GetV11710ThreadCacheSlot(address);
+        var set = baseSlot / V190ThreadCacheWays;
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (cache.MetadataKnown[slot] &&
+                cache.MetadataAddresses[slot] == address)
+            {
+                cache.Metadata[slot] = metadata;
+                return;
+            }
+        }
+
+        for (var way = 0; way < V190ThreadCacheWays; way++)
+        {
+            var slot = baseSlot + way;
+            if (!cache.MetadataKnown[slot])
+            {
+                cache.MetadataAddresses[slot] = address;
+                cache.Metadata[slot] = metadata;
+                cache.MetadataKnown[slot] = true;
+                cache.MetadataVictim[set] =
+                    (byte)((way + 1) & (V190ThreadCacheWays - 1));
+                return;
+            }
+        }
+
+        var victimWay = cache.MetadataVictim[set] &
+            (V190ThreadCacheWays - 1);
+        var victimSlot = baseSlot + victimWay;
+        Interlocked.Increment(ref V7636MetadataL2ConflictEvictions);
+        cache.MetadataAddresses[victimSlot] = address;
+        cache.Metadata[victimSlot] = metadata;
+        cache.MetadataKnown[victimSlot] = true;
+        cache.MetadataVictim[set] =
+            (byte)((victimWay + 1) & (V190ThreadCacheWays - 1));
+    }

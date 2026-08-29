@@ -1,7 +1,0 @@
-            BufferUsageFlags usage,
-            out DeviceMemory memory)
-        {
-            var capacity = VulkanBufferCapacityPolicyV7614.Round(
-                Math.Max(size, (ulong)sizeof(uint)));
-            var key = new VulkanDeviceBufferPoolKey(usage, capacity);
-

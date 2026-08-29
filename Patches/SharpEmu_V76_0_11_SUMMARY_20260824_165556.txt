@@ -1,5 +1,0 @@
-﻿Tag=V76.0.11-PARALLEL-SHADER-PREWARM
-Status=BUILD_FAILED_ROLLBACK
-ExitCode=1
-Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_11_PREVIOUS_FILES_20260824_165556.zip
-BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_11_BUILD_20260824_165556.log

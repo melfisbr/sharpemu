@@ -1,0 +1,32 @@
+V76.3.21.3.1.1.2 CONTRACT
+=======================
+Required source structure:
+  - V21.2 global snapshot repair present.
+  - VulkanVideoPresenter weighted-closure consumer present.
+  - AGC scene/geometry diagnostic probes present.
+  - DirectExecutionBackend guest-thread diagnostic hooks present.
+
+NOT required:
+  Set("SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_SYNC_SCAN", "512");
+  from V21.3. This package fixes the consumer directly.
+
+Changed source:
+  src\SharpEmu.Libs\VideoOut\VulkanVideoPresenter.cs only.
+Build:
+  Debug / win-x64.
+
+Authoritative runtime rule for PPSA01341:
+  _producerDependencyClosureSyncScanCapV76383 = 512
+A/B opt-out:
+  SHARPEMU_V76321311_DISABLE=1
+
+Expected runtime marker:
+  [V76.3.21.3.1.1.2][AUTHORITATIVE_GUEST_PROGRESS] active=1 closure_sync_budget=512 consumer=VulkanVideoPresenter disabled=0
+
+Required diagnostic:
+  closure_sync512_lines > 0
+  closure_sync4096_lines = 0
+  closure_sync_contract_ok = True
+
+Primary functional success:
+  natural_ps_studios_request=True

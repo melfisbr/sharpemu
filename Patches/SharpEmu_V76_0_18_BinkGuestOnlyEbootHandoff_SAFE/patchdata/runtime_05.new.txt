@@ -1,6 +1,0 @@
-            var epoch = Volatile.Read(ref _sessionEpoch);
-            BinkGuestAvClockV7613.EndSession(
-                epoch,
-                path);
-            SharpEmu.Libs.VideoOut.VulkanVideoPresenter
-                .CompleteGuestBinkHandoffV7618(path, epoch);

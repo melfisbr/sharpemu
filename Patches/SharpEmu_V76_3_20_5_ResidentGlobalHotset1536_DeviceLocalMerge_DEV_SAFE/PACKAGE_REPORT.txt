@@ -1,0 +1,4 @@
+﻿package=SharpEmu_V76_3_20_5_ResidentGlobalHotset1536_DeviceLocalMerge_DEV_SAFE
+configuration=Debug
+sequence=V20.3 -> V20.4 -> V20.5
+rollback=automatic-on-build-failure

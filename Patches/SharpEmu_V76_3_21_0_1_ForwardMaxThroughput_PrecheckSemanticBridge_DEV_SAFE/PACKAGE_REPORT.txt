@@ -1,0 +1,15 @@
+﻿tag=V76.3.21.0.1-FORWARD-MAX-THROUGHPUT-PRECHECK-SEMANTIC-BRIDGE
+configuration=Debug-via-original-V21
+original_package=SharpEmu_V76_3_21_0_ForwardMaxThroughput_AdaptiveMerge_DEV_SAFE
+original_package_modified=0
+source_replacement=0
+runtime_behavior_added=0
+bridge_change=comment-only-presenter-contract-marker
+semantic_dual_queue_check=required
+semantic_resource_hazard_check=required
+cli_dual_policy_check=required
+original_run1=delegated
+original_run2=delegated
+original_run3=delegated
+original_run4=delegated
+rollback=automatic-on-original-run2-or-run3-failure

@@ -1,9 +1,0 @@
-            return MovieMode.Ffmpeg;
-        }
-
-        // Native is the default. KB2 first tries the optional NihAV backend and
-        // then the existing FFmpeg path. If neither host decoder is available,
-        // the guest's statically linked movie code remains untouched.
-        return MovieMode.Native;
-    }
-

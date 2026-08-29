@@ -1,4 +1,0 @@
-        // Maps the AMD atomic-op name suffix shared by buffer/image atomics to a SPIR-V opcode.
-        // Inc/Dec approximate the AMD wrap-clamp semantics (MEM = tmp >= DATA ? 0 : tmp + 1),
-        // which is exact for the common 0xFFFFFFFF clamp operand.
-        private static bool TryGetAtomicOp(string name, out SpirvOp op)

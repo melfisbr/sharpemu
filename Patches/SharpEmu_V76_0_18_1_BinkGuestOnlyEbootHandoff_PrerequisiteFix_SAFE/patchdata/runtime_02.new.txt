@@ -1,8 +1,0 @@
-    /// <summary>
-    /// V76.0.18: title-provided Bink2 is always guest-owned. The legacy
-    /// SHARPEMU_BINK_ALLOW_HOST_DECODER escape hatch is intentionally ignored
-    /// so FFmpeg/NIHAV/RAD host routes cannot steal a .bk2 from the eboot.
-    /// </summary>
-    internal static bool Enabled => true;
-
-    internal static bool HostBinkDecoderAllowed => false;

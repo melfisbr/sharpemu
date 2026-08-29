@@ -1,0 +1,15 @@
+V76.3.21.4 contract
+Sync512 V21.3.1.1.2: REQUIRED/PRESERVED
+PPSA01341 only: YES
+builder threshold: 512
+submit gap: 4ms
+yield stride: 128
+yield primitive: System.Threading.Thread.Yield()
+PM4 bytes: UNCHANGED
+WAIT_REG_MEM: UNCHANGED
+WRITE_DATA semantics: UNCHANGED
+RELEASE_MEM semantics: UNCHANGED
+Vulkan queue/hazards/timeline: UNCHANGED
+Bink auto boot: OFF
+A/B disable: SHARPEMU_V763214_DISABLE=1
+Build: Debug win-x64

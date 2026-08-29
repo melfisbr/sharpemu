@@ -1,0 +1,34 @@
+﻿V76.3.21.0 ARCHITECTURE
+
+Guest CPU / HLE
+    |
+    +--> DCB / ACB publish
+            |
+            v
+      Async AGC Command Processor
+            |
+            v
+       PM4 / Gen5 frontend
+            |
+       +----+-----------------------------+
+       |                                  |
+       v                                  v
+Resident shader/resource            Watched producer graph
+state + pipeline caches             WAIT labels/ranges
+       |                                  |
+       v                                  v
+Ready graphics/compute work          exact wake evidence
+       |                                  |
+       +---------------+------------------+
+                       |
+             Vulkan hazard/timeline graph
+                    /                          v         v
+           VkQueue graphics  VkQueue compute
+                   \         /
+                    \_______/
+                        |
+                       GPU
+
+The package increases pipeline depth and resident working sets, but does not
+remove guest synchronization. Unknown hazards, host visibility, RELEASE_MEM,
+WAIT_REG_MEM and presentation boundaries remain correctness boundaries.

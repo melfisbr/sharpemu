@@ -1,0 +1,12 @@
+﻿tag=V76.3.21.0.2-FORWARD-MAX-THROUGHPUT-UINT-BUILDFIX
+presenter_sha_before=25b4794b8e71a99d5c8997bcd0e01e1edb0e3210fa4ddf4659b3eae6b6b3ae2d
+presenter_sha_bridge=601ada68e038d687d130ef70495f12f1cddd4ea68ad1e8ee5a397e775c2bfbe4
+presenter_sha_after_v21=4758533c2fc3058f6dba0455faf435ad2c56da9089a4160ab5402b0c1fa7ea0b
+marker_added=True
+uint_bridge_added=True
+compile_fix=CommandBufferCount=(uint)MaxFramesInFlight
+runtime_behavior_added_by_bridge=0
+v21_original_improvements_preserved=1
+original_v21_precheck=passed
+original_v21_apply_build=passed
+backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\V76_3_21_0_1_PRE_PRESENTER_20260828_163031.cs

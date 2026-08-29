@@ -1,7 +1,0 @@
-        VkBuffer Buffer,
-        DeviceMemory Memory,
-        ulong Capacity,
-        bool HostVisible);
-
-    private readonly record struct TermBuffer(VkBuffer Buffer, ulong ByteSize);
-

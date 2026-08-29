@@ -1,7 +1,0 @@
-            (ulong)parameters.ElementsWide * (ulong)parameters.ElementsHigh * bytesPerElement * layers;
-
-        resources.Tiled = RentBuffer((ulong)tiled.Length, hostVisible: true);
-        UploadBytes(resources.Tiled, tiled);
-        resources.Output = RentBuffer(resources.OutputBytes, hostVisible: false);
-
-        resources.Set = RentDescriptorSet();

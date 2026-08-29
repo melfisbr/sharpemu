@@ -1,3 +1,7 @@
+// V76.3.21.0.1_PRECHECK_SEMANTIC_BRIDGE
+// Compatibility marker for the V76.3.21.0 structural precheck only.
+// Runtime ownership remains in the existing dual-queue/timeline/resource-hazard implementation.
+// SHARPEMU_DUAL_QUEUE_RESOURCE_SYNC is configured by the title/profile layer; this comment adds no behavior.
 // SHARPEMU_V74_0_82_NONBLOCKING_ORDERED_VISIBILITY_DEFAULT
 // Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -479,15 +483,209 @@ internal static unsafe partial class VulkanVideoPresenter
                 ? producerItemsV11714
                 : 48,
             _maxPendingGuestWorkItems,
-            128);
+            Math.Max(_maxPendingGuestWorkItems, 128));
     private static readonly bool _plannedProducerQueuePriorityV11714 =
         !string.Equals(
             Environment.GetEnvironmentVariable(
                 "SHARPEMU_PLANNED_PRODUCER_QUEUE_PRIORITY"),
             "0",
             StringComparison.Ordinal);
+
+    // SHARPEMU_V76_3_8_5_WAITER_ITEM_PROGRESS_RESERVE
+    // A live WAIT_REG_MEM can exist before AGC preindex has enough future packets
+    // to prove the exact WRITE_DATA producer. In that interval V117.14 falls back
+    // to the normal 18-payload cap and can block the parser that must reach the
+    // producer. Keep the normal cap unchanged. Only while (1) a real waiter is
+    // registered, (2) queued sync work is already the majority and (3) the exact
+    // planned-producer headroom is not active, admit a tiny bounded six-item
+    // progress reserve. This changes parser look-ahead only: FIFO order, Vulkan
+    // submission count, max-inflight, hazards, fences and wait satisfaction are
+    // untouched. The stronger proven-producer cap (48) still wins when available.
+    private static readonly int _maxPendingGuestWorkWaiterItemsV76385 =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_PENDING_GUEST_WORK_WAITER_ITEMS"),
+                out var waiterItemsV76385) &&
+                waiterItemsV76385 > 0
+                ? waiterItemsV76385
+                : _maxPendingGuestWorkItems + 6,
+            _maxPendingGuestWorkItems,
+            Math.Min(
+                _maxPendingGuestWorkProducerItemsV11714,
+                _maxPendingGuestWorkItems + 16));
+    private static long _v76385WaiterItemProgressTraceCount;
     private static long _v11714ProducerItemHeadroomTraceCount;
     private static long _v11714PlannedProducerQueuePriorityTraceCount;
+
+    // SHARPEMU_V76_3_8_0_PRODUCER_DEPENDENCY_CLOSURE
+    // V76.3.6.2 proved that the dominant long waits spend ~1-3 seconds waiting
+    // for a known graphics producer to execute.  V76.3.7.6 also proved that
+    // always-on early producer priority is too broad.  Activate only after a
+    // planned producer intent has remained live for a bounded age, then drain
+    // that producer's own queue strictly FIFO until the target submission is
+    // reached/materialized.  No sibling queue is reordered.
+    private static readonly bool _producerDependencyClosureV76380 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE"),
+            "0",
+            StringComparison.Ordinal);
+    private static readonly int _producerDependencyClosureAgeMsV76380 =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable("SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_AGE_MS"),
+                out var dependencyClosureAgeMsV76380) && dependencyClosureAgeMsV76380 >= 50
+                ? dependencyClosureAgeMsV76380
+                : 300,
+            50,
+            5000);
+    private static readonly long _producerDependencyClosureAgeTicksV76380 =
+        (long)_producerDependencyClosureAgeMsV76380 * Stopwatch.Frequency / 1000L;
+    private static readonly int _producerDependencyClosureMaxItemsV76380 =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable("SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_MAX_ITEMS"),
+                out var dependencyClosureItemsV76380) && dependencyClosureItemsV76380 > 0
+                ? dependencyClosureItemsV76380
+                : 48,
+            4,
+            128);
+    private static readonly long _producerDependencyClosureProbeTicksV76380 =
+        Math.Max(Stopwatch.Frequency / 500L, 1L); // at most one activation scan / ~2 ms
+    private static string? _producerDependencyClosureQueueV76380;
+    private static ulong _producerDependencyClosureTargetSubmissionV76380;
+    private static int _producerDependencyClosureRemainingV76380;
+    private static long _producerDependencyClosureNextProbeV76380;
+    private static long _producerDependencyClosureActivatedTicksV76381;
+    private static readonly long _producerDependencyClosureLifetimeTicksV76381 =
+        (long)Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable("SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_LIFETIME_MS"),
+                out var closureLifetimeMsV76381) && closureLifetimeMsV76381 >= 1000
+                ? closureLifetimeMsV76381
+                : 5000,
+            1000,
+            15000) * Stopwatch.Frequency / 1000L;
+    private static long _producerDependencyClosureActivateCountV76380;
+    private static long _producerDependencyClosureTakeCountV76380;
+    private static long _producerDependencyClosureReleaseCountV76380;
+    private static long _producerDependencyClosureYieldCountV76381;
+    private static long _producerDependencyClosureCompleteCountV76381;
+    private static long _producerDependencyClosureBudgetCountV76381;
+    private static long _producerDependencyClosureTimeoutCountV76381;
+
+    // V76.3.16.1_DEPENDENCY_DRIVEN_PRODUCER_SLICES
+    // A fixed total payload budget is the wrong abstraction for a real
+    // cross-queue dependency.  If an ACB is waiting on an exact producer in a
+    // DCB, hardware lets the producer queue continue progressing.  On the
+    // single-host scheduler, preserve strict FIFO in that producer queue but
+    // renew the bounded payload budget in time-separated slices instead of
+    // abandoning the dependency after the first 128 payloads.
+    private static readonly bool _producerDependencyClosureSlicesV763161 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_SLICES"),
+            "1",
+            StringComparison.Ordinal);
+    private static readonly int _producerDependencyClosureMaxSlicesV763161 =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_MAX_SLICES"),
+                out var closureSlicesV763161) && closureSlicesV763161 > 0
+                ? closureSlicesV763161
+                : 8,
+            2,
+            16);
+    private static readonly long _producerDependencyClosureSlicePauseTicksV763161 =
+        Math.Max(
+            (long)Math.Clamp(
+                int.TryParse(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_SLICE_PAUSE_US"),
+                    out var closurePauseUsV763161) && closurePauseUsV763161 >= 0
+                    ? closurePauseUsV763161
+                    : 1000,
+                0,
+                5000) * Stopwatch.Frequency / 1_000_000L,
+            0L);
+    private static int _producerDependencyClosureSliceV763161;
+    private static long _producerDependencyClosureResumeTicksV763161;
+    private static long _producerDependencyClosureSliceRolloverCountV763161;
+    private static long _producerDependencyClosureSliceYieldCountV763161;
+    private static long _producerDependencyClosureSliceLimitCountV763161;
+
+    // SHARPEMU_V76_3_8_3_SEMANTIC_WORKFLOW_WEIGHTED_CLOSURE
+    // One host-only EVENT_WRITE must not consume the same dependency-closure
+    // budget as a draw/compute/real visibility boundary. Keep the proven
+    // payload budget at 48, but allow a much wider FIFO scan across zero-cost
+    // host notifications. Every item is still executed and completed in guest
+    // sequence order; this changes scheduling cost, not guest semantics.
+    // V76.3.21.3.1.1.2_AUTHORITATIVE_CLOSURE_SYNC_BEGIN
+    // V21.3 may be partial or may set an environment value, while runtime evidence
+    // still showed sync_budget=4096. Make the consumer itself authoritative for
+    // PPSA01341 so ModuleInitializer ordering cannot reopen the V21.1 scan.
+    private static readonly bool _authoritativeGuestProgressV76321311 =
+        InitializeAuthoritativeGuestProgressV76321311();
+
+    private static bool InitializeAuthoritativeGuestProgressV76321311()
+    {
+        var disabled = string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_V76321311_DISABLE"),
+            "1",
+            StringComparison.Ordinal);
+        var active = false;
+        if (!disabled)
+        {
+            foreach (var arg in Environment.GetCommandLineArgs())
+            {
+                if (arg.Contains("PPSA01341", StringComparison.OrdinalIgnoreCase))
+                {
+                    active = true;
+                    break;
+                }
+            }
+            if (!active)
+            {
+                active = string.Equals(
+                    Environment.GetEnvironmentVariable("SHARPEMU_TITLE_ID"),
+                    "PPSA01341",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        Console.Error.WriteLine(
+            "[V76.3.21.3.1.1.2][AUTHORITATIVE_GUEST_PROGRESS] " +
+            $"active={(active ? 1 : 0)} closure_sync_budget={(active ? 512 : -1)} " +
+            $"consumer=VulkanVideoPresenter disabled={(disabled ? 1 : 0)}");
+        return active;
+    }
+
+    private static readonly int _producerDependencyClosureSyncScanCapV76383 =
+        _authoritativeGuestProgressV76321311
+            ? 512
+            : Math.Clamp(
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("SHARPEMU_PRODUCER_DEPENDENCY_CLOSURE_SYNC_SCAN"),
+                    out var closureSyncScanV76383) && closureSyncScanV76383 > 0
+                    ? closureSyncScanV76383
+                    : 512,
+                64,
+                4096);
+    // V76.3.21.3.1.1.2_AUTHORITATIVE_CLOSURE_SYNC_END
+    private static int _producerDependencyClosureSyncRemainingV76383;
+    private static long _producerDependencyClosureHostOnlyTakeCountV76383;
+    private static long _producerDependencyClosurePayloadTakeCountV76383;
+    private static long _producerDependencyClosureSyncBudgetCountV76383;
+
+    // Mirror the already-proven V74.0.67 no-flush eligibility at the semantic
+    // scheduler layer. This lets the queue reason about an ACQUIRE whose body
+    // has no GPU-visible effect before spending a full closure payload token.
+    private static readonly bool _semanticAcquireNoFlushV76383 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_DISABLED_ACQUIRE_NOFLUSH"),
+            "0",
+            StringComparison.Ordinal);
 
     private static long _v73015ParserEscapeTraceCount;
     private static long _v74047BackpressureWaitTraceCount;
@@ -709,6 +907,66 @@ internal static unsafe partial class VulkanVideoPresenter
     private const uint GuestPrimitiveRectListNgg = AgcPrimitiveHelpers.PrimitiveRectList;
 
     private static readonly object _gate = new();
+
+    // SHARPEMU_V76_3_8_3_GUEST_WORK_SEMANTIC_LAYER
+    // Central ownership contract between the guest parser and the Vulkan feed.
+    // This is intentionally descriptive: it does not skip packets. It gives the
+    // scheduler one answer for what kind of host/GPU boundary a work item owns.
+    private enum GuestWorkSemanticClassV76383 : byte
+    {
+        HostOnlyOrdered,
+        GpuPayload,
+        GpuOrdered,
+        CpuVisibilityBoundary,
+        Presentation,
+    }
+
+    private static bool IsHostOnlyOrderedActionV76383(
+        VulkanOrderedGuestAction work)
+    {
+        var hostEventOnly =
+            !work.RequireGlobalVisibility &&
+            work.WaitProducerMemory is null &&
+            work.WaitProducerAddress == 0 &&
+            work.WaitProducerLength == 0 &&
+            work.DebugName.StartsWith("event_write type=", StringComparison.Ordinal);
+        if (hostEventOnly)
+        {
+            return true;
+        }
+
+        return _semanticAcquireNoFlushV76383 &&
+               !SharpEmu.HLE.GuestImageWriteTracker.Enabled &&
+               !work.RequireGlobalVisibility &&
+               !work.RequiresGpuToCpuVisibility &&
+               !work.RequiresQueueCompletionOnly &&
+               work.WaitProducerMemory is null &&
+               work.WaitProducerAddress == 0 &&
+               work.WaitProducerLength == 0 &&
+               work.DebugName.StartsWith("acquire_mem_flush ", StringComparison.Ordinal);
+    }
+
+    private static GuestWorkSemanticClassV76383 ClassifyGuestWorkV76383(object work) =>
+        work switch
+        {
+            VulkanComputeGuestDispatch or
+            VulkanOffscreenGuestDraw or
+            VulkanGuestImageWrite or
+            VulkanOffscreenColorClear => GuestWorkSemanticClassV76383.GpuPayload,
+            VulkanOrderedGuestAction ordered when
+                IsHostOnlyOrderedActionV76383(ordered) =>
+                    GuestWorkSemanticClassV76383.HostOnlyOrdered,
+            VulkanOrderedGuestAction ordered when
+                ordered.RequireGlobalVisibility ||
+                ordered.RequiresGpuToCpuVisibility =>
+                    GuestWorkSemanticClassV76383.CpuVisibilityBoundary,
+            VulkanGlobalOrderedGuestAction =>
+                GuestWorkSemanticClassV76383.CpuVisibilityBoundary,
+            VulkanOrderedGuestFlip or VulkanOrderedGuestFlipWait =>
+                GuestWorkSemanticClassV76383.Presentation,
+            _ => GuestWorkSemanticClassV76383.GpuOrdered,
+        };
+
     private readonly record struct PendingGuestWork(
         object Work,
         ulong PayloadBytes,
@@ -2992,6 +3250,37 @@ internal static unsafe partial class VulkanVideoPresenter
         V740783TextureContentKey, TextureContentIdentity>
         _v740783TextureByContent = new();
     private static long _v740783PreSnapshotAliasHitCount;
+
+    // SHARPEMU_V76_3_7_5_TEXTURE_STORAGE_ALIAS
+    // Image storage is independent from sampler state and component swizzle.
+    // Keep a second O(1) index that excludes Sampler and DstSelect so AGC can
+    // skip a repeated CPU snapshot/GPU detile when the exact same guest image
+    // storage is already resident under another binding view. The canonical
+    // identity is still validated through the existing stale-content probe.
+    private readonly record struct V76375TextureStorageKey(
+        ulong Address,
+        uint Width,
+        uint Height,
+        uint Format,
+        uint NumberType,
+        uint TileMode,
+        uint Pitch,
+        bool Arrayed,
+        uint ArrayLayers,
+        uint Type,
+        uint Depth,
+        ulong MetadataAddress,
+        uint DescriptorFlags,
+        uint BcSwizzle,
+        bool HasExtendedDescriptor);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        V76375TextureStorageKey, TextureContentIdentity>
+        _v76375TextureStorageIndex = new();
+    private static long _v76375TextureStoragePreSnapshotHits;
+    private static long _v76375TextureStorageBindingHits;
+    private static long _v76375TextureStorageAliasViewCreates;
+    private static long _v76375TextureStorageAvoidedBytes;
     // SHARPEMU_V74_0_94_4_TEXTURE_CACHE_INDEX_MISS_O1
     private static long _v740944TextureIndexMissCount;
 
@@ -3014,6 +3303,54 @@ internal static unsafe partial class VulkanVideoPresenter
             identity.DescriptorFlags,
             identity.BcSwizzle,
             identity.HasExtendedDescriptor);
+
+    private static V76375TextureStorageKey GetTextureStorageKeyV76375(
+        in TextureContentIdentity identity) =>
+        new(
+            identity.Address,
+            identity.Width,
+            identity.Height,
+            identity.Format,
+            identity.NumberType,
+            identity.TileMode,
+            identity.Pitch,
+            identity.Arrayed,
+            identity.ArrayLayers,
+            identity.Type,
+            identity.Depth,
+            identity.MetadataAddress,
+            identity.DescriptorFlags,
+            identity.BcSwizzle,
+            identity.HasExtendedDescriptor);
+
+    private static bool TryGetTextureStorageCanonicalV76375(
+        in TextureContentIdentity requested,
+        out TextureContentIdentity canonical)
+    {
+        canonical = default;
+        if (requested.Address == 0 ||
+            !_v76375TextureStorageIndex.TryGetValue(
+                GetTextureStorageKeyV76375(requested),
+                out canonical))
+        {
+            return false;
+        }
+
+        if (IsExactTextureContentCachedV74056331(canonical))
+        {
+            return true;
+        }
+
+        var storageKey = GetTextureStorageKeyV76375(requested);
+        if (_v76375TextureStorageIndex.TryGetValue(storageKey, out var mapped) &&
+            mapped.Equals(canonical))
+        {
+            _v76375TextureStorageIndex.TryRemove(storageKey, out _);
+        }
+
+        canonical = default;
+        return false;
+    }
 
     private static void RemoveTextureContentIndexV740783(
         in TextureContentIdentity identity)
@@ -3064,6 +3401,29 @@ internal static unsafe partial class VulkanVideoPresenter
             {
                 _v740783TextureByContent.TryRemove(key, out _);
             }
+        }
+
+        // V76.3.7.5: DstSelect and Sampler describe the binding view, not the
+        // underlying texel storage. Reuse a validated canonical image before
+        // AGC snapshots/detiles the same storage again for another swizzle.
+        if (TryGetTextureStorageCanonicalV76375(identity, out var storageCanonicalV76375))
+        {
+            var hitV76375 = Interlocked.Increment(
+                ref _v76375TextureStoragePreSnapshotHits);
+            if (hitV76375 <= 64 || (hitV76375 & (hitV76375 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.7.5][TEXTURE_STORAGE_ALIAS] " +
+                    $"phase=pre-snapshot count={hitV76375} " +
+                    $"addr=0x{identity.Address:X16} " +
+                    $"size={identity.Width}x{identity.Height} " +
+                    $"fmt={identity.Format}/{identity.NumberType} " +
+                    $"tile={identity.TileMode} " +
+                    $"canonical_dst=0x{storageCanonicalV76375.DstSelect:X3} " +
+                    $"requested_dst=0x{identity.DstSelect:X3} " +
+                    "source_copy=skipped");
+            }
+            return true;
         }
 
         // SHARPEMU_V74_0_94_4_TEXTURE_CACHE_INDEX_MISS_O1
@@ -3230,6 +3590,7 @@ internal static unsafe partial class VulkanVideoPresenter
             global::SharpEmu.Libs.Agc.AgcExports.ReleaseResidentCpuBridgeSnapshotsV740864(identity.Address);
         }
         _v740783TextureByContent[GetTextureContentKeyV740783(identity)] = identity;
+        _v76375TextureStorageIndex[GetTextureStorageKeyV76375(identity)] = identity;
         _samplerAgnosticTextureIndexV74075[
             NormalizeSamplerIdentityV74075(identity)] = identity;
         _staleTextureIdentities.TryRemove(identity, out _);
@@ -3253,6 +3614,17 @@ internal static unsafe partial class VulkanVideoPresenter
         _cachedTextureIdentities.TryRemove(identity, out _);
         RemoveTextureContentIndexV740783(identity);
 
+        var storageKeyV76375 = GetTextureStorageKeyV76375(identity);
+        if (_v76375TextureStorageIndex.TryGetValue(
+                storageKeyV76375,
+                out var indexedStorageV76375) &&
+            indexedStorageV76375.Equals(identity))
+        {
+            _v76375TextureStorageIndex.TryRemove(
+                storageKeyV76375,
+                out _);
+        }
+
         var normalizedV74075 = NormalizeSamplerIdentityV74075(identity);
         if (_samplerAgnosticTextureIndexV74075.TryGetValue(
                 normalizedV74075,
@@ -3272,6 +3644,7 @@ internal static unsafe partial class VulkanVideoPresenter
     {
         _cachedTextureIdentities.Clear();
         _v740783TextureByContent.Clear();
+        _v76375TextureStorageIndex.Clear();
         _samplerAgnosticTextureIndexV74075.Clear();
         _untrackedTextureCacheProbes.Clear();
         _staleTextureIdentities.Clear();
@@ -4251,10 +4624,45 @@ internal static unsafe partial class VulkanVideoPresenter
                     submittingQueueV11714.Value.Name,
                     submittingQueueV11714.Value.SubmissionId,
                     out plannedProducerWaitRangesV11714);
+        // V76.3.8.5: when a waiter is real but the exact future producer is not
+        // yet provable, do not let sync-dominated backlog stop the parser at the
+        // exact normal payload cap. The reserve is intentionally much smaller
+        // than the V117.14 proven-producer headroom and disappears immediately
+        // when waits/sync pressure clear.
+        var waiterItemProgressV76385 =
+            isPayloadWork &&
+            hasOutstandingGpuWaits &&
+            hasSyncPressure &&
+            !producerItemHeadroomV11714 &&
+            _pendingPayloadGuestWorkCount >= _maxPendingGuestWorkItems &&
+            _maxPendingGuestWorkWaiterItemsV76385 > _maxPendingGuestWorkItems;
         var pendingPayloadItemBudgetV11714 =
             producerItemHeadroomV11714
                 ? _maxPendingGuestWorkProducerItemsV11714
-                : _maxPendingGuestWorkItems;
+                : waiterItemProgressV76385
+                    ? _maxPendingGuestWorkWaiterItemsV76385
+                    : _maxPendingGuestWorkItems;
+
+        if (waiterItemProgressV76385)
+        {
+            var waiterProgressCount = Interlocked.Increment(
+                ref _v76385WaiterItemProgressTraceCount);
+            if (waiterProgressCount <= 128 ||
+                (waiterProgressCount & (waiterProgressCount - 1)) == 0)
+            {
+                var progressQueue =
+                    submittingQueueV11714 ?? VulkanGuestQueueIdentity.Default;
+                Console.Error.WriteLine(
+                    $"[V76.3.8.5][WAITER_ITEM_PROGRESS] count={waiterProgressCount} " +
+                    $"queue={progressQueue.Name} submission={progressQueue.SubmissionId} " +
+                    $"waiters={SharpEmu.Libs.Agc.GpuWaitRegistry.Count} " +
+                    $"payload={_pendingPayloadGuestWorkCount} " +
+                    $"sync={_pendingSyncGuestWorkCount} " +
+                    $"normal_cap={_maxPendingGuestWorkItems} " +
+                    $"waiter_cap={_maxPendingGuestWorkWaiterItemsV76385} " +
+                    $"planned_producer=0 retained_mb={_pendingGuestWorkBytes / (1024 * 1024)}");
+            }
+        }
 
         if (producerItemHeadroomV11714)
         {
@@ -4436,6 +4844,7 @@ internal static unsafe partial class VulkanVideoPresenter
                         $"budget_mb={pendingByteBudget / (1024 * 1024)} " +
                         $"item_cap={pendingPayloadItemBudgetV11714} " +
                         $"producer_headroom={(producerItemHeadroomV11714 ? 1 : 0)} " +
+                        $"waiter_progress={(waiterItemProgressV76385 ? 1 : 0)} " +
                         $"work={work.GetType().Name}");
                 }
             }
@@ -4535,6 +4944,7 @@ internal static unsafe partial class VulkanVideoPresenter
     {
         var typeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var orderedNameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var semanticCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var queue in _pendingGuestWorkByQueue.Values)
         {
             for (var node = queue.First; node is not null; node = node.Next)
@@ -4542,6 +4952,8 @@ internal static unsafe partial class VulkanVideoPresenter
                 var work = node.Value.Work;
                 var typeName = work.GetType().Name;
                 typeCounts[typeName] = typeCounts.GetValueOrDefault(typeName) + 1;
+                var semanticName = ClassifyGuestWorkV76383(work).ToString();
+                semanticCounts[semanticName] = semanticCounts.GetValueOrDefault(semanticName) + 1;
                 if (work is VulkanOrderedGuestAction ordered)
                 {
                     var prefix = GetOrderedActionDebugPrefix(ordered.DebugName);
@@ -4566,6 +4978,7 @@ internal static unsafe partial class VulkanVideoPresenter
         }
 
         return $" types=[{TopEntries(typeCounts, 6)}]" +
+               $" semantic=[{TopEntries(semanticCounts, 6)}]" +
                $" ordered=[{TopEntries(orderedNameCounts, 8)}]";
     }
 
@@ -5074,11 +5487,18 @@ internal static unsafe partial class VulkanVideoPresenter
     {
         lock (_gate)
         {
-            // SHARPEMU_V74_0_117_14_PLANNED_PRODUCER_QUEUE_PRIORITY
-            // Inline WRITE_DATA never enters the presenter queue, so V46 cannot
-            // see it. When AGC preindex proves a future producer in a saturated
-            // logical submission, drain only that queue's FIFO HEAD. No packet
-            // is moved ahead of earlier same-queue work.
+            if (_producerDependencyClosureV76380 &&
+                TryTakeProducerDependencyClosureV76380(out work, excludedQueues))
+            {
+                return true;
+            }
+
+            // SHARPEMU_V76_3_7_7_STABLE_PRODUCER_GATE
+            // V76.3.7.6 enabled planned-producer selection before payload
+            // saturation, but the A/B increased worst producer completion and
+            // reduced median FPS. Restore the proven V76.3.7.5 gate: producer
+            // priority is still proof-bounded, same-queue FIFO remains strict,
+            // and it activates only when normal payload capacity is saturated.
             if (_plannedProducerQueuePriorityV11714 &&
                 _pendingPayloadGuestWorkCount >= _maxPendingGuestWorkItems &&
                 TryTakePlannedProducerQueueHeadV11714(
@@ -5228,6 +5648,320 @@ internal static unsafe partial class VulkanVideoPresenter
             work = default;
             return false;
         }
+    }
+
+    private static bool TryTakeProducerDependencyClosureV76380(
+        out PendingGuestWork work,
+        HashSet<string>? excludedQueues)
+    {
+        static void ResetClosureState()
+        {
+            _producerDependencyClosureQueueV76380 = null;
+            _producerDependencyClosureTargetSubmissionV76380 = 0;
+            _producerDependencyClosureRemainingV76380 = 0;
+            _producerDependencyClosureSyncRemainingV76383 = 0;
+            _producerDependencyClosureActivatedTicksV76381 = 0;
+            _producerDependencyClosureSliceV763161 = 0;
+            _producerDependencyClosureResumeTicksV763161 = 0;
+            _producerDependencyClosureNextProbeV76380 =
+                Stopwatch.GetTimestamp() + _producerDependencyClosureProbeTicksV76380;
+        }
+
+        static void TraceRelease(string reason)
+        {
+            var count = Interlocked.Increment(ref _producerDependencyClosureReleaseCountV76380);
+            if (count <= 64 || (count & (count - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=release count={count} " +
+                    $"queue={_producerDependencyClosureQueueV76380 ?? "-"} " +
+                    $"target_submission={_producerDependencyClosureTargetSubmissionV76380} " +
+                    $"payload_remaining={_producerDependencyClosureRemainingV76380} " +
+                    $"sync_remaining={_producerDependencyClosureSyncRemainingV76383} reason={reason} " +
+                    $"host_only_taken={Volatile.Read(ref _producerDependencyClosureHostOnlyTakeCountV76383)} " +
+                    $"payload_taken={Volatile.Read(ref _producerDependencyClosurePayloadTakeCountV76383)} " +
+                    $"yields={Volatile.Read(ref _producerDependencyClosureYieldCountV76381)} " +
+                    $"completes={Volatile.Read(ref _producerDependencyClosureCompleteCountV76381)} " +
+                    $"payload_budget_exhaust={Volatile.Read(ref _producerDependencyClosureBudgetCountV76381)} " +
+                    $"sync_budget_exhaust={Volatile.Read(ref _producerDependencyClosureSyncBudgetCountV76383)} " +
+                    $"slice={_producerDependencyClosureSliceV763161}/{_producerDependencyClosureMaxSlicesV763161} " +
+                    $"slice_rollovers={Volatile.Read(ref _producerDependencyClosureSliceRolloverCountV763161)} " +
+                    $"slice_yields={Volatile.Read(ref _producerDependencyClosureSliceYieldCountV763161)} " +
+                    $"slice_limits={Volatile.Read(ref _producerDependencyClosureSliceLimitCountV763161)} " +
+                    $"timeouts={Volatile.Read(ref _producerDependencyClosureTimeoutCountV76381)}");
+            }
+
+            ResetClosureState();
+        }
+
+        static void TraceYield(string reason, int watchedRanges)
+        {
+            var count = Interlocked.Increment(ref _producerDependencyClosureYieldCountV76381);
+            if (count <= 128 || (count & (count - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=yield count={count} " +
+                    $"queue={_producerDependencyClosureQueueV76380 ?? "-"} " +
+                    $"target_submission={_producerDependencyClosureTargetSubmissionV76380} " +
+                    $"watched_ranges={watchedRanges} " +
+                    $"payload_remaining={_producerDependencyClosureRemainingV76380} " +
+                    $"sync_remaining={_producerDependencyClosureSyncRemainingV76383} reason={reason}");
+            }
+        }
+
+        static bool TryChargeClosureBudget(object candidateWork, out string exhaustedReason)
+        {
+            exhaustedReason = string.Empty;
+            var semantic = ClassifyGuestWorkV76383(candidateWork);
+            if (semantic == GuestWorkSemanticClassV76383.HostOnlyOrdered)
+            {
+                if (_producerDependencyClosureSyncRemainingV76383 <= 0)
+                {
+                    Interlocked.Increment(ref _producerDependencyClosureSyncBudgetCountV76383);
+                    exhaustedReason = "sync-scan-budget-exhausted";
+                    return false;
+                }
+
+                _producerDependencyClosureSyncRemainingV76383--;
+                Interlocked.Increment(ref _producerDependencyClosureHostOnlyTakeCountV76383);
+                return true;
+            }
+
+            if (_producerDependencyClosureRemainingV76380 <= 0)
+            {
+                Interlocked.Increment(ref _producerDependencyClosureBudgetCountV76381);
+                exhaustedReason = "payload-budget-exhausted";
+                return false;
+            }
+
+            _producerDependencyClosureRemainingV76380--;
+            Interlocked.Increment(ref _producerDependencyClosurePayloadTakeCountV76383);
+            return true;
+        }
+
+        // V76.3.8.3: keep the V76.3.8.1 persistent-yield lifetime, but spend
+        // separate budgets for real GPU/visibility work and cheap host-only sync.
+        // Same-queue FIFO remains exact; no packet is skipped or executed early.
+        if (_producerDependencyClosureQueueV76380 is { } activeQueue)
+        {
+            var nowActive = Stopwatch.GetTimestamp();
+            if (_producerDependencyClosureActivatedTicksV76381 != 0 &&
+                nowActive - _producerDependencyClosureActivatedTicksV76381 >=
+                    _producerDependencyClosureLifetimeTicksV76381)
+            {
+                Interlocked.Increment(ref _producerDependencyClosureTimeoutCountV76381);
+                TraceRelease("lifetime-timeout");
+            }
+            else if (_producerDependencyClosureSlicesV763161 &&
+                     _producerDependencyClosureResumeTicksV763161 != 0 &&
+                     nowActive < _producerDependencyClosureResumeTicksV763161)
+            {
+                // Deliberately let the normal round-robin scheduler make
+                // progress between dependency slices.  The closure remains
+                // armed, so the exact producer queue regains priority as soon
+                // as this short fairness window expires.
+                work = default;
+                return false;
+            }
+            else if (!SharpEmu.Libs.Agc.AgcExports.HasLivePlannedWaitProducerV11714(
+                         activeQueue,
+                         _producerDependencyClosureTargetSubmissionV76380,
+                         out var activeWatchedRanges))
+            {
+                Interlocked.Increment(ref _producerDependencyClosureCompleteCountV76381);
+                TraceRelease("target-materialized-or-wait-cleared");
+            }
+            else if (excludedQueues?.Contains(activeQueue) == true)
+            {
+                TraceYield("queue-excluded-this-cycle", activeWatchedRanges);
+                work = default;
+                return false;
+            }
+            else if (!_pendingGuestWorkByQueue.TryGetValue(activeQueue, out var activePending) ||
+                     activePending.First is not { } activeHead)
+            {
+                TraceYield("queue-temporarily-empty", activeWatchedRanges);
+                work = default;
+                return false;
+            }
+            else if (activeHead.Value.Queue.SubmissionId >
+                     _producerDependencyClosureTargetSubmissionV76380)
+            {
+                Interlocked.Increment(ref _producerDependencyClosureCompleteCountV76381);
+                TraceRelease("target-submission-passed");
+            }
+            else if (!IsGuestWorkCompletedLocked(activeHead.Value.RequiredSequence))
+            {
+                TraceYield("required-sequence-pending", activeWatchedRanges);
+                work = default;
+                return false;
+            }
+            else if (activeHead.Value.Work is VulkanOrderedGuestFlip or VulkanOrderedGuestFlipWait)
+            {
+                TraceYield("flip-boundary", activeWatchedRanges);
+                work = default;
+                return false;
+            }
+            else if (!TryChargeClosureBudget(activeHead.Value.Work, out var budgetReason))
+            {
+                if (_producerDependencyClosureSlicesV763161 &&
+                    string.Equals(
+                        budgetReason,
+                        "payload-budget-exhausted",
+                        StringComparison.Ordinal) &&
+                    _producerDependencyClosureSliceV763161 <
+                        _producerDependencyClosureMaxSlicesV763161)
+                {
+                    _producerDependencyClosureSliceV763161++;
+                    _producerDependencyClosureRemainingV76380 =
+                        _producerDependencyClosureMaxItemsV76380;
+                    _producerDependencyClosureResumeTicksV763161 =
+                        nowActive +
+                        _producerDependencyClosureSlicePauseTicksV763161;
+                    Interlocked.Increment(
+                        ref _producerDependencyClosureSliceRolloverCountV763161);
+                    Interlocked.Increment(
+                        ref _producerDependencyClosureSliceYieldCountV763161);
+                    TraceYield(
+                        "payload-slice-rollover",
+                        activeWatchedRanges);
+                    work = default;
+                    return false;
+                }
+
+                if (_producerDependencyClosureSlicesV763161 &&
+                    string.Equals(
+                        budgetReason,
+                        "payload-budget-exhausted",
+                        StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(
+                        ref _producerDependencyClosureSliceLimitCountV763161);
+                    TraceRelease("payload-slice-limit");
+                }
+                else
+                {
+                    TraceRelease(budgetReason);
+                }
+            }
+            else
+            {
+                work = activeHead.Value;
+                RemoveTakenGuestWorkLocked(activeQueue, activePending, advanceScheduleCursor: false);
+                var take = Interlocked.Increment(ref _producerDependencyClosureTakeCountV76380);
+                if (take <= 128 || (take & (take - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=take count={take} " +
+                        $"queue={activeQueue} submission={work.Queue.SubmissionId} " +
+                        $"target_submission={_producerDependencyClosureTargetSubmissionV76380} " +
+                        $"watched_ranges={activeWatchedRanges} " +
+                        $"semantic={ClassifyGuestWorkV76383(work.Work)} " +
+                        $"payload_remaining={_producerDependencyClosureRemainingV76380} " +
+                        $"sync_remaining={_producerDependencyClosureSyncRemainingV76383} " +
+                        $"work={work.Work.GetType().Name}");
+                }
+                return true;
+            }
+        }
+
+        if (SharpEmu.Libs.Agc.GpuWaitRegistry.Count == 0)
+        {
+            work = default;
+            return false;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        if (now < _producerDependencyClosureNextProbeV76380)
+        {
+            work = default;
+            return false;
+        }
+        _producerDependencyClosureNextProbeV76380 = now + _producerDependencyClosureProbeTicksV76380;
+
+        string? bestQueue = null;
+        ulong bestSubmission = 0;
+        int bestWatched = 0;
+        double bestAgeMs = 0;
+        for (var index = 0; index < _pendingGuestQueueSchedule.Count; index++)
+        {
+            var queueName = _pendingGuestQueueSchedule[index];
+            if (excludedQueues?.Contains(queueName) == true ||
+                !_pendingGuestWorkByQueue.TryGetValue(queueName, out var queue) ||
+                queue.First is not { } head ||
+                !IsGuestWorkCompletedLocked(head.Value.RequiredSequence) ||
+                head.Value.Work is VulkanOrderedGuestFlip or VulkanOrderedGuestFlipWait)
+            {
+                continue;
+            }
+
+            if (!SharpEmu.Libs.Agc.AgcExports.TryGetAgedLivePlannedWaitProducerV76380(
+                    queueName,
+                    _producerDependencyClosureAgeTicksV76380,
+                    out var targetSubmission,
+                    out var watchedRanges,
+                    out var ageMs) ||
+                targetSubmission == 0 ||
+                head.Value.Queue.SubmissionId > targetSubmission ||
+                ageMs <= bestAgeMs)
+            {
+                continue;
+            }
+
+            bestQueue = queueName;
+            bestSubmission = targetSubmission;
+            bestWatched = watchedRanges;
+            bestAgeMs = ageMs;
+        }
+
+        if (bestQueue is null ||
+            !_pendingGuestWorkByQueue.TryGetValue(bestQueue, out var selectedQueue) ||
+            selectedQueue.First is not { } selectedHead)
+        {
+            work = default;
+            return false;
+        }
+
+        _producerDependencyClosureQueueV76380 = bestQueue;
+        _producerDependencyClosureTargetSubmissionV76380 = bestSubmission;
+        _producerDependencyClosureRemainingV76380 = _producerDependencyClosureMaxItemsV76380;
+        _producerDependencyClosureSyncRemainingV76383 = _producerDependencyClosureSyncScanCapV76383;
+        _producerDependencyClosureActivatedTicksV76381 = now;
+        _producerDependencyClosureSliceV763161 = 1;
+        _producerDependencyClosureResumeTicksV763161 = 0;
+        var activation = Interlocked.Increment(ref _producerDependencyClosureActivateCountV76380);
+        Console.Error.WriteLine(
+            $"[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count={activation} " +
+            $"queue={bestQueue} head_submission={selectedHead.Value.Queue.SubmissionId} " +
+            $"target_submission={bestSubmission} watched_ranges={bestWatched} age_ms={bestAgeMs:F3} " +
+            $"payload_budget={_producerDependencyClosureMaxItemsV76380} " +
+            $"sync_budget={_producerDependencyClosureSyncScanCapV76383} " +
+            $"sliced={(_producerDependencyClosureSlicesV763161 ? 1 : 0)} " +
+            $"max_slices={_producerDependencyClosureMaxSlicesV763161} " +
+            $"slice_pause_us={_producerDependencyClosureSlicePauseTicksV763161 * 1_000_000L / Stopwatch.Frequency}");
+
+        if (!TryChargeClosureBudget(selectedHead.Value.Work, out var initialBudgetReason))
+        {
+            TraceRelease(initialBudgetReason);
+            work = default;
+            return false;
+        }
+
+        work = selectedHead.Value;
+        RemoveTakenGuestWorkLocked(bestQueue, selectedQueue, advanceScheduleCursor: false);
+        var initialTake = Interlocked.Increment(ref _producerDependencyClosureTakeCountV76380);
+        if (initialTake <= 128 || (initialTake & (initialTake - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=take count={initialTake} " +
+                $"queue={bestQueue} submission={work.Queue.SubmissionId} " +
+                $"target_submission={bestSubmission} watched_ranges={bestWatched} " +
+                $"semantic={ClassifyGuestWorkV76383(work.Work)} " +
+                $"payload_remaining={_producerDependencyClosureRemainingV76380} " +
+                $"sync_remaining={_producerDependencyClosureSyncRemainingV76383} " +
+                $"work={work.Work.GetType().Name}");
+        }
+        return true;
     }
 
     private static bool TryTakePlannedProducerQueueHeadV11714(
@@ -6241,6 +6975,54 @@ internal static unsafe partial class VulkanVideoPresenter
         private static long _v7405617ComputeSharedBatchTraceCount;
         private static long _v7405617DisabledAcquireNoFlushTraceCount;
 
+        // SHARPEMU_V76_3_8_0_ORDERED_ACTION_MICROBATCH
+        // Collapse only adjacent host-only EVENT_WRITE and disabled ACQUIRE_MEM
+        // actions from the same logical queue/submission.  RELEASE_MEM/EOP,
+        // GPU->CPU visibility, global visibility and producer-bearing actions are
+        // intentionally excluded.  Order and individual completion sequences are
+        // preserved; this removes scheduler objects, not guest semantics.
+        private static readonly bool _orderedActionMicrobatchV76380 =
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_ORDERED_ACTION_MICROBATCH"),
+                "0",
+                StringComparison.Ordinal);
+        private static readonly int _orderedActionMicrobatchMaxV76380 =
+            Math.Clamp(
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("SHARPEMU_ORDERED_ACTION_MICROBATCH_MAX"),
+                    out var orderedMicrobatchMaxV76380) && orderedMicrobatchMaxV76380 > 1
+                    ? orderedMicrobatchMaxV76380
+                    : 32,
+                2,
+                64);
+        private static long _orderedActionMicrobatchBatchCountV76380;
+        private static long _orderedActionMicrobatchActionCountV76380;
+        private static long _orderedActionMicrobatchEventCountV76380;
+        private static long _orderedActionMicrobatchAcquireCountV76380;
+
+        // SHARPEMU_V76_3_8_3_DRAW_COMMAND_BUFFER
+        // Drain a short run of consecutive draws from the same logical guest
+        // queue/submission while the existing Vulkan payload command buffer is
+        // open. This is a host scheduling buffer, not draw reordering: each draw
+        // must be the queue HEAD and its RequiredSequence must already be
+        // satisfied (or be the immediately preceding buffered draw).
+        private static readonly bool _drawCommandBufferV76383 =
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_DRAW_COMMAND_BUFFER"),
+                "0",
+                StringComparison.Ordinal);
+        private static readonly int _drawCommandBufferMaxV76383 =
+            Math.Clamp(
+                int.TryParse(
+                    Environment.GetEnvironmentVariable("SHARPEMU_DRAW_COMMAND_BUFFER_MAX"),
+                    out var drawCommandBufferMaxV76383) && drawCommandBufferMaxV76383 > 1
+                    ? drawCommandBufferMaxV76383
+                    : 8,
+                2,
+                32);
+        private static long _drawCommandBufferBatchCountV76383;
+        private static long _drawCommandBufferDrawCountV76383;
+
         // SHARPEMU_V74_0_56_20_PAYLOAD_BATCH_FLUSH_FIX
         // V56.17 added an 8-command draw/compute batch, but RenderCore still
         // flushed that batch unconditionally before every draw and compute.
@@ -6779,6 +7561,21 @@ internal static unsafe partial class VulkanVideoPresenter
                 Environment.GetEnvironmentVariable("SHARPEMU_DISJOINT_COMPUTE_PAIR2"),
                 "1",
                 StringComparison.Ordinal);
+        // V76.3.17.1_BOUNDED_COMPUTE_CHAIN
+        // Preserve V117.7's exact adjacent-edge resource/hazard proof while
+        // allowing more than one approved pair in one physical command buffer.
+        // Default=2 preserves the historical behavior.
+        private static readonly int _computeChainMaxV763171 =
+            Math.Clamp(
+                int.TryParse(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_COMPUTE_CHAIN_MAX_V763171"),
+                    out var computeChainMaxV763171)
+                    ? computeChainMaxV763171
+                    : 2,
+                2,
+                8);
+        private static long _v763171ComputeChainExtendedCount;
         private static long _v7401177PairAccepted;
         private static long _v7401177PairActuallyShared;
         private static long _v7401177PairResourceSetupSplit;
@@ -6789,12 +7586,33 @@ internal static unsafe partial class VulkanVideoPresenter
         private static long _v7401177RejectedMetadata;
         private static long _v7401177RejectedControl;
 
+        // V76.3.5: a true buffer/image write overlap between two direct
+        // compute dispatches does not require a host submit boundary when both
+        // dispatches stay on the same VkQueue and no host/global/metadata/
+        // control visibility seam is involved. V117.7 already records a full
+        // ALL_COMMANDS memory dependency at every accepted pair edge. Opt in
+        // only for Demon's Souls through the title envelope and keep the hard
+        // two-compute ceiling imposed by the V117.7 pair path.
+        private static readonly bool _barrieredWriteOverlapPairV7635 =
+            string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_COMPUTE_WRITE_OVERLAP_PAIR_BARRIER"),
+                "1",
+                StringComparison.Ordinal);
+        private static long _v7635BarrieredWriteOverlapPairAccepted;
+        private static long _v7635BarrieredWriteOverlapPairTraceCount;
+
         // V76.0.1 guest Bink strict GPU correctness. The title's native Bink2
         // decoder creates its own compute/storage-image chain. While a .bk2 is
         // open, do not coalesce those dispatches with graphics or another
         // compute payload; preserve one conservative Vulkan submit boundary per
         // guest compute dispatch until the Y/UV path is proven coherent.
         private readonly HashSet<ulong> _v7601GuestBinkComputeShaders = new();
+        private static readonly bool _binkProvenComputePairV76383 =
+            string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_PROVEN_COMPUTE_PAIR2"),
+                "1",
+                StringComparison.Ordinal);
         private long _v7601GuestBinkStrictComputeCount;
         private long _v7601GuestBinkTypedYuvSampleCount;
         private long _v7601GuestBinkTypedYuvStorageCount;
@@ -6871,9 +7689,23 @@ internal static unsafe partial class VulkanVideoPresenter
             }
 
             var overlap = AnalyzeComputeResourceOverlapV7401176(previous, current);
-            if (overlap.BufferRaw || overlap.BufferWar || overlap.BufferWaw ||
-                overlap.ImageRaw || overlap.ImageWar || overlap.ImageWaw)
+            var hasWriteOverlapV7635 =
+                overlap.BufferRaw || overlap.BufferWar || overlap.BufferWaw ||
+                overlap.ImageRaw || overlap.ImageWar || overlap.ImageWaw;
+            if (hasWriteOverlapV7635)
             {
+                // All host/global/metadata/control hazards were rejected above.
+                // The caller records RecordComputeBatchDependencyV74099 before
+                // the second dispatch, so RAW/WAR/WAW remains ordered entirely
+                // on-device without forcing vkEnd/vkQueueSubmit between the pair.
+                if (_barrieredWriteOverlapPairV7635)
+                {
+                    reason = "write-overlap-barrier";
+                    Interlocked.Increment(
+                        ref _v7635BarrieredWriteOverlapPairAccepted);
+                    return true;
+                }
+
                 reason = "write-overlap";
                 Interlocked.Increment(ref _v7401177RejectedOverlap);
                 return false;
@@ -6895,6 +7727,7 @@ internal static unsafe partial class VulkanVideoPresenter
                 $"reject_host_visibility={Volatile.Read(ref _v7401177RejectedHostVisibility)} " +
                 $"reject_global_write={Volatile.Read(ref _v7401177RejectedWriteGlobal)} " +
                 $"reject_overlap={Volatile.Read(ref _v7401177RejectedOverlap)} " +
+                $"barrier_overlap={Volatile.Read(ref _v7635BarrieredWriteOverlapPairAccepted)} " +
                 $"reject_metadata={Volatile.Read(ref _v7401177RejectedMetadata)} " +
                 $"reject_control={Volatile.Read(ref _v7401177RejectedControl)}");
         }
@@ -7115,6 +7948,8 @@ internal static unsafe partial class VulkanVideoPresenter
                 "1",
                 StringComparison.Ordinal);
         private static long _v74051GlobalRefreshDeferTraceCount;
+        // V76.3.21.2_GLOBAL_SNAPSHOT_BOUNDS
+        private static long _v763212PartialGlobalSnapshotCount;
 
         // [V74.0.53][TARGET_COMPUTE_SEMANTICS]
         // Diagnostic only. The repeated 0x8027E8500 dispatch chain is now the
@@ -7165,6 +8000,16 @@ internal static unsafe partial class VulkanVideoPresenter
         private string? _pipelineCachePath;
         private bool _pipelineCacheDirty;
         private long _lastPipelineCacheSaveTick;
+        // V76.3.1: exporting a large driver pipeline cache can serialize the
+        // compiler and write tens of MiB synchronously. Keep persistence but
+        // make the periodic interval configurable; shutdown still forces save.
+        private static readonly long _pipelineCacheSaveIntervalMsV7631 =
+            Math.Clamp(
+                (long)ReadPositiveEnvironmentInt(
+                    "SHARPEMU_VK_PIPELINE_CACHE_SAVE_INTERVAL_S",
+                    300) * 1000L,
+                30_000L,
+                3_600_000L);
         private Queue _queue;
         private uint _queueFamilyIndex;
 
@@ -7241,7 +8086,19 @@ internal static unsafe partial class VulkanVideoPresenter
         // strictly additive. Render-finished semaphores are per swapchain
         // image because the presentation engine may still wait on them after
         // the frame fence has signaled.
-        private const int MaxFramesInFlight = 2;
+        // V76.3.21.0_FRAMES_IN_FLIGHT
+        // Increase host CPU/GPU overlap without removing the existing
+        // per-slot fence/timeline reuse contract.
+        private static readonly int MaxFramesInFlight =
+            Math.Clamp(
+                int.TryParse(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_VK_FRAMES_IN_FLIGHT_V763210"),
+                    out var framesInFlightV763210)
+                    ? framesInFlightV763210
+                    : 2,
+                2,
+                4);
         private CommandBuffer[] _frameCommandBuffers = [];
         private VkSemaphore[] _frameImageAvailable = [];
         private VkSemaphore[] _renderFinishedPerImage = [];
@@ -7270,8 +8127,14 @@ internal static unsafe partial class VulkanVideoPresenter
         private readonly Stack<CommandBuffer> _recycledGuestCommandBuffers = new();
         private readonly List<(VkBuffer Buffer, DeviceMemory Memory)> _batchRetireBuffers = new();
         private readonly List<VulkanDetilePass.Transients> _batchRetireDetile = new();
-        private const int MaxRecycledGuestFences = 32;
-        private const int MaxRecycledGuestCommandBuffers = 32;
+        private const int MaxRecycledGuestFences = 256;
+        // V76.3.18.0_RPCS3_INSPIRED_ASYNC_CB_POOL
+        // Reuse a deeper pool of primary guest command buffers. This is a host
+        // resource-lifetime optimization only: it does not create extra guest
+        // queues or change FIFO/hazard semantics.
+        private const int MaxRecycledGuestCommandBuffers = 256;
+        // V76.3.18.5_ADAPTIVE_FULL_PERFORMANCE_MERGE
+        // Deep recycled CB/fence pools; queue/timeline semantics unchanged.
         private VkBuffer _stagingBuffer;
         private DeviceMemory _stagingMemory;
         private ulong _stagingSize;
@@ -7671,6 +8534,31 @@ internal static unsafe partial class VulkanVideoPresenter
         private static long _v1190RebarGlobalFallbackCount;
         private static long _v1190RebarSupportProbeCount;
 
+        // SHARPEMU_V76_3_3_RUNTIME_SCALAR_DIRECT
+        // Every non-baked draw contributes two ~1 KiB runtime scalar SSBOs
+        // (VS+PS) and every compute dispatch contributes one. The legacy
+        // DEVICE_LOCAL path built a HOST staging buffer + DEVICE buffer +
+        // CmdCopyBuffer + transfer barrier for each tiny immutable block. On a
+        // discrete ReBAR-capable GPU, write the scalar block directly into a
+        // pooled mapped storage buffer. If BAR allocation is unavailable, keep
+        // the same zero-copy host-visible storage fallback: 1-2 KiB of shader
+        // reads is far cheaper than another Vulkan allocation/copy/barrier.
+        private static readonly bool _runtimeScalarDirectV7633 =
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_RUNTIME_SCALAR_DIRECT_V7633"),
+                "0",
+                StringComparison.Ordinal);
+        private static readonly int _runtimeScalarDirectMaximumBytesV7633 =
+            ReadPositiveEnvironmentInt(
+                "SHARPEMU_RUNTIME_SCALAR_DIRECT_MAX_KB_V7633",
+                8) * 1024;
+        private static long _v7633RuntimeScalarDirectCount;
+        private static long _v7633RuntimeScalarDirectBytes;
+        private static long _v7633RuntimeScalarRebarCount;
+        private static long _v7633RuntimeScalarHostCount;
+        private static long _v7633RuntimeScalarFallbackCount;
+
         // 0 = unknown, 1 = a compatible BAR memory type was observed,
         // -1 = this device does not expose one for shader storage buffers.
         private int _rebarGlobalSupportStateV11901;
@@ -7737,15 +8625,103 @@ internal static unsafe partial class VulkanVideoPresenter
                     "SHARPEMU_SHADER_GLOBAL_RESIDENCY"),
                 "1",
                 StringComparison.Ordinal);
-        private const int V11713MaximumResidentEntries = 128;
+        // V76.3.3: V76.3.2 proved that a 1024-entry / 512 MiB resident set
+        // is counterproductive on the RTX 5060 Ti path: resident globals kept
+        // dedicated Vulkan allocations alive until shutdown and starved the
+        // much hotter transient ReBAR pool (36k+ BAR allocation fallbacks).
+        // Keep only a true hot set. Resident buffers below are also forced to
+        // ordinary DEVICE_LOCAL memory after one staging upload, so residency
+        // cannot pin scarce HOST_VISIBLE|DEVICE_LOCAL BAR allocations.
+        private static readonly int V11713MaximumResidentEntries =
+            Math.Clamp(
+                ReadPositiveEnvironmentInt(
+                    "SHARPEMU_SHADER_GLOBAL_RESIDENCY_MAX_ENTRIES",
+                    256),
+                64,
+                2048);
         private static readonly ulong V11713MaximumResidentBytes =
             (ulong)ReadPositiveEnvironmentInt(
                 "SHARPEMU_SHADER_GLOBAL_RESIDENCY_MB",
-                512) * 1024UL * 1024UL;
+                128) * 1024UL * 1024UL;
+        // V76.3.1: do not page-protect/cache one-off or tiny globals. The
+        // V76.3.0 trace averaged hundreds of KiB per global upload, so a 64KiB
+        // floor retains the high-byte-value candidates while reducing tracking
+        // overhead. A second observation is required before tracking starts.
+        private static readonly int _shaderGlobalResidencyMinimumBytesV7631 =
+            ReadPositiveEnvironmentInt(
+                "SHARPEMU_SHADER_GLOBAL_RESIDENCY_MIN_KB",
+                64) * 1024;
+        private static readonly bool _shaderGlobalResidencyHotAdmissionV7631 =
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_SHADER_GLOBAL_RESIDENCY_HOT_ADMIT"),
+                "0",
+                StringComparison.Ordinal);
+        // V76.3.3: the V76.3.2 second-touch admission created 1024 resident
+        // buffers but produced only 578 later hits. Require repeated reuse
+        // before spending a persistent Vulkan allocation.
+        private static readonly int _shaderGlobalResidencyAdmissionObservationsV7633 =
+            Math.Clamp(
+                ReadPositiveEnvironmentInt(
+                    "SHARPEMU_SHADER_GLOBAL_RESIDENCY_ADMIT_OBSERVATIONS",
+                    4),
+                2,
+                16);
+        private static readonly long _shaderGlobalResidencyRebarPauseFallbacksV7633 =
+            Math.Clamp(
+                ReadPositiveEnvironmentInt(
+                    "SHARPEMU_SHADER_GLOBAL_RESIDENCY_REBAR_PAUSE_FALLBACKS",
+                    32),
+                1,
+                4096);
+        // V76.3.6: high-byte globals are the dominant copy cost. Resident
+        // buffers no longer consume ReBAR (V76.3.3), so admit repeatedly-used
+        // large immutable ranges sooner while keeping small buffers on the
+        // conservative configured threshold. Write-generation validation is
+        // unchanged and any observed write still disables that base.
+        private static readonly int _shaderGlobalResidencyLargeBytesV7636 =
+            ReadPositiveEnvironmentInt(
+                "SHARPEMU_SHADER_GLOBAL_RESIDENCY_LARGE_KB",
+                1024) * 1024;
+        private static readonly int _shaderGlobalResidencyLargeObservationsV7636 =
+            Math.Clamp(
+                ReadPositiveEnvironmentInt(
+                    "SHARPEMU_SHADER_GLOBAL_RESIDENCY_LARGE_ADMIT_OBSERVATIONS",
+                    2),
+                2,
+                8);
+        private static readonly int _shaderGlobalResidencyMediumBytesV7636 =
+            ReadPositiveEnvironmentInt(
+                "SHARPEMU_SHADER_GLOBAL_RESIDENCY_MEDIUM_KB",
+                256) * 1024;
+        private static readonly int _shaderGlobalResidencyMediumObservationsV7636 =
+            Math.Clamp(
+                ReadPositiveEnvironmentInt(
+                    "SHARPEMU_SHADER_GLOBAL_RESIDENCY_MEDIUM_ADMIT_OBSERVATIONS",
+                    3),
+                2,
+                8);
+        private const int V7631MaximumResidencyCandidates = 8192;
         private readonly Dictionary<
             ResidentReadOnlyGlobalKeyV11713,
             ResidentReadOnlyGlobalBackingV11713>
             _residentReadOnlyGlobalsV11713 = [];
+
+        // V76.3.7.5: admission is trained against a tiny live-memory
+        // fingerprint before allocating or page-tracking a persistent buffer.
+        // This filters high-churn globals that looked "hot" only because their
+        // address/shape was reused for different contents.
+        private readonly record struct ResidentAdmissionCandidateV76375(
+            byte Observations,
+            ulong Fingerprint);
+        private readonly Dictionary<
+            ResidentReadOnlyGlobalShapeV7631,
+            ResidentAdmissionCandidateV76375>
+            _residentReadOnlyGlobalCandidatesV7631 = [];
+        private bool _residentAdmissionPausedV7633;
+        private static long _v7633ResidentAdmissionPauseTraceCount;
+        private readonly Dictionary<ulong, long>
+            _residentCachedGenerationByBaseV7631 = [];
         private readonly Dictionary<ulong, int>
             _residentTrackedLengthByBaseV11713 = [];
         private readonly HashSet<ulong>
@@ -7759,6 +8735,9 @@ internal static unsafe partial class VulkanVideoPresenter
         private static long _v11713ResidentBudgetFallbacks;
         private static long _v11713ResidentSavedReadBytes;
         private static long _v11713ResidentCreatedBytes;
+        private static long _v76375ResidentCandidateStableObservations;
+        private static long _v76375ResidentCandidateContentChanges;
+        private static long _v76375ResidentCandidateProbeFailures;
 
         private readonly List<GuestBufferAllocation> _guestBufferAllocations = [];
         // V24: writable guest allocations are duplicated in mapped host memory
@@ -8063,7 +9042,23 @@ internal static unsafe partial class VulkanVideoPresenter
             // until this translated draw/compute resource retires.
             public TextureResource? SamplerAliasBackingV74073;
             public int SamplerAliasBorrowCountV74073;
+            // V76.3.7.5: a storage alias with a different DstSelect owns only
+            // its transient VkImageView. Image/memory lifetime stays with the
+            // pinned canonical cache resource.
+            public bool OwnsAliasViewV76375;
+            // V76.3.8.2: this standalone VkImage came from deferred tiled guest
+            // bytes whose storage identity + sparse content fingerprint matched
+            // on a later independent cache miss. GPU render/storage aliases are
+            // still resolved before this cache path; preserving this fallback
+            // merely avoids recreating the same unchanged CPU detile.
+            public bool DetileStableResidencyV76382;
         }
+
+        private readonly record struct ResidentReadOnlyGlobalShapeV7631(
+            ulong BaseAddress,
+            int GuestLength,
+            ulong ByteBias,
+            ulong GuestSize);
 
         private readonly record struct ResidentReadOnlyGlobalKeyV11713(
             ulong BaseAddress,
@@ -8077,9 +9072,11 @@ internal static unsafe partial class VulkanVideoPresenter
             public required ResidentReadOnlyGlobalKeyV11713 Key;
             public required VkBuffer Buffer;
             public required DeviceMemory Memory;
+            public nint Mapped;
             public VkBuffer UploadBuffer;
             public DeviceMemory UploadMemory;
             public bool NeedsUpload;
+            public bool DeviceLocal;
             public ulong DescriptorSize;
             public ulong GuestOffset;
             public ulong GuestSize;
@@ -8116,6 +9113,8 @@ internal static unsafe partial class VulkanVideoPresenter
             public DeviceMemory Memory;
             public bool OwnsBuffer;
             public ulong Size;
+            // V76.0.26: real guest VA used by cross-queue range hazards.
+            public ulong GuestAddress;
             public uint Location;
             public uint ComponentCount;
             public uint DataFormat;
@@ -8505,8 +9504,117 @@ internal static unsafe partial class VulkanVideoPresenter
             long SubmittedTimestampV74049,
             int PendingBeforeSubmitV74049);
 
+        // V76.3.4: RELEASE_MEM/EOP is a GPU queue-order point, not a reason for
+        // the host parser to stop feeding the same VkQueue until the previous
+        // fence signals.  Keep the CPU-visible label side effect attached to
+        // that exact timeline and retire it only after Vulkan reports the
+        // timeline complete.  Subsequent guest commands may still be submitted
+        // because the physical VkQueue preserves their order after the EOP.
+        private sealed record DeferredQueueCompletionActionV7634(
+            PendingGuestWork Pending,
+            VulkanOrderedGuestAction Work);
+
+        private readonly SortedDictionary<ulong, List<DeferredQueueCompletionActionV7634>>
+            _deferredQueueCompletionActionsV7634 = new();
+
+        private static readonly bool _deferReleaseQueueCompletionV7634 =
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_DEFER_RELEASE_QUEUE_COMPLETION"),
+                "0",
+                StringComparison.Ordinal);
+        private static long _v7634DeferredReleaseScheduled;
+        private static long _v7634DeferredReleaseCompleted;
+        private static long _v7634DeferredReleaseImmediate;
+        private static int _v7634DeferredReleaseMarker;
+        private static int _v7638022PackageMarker;
+        private static int _v76380CriticalPathMarker;
+        private static int _v76381CriticalPathMarker;
+        private static int _v76382DetileStableResidencyMarker;
+        private static int _v76383SemanticFlowMarker;
+
         public Presenter(uint width, uint height)
         {
+            if (Interlocked.CompareExchange(ref _v7634DeferredReleaseMarker, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.4][QUEUE_RELEASE_PIPELINE] " +
+                    $"deferred_release_eop={(_deferReleaseQueueCompletionV7634 ? 1 : 0)} " +
+                    "timeline_callback=1 same_vkqueue_feed_through=1 " +
+                    "cpu_label_visibility=on-fence-retire");
+            }
+
+            if (Interlocked.CompareExchange(ref _v76380CriticalPathMarker, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.8.0][GPU_CRITICAL_PATH] " +
+                    $"producer_dependency_closure={(_producerDependencyClosureV76380 ? 1 : 0)} " +
+                    $"closure_age_ms={_producerDependencyClosureAgeMsV76380} " +
+                    $"closure_items={_producerDependencyClosureMaxItemsV76380} " +
+                    $"ordered_microbatch={(_orderedActionMicrobatchV76380 ? 1 : 0)} " +
+                    $"ordered_microbatch_max={_orderedActionMicrobatchMaxV76380} " +
+                    "detile_generation_residency=0 " +
+                    "queue_capacity_unchanged=1 bink_policy=preserved");
+            }
+
+            if (Interlocked.CompareExchange(ref _v7638022PackageMarker, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.8.0.2.2][PRODUCER_CLOSURE_CURRENT_STATE_REBASE] " +
+                    $"enabled={(_producerDependencyClosureV76380 ? 1 : 0)} " +
+                    $"age_ms={_producerDependencyClosureAgeMsV76380} " +
+                    $"max_items={_producerDependencyClosureMaxItemsV76380} " +
+                    "same_queue_fifo=1 source_preserved=1 ordered_microbatch=diagnostic-off " +
+                    "detile_generation_residency=diagnostic-off bink_policy=preserved " +
+                    "waits=unchanged barriers=unchanged hazards=unchanged");
+            }
+
+            if (Interlocked.CompareExchange(ref _v76381CriticalPathMarker, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.8.1][GPU_CRITICAL_PATH_RECOVERY] " +
+                    "producer_closure=persistent-yield " +
+                    $"closure_lifetime_ms={_producerDependencyClosureLifetimeTicksV76381 * 1000L / Stopwatch.Frequency} " +
+                    "event_microbatch=host-event-first " +
+                    $"event_microbatch_max={_orderedActionMicrobatchMaxV76380} " +
+                    $"detile_probe_audit={(_detileProbeResidencyAuditV76381 ? 1 : 0)} " +
+                    "detile_reuse=off-until-proof queue_capacity_unchanged=1 " +
+                    "release_eop_unchanged=1 bink_policy=preserved");
+            }
+
+            if (Interlocked.CompareExchange(ref _v76382DetileStableResidencyMarker, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.8.2][DETILE_STABLE_RESIDENCY] " +
+                    "active=1 admission=one-independent-repeat " +
+                    "coherence=exact-storage+sparse-content-probe " +
+                    "preserve_on=render-target/storage-destination " +
+                    "gpu_alias_precedence=1 queue_policy=unchanged " +
+                    "producer_closure=v76381 event_microbatch=v76381 bink_policy=preserved");
+            }
+
+            if (Interlocked.CompareExchange(ref _v76383SemanticFlowMarker, 1, 0) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.8.3][SEMANTIC_GPU_FLOW] " +
+                    "classes=host-only/gpu-payload/gpu-ordered/cpu-visibility/presentation " +
+                    $"weighted_closure=1 payload_budget={_producerDependencyClosureMaxItemsV76380} " +
+                    $"sync_scan={_producerDependencyClosureSyncScanCapV76383} " +
+                    $"draw_command_buffer={(_drawCommandBufferV76383 ? 1 : 0)} " +
+                    $"draw_buffer_max={_drawCommandBufferMaxV76383} " +
+                    "same_queue_fifo=1 required_sequence=preserved release_eop=preserved " +
+                    "detile_stable=v76382 queue_capacity=unchanged bink_policy=preserved");
+            }
+
+            Console.Error.WriteLine(
+                "[V76.3.16.1][DEPENDENCY_DRIVEN_FIFO] " +
+                $"producer_slices={(_producerDependencyClosureSlicesV763161 ? 1 : 0)} " +
+                $"slice_payload={_producerDependencyClosureMaxItemsV76380} " +
+                $"max_slices={_producerDependencyClosureMaxSlicesV763161} " +
+                $"slice_pause_us={_producerDependencyClosureSlicePauseTicksV763161 * 1_000_000L / Stopwatch.Frequency} " +
+                "same_queue_fifo=1 sibling_fairness=between-slices " +
+                "wait_values=unchanged boundaries=unchanged acquire_noop_fast=0");
+
             _hostBufferPool = new VulkanHostBufferPool(
                 MaximumCachedHostBufferBytes,
                 DestroyHostBufferAllocation);
@@ -9242,7 +10350,19 @@ internal static unsafe partial class VulkanVideoPresenter
         {
             // V76.0.15: make the already-existing second queue the normal path
             // on Vulkan desktops. Explicit 0 keeps the old single-queue A/B.
+            // V76.3.18.0_RPCS3_INSPIRED_QUEUE_CAPABILITY
+            // The title profile requests real graphics/compute overlap, but the
+            // device remains authoritative. A dedicated recovery switch forces
+            // the legacy single-queue path without undoing the merged profile.
+            var forceSingleQueueV763180 =
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "SHARPEMU_V763180_FORCE_SINGLE"),
+                    "1",
+                    StringComparison.Ordinal);
+
             _dualPhysicalQueueRequestedV1131 =
+                !forceSingleQueueV763180 &&
                 !OperatingSystem.IsMacOS() &&
                 !string.Equals(
                     Environment.GetEnvironmentVariable("SHARPEMU_DUAL_PHYSICAL_QUEUE"),
@@ -9309,6 +10429,16 @@ internal static unsafe partial class VulkanVideoPresenter
                 $"timeline={(timelineSupportedV1131 ? 1 : 0)} " +
                 $"enabled={(_dualPhysicalQueueEnabledV1131 ? 1 : 0)} " +
                 "sync=conservative-lane-switch");
+            Console.Error.WriteLine(
+                $"[V76.3.18.0][QUEUE_ARCHITECTURE] " +
+                $"mode={(_dualPhysicalQueueEnabledV1131 ? "dual-resource-safe" : "single-safe")} " +
+                $"requested={(_dualPhysicalQueueRequestedV1131 ? 1 : 0)} " +
+                $"force_single={(forceSingleQueueV763180 ? 1 : 0)} " +
+                $"family={_queueFamilyIndex} queues={selectedFamilyQueueCountV1131} " +
+                $"compute={(selectedFamilyHasComputeV1131 ? 1 : 0)} " +
+                $"timeline={(timelineSupportedV1131 ? 1 : 0)} " +
+                $"cb_pool={MaxRecycledGuestCommandBuffers} " +
+                "sync=timeline+resource-range fallback=single-safe");
 
             _vk.GetPhysicalDeviceFeatures(_physicalDevice, out var supportedFeatures);
             _supportsIndependentBlend = supportedFeatures.IndependentBlend;
@@ -9507,7 +10637,13 @@ internal static unsafe partial class VulkanVideoPresenter
                 Console.Error.WriteLine(
                     $"[V74.0.113.1][DUAL_PHYSICAL_QUEUE_READY] " +
                     $"family={_queueFamilyIndex} graphics_index=0 compute_index=1 " +
-                    "explicit_sync=timeline lane_switch_order=conservative");
+                    $"explicit_sync=timeline lane_order={(_resourceAwareDualQueueV7615 && _resourceScopedDualQueueV76383 ? "resource-hazard" : "conservative")}");
+                Console.Error.WriteLine(
+                    "[V76.3.8.3][DUAL_QUEUE_POLICY] " +
+                    $"mode={(_resourceAwareDualQueueV7615 && _resourceScopedDualQueueV76383 ? "resource-scoped" : "conservative")} " +
+                    $"resource_tracker={(_resourceAwareDualQueueV7615 ? 1 : 0)} " +
+                    "utility_image_accesses=tracked strict_bink=resource-scoped " +
+                    "recovery=SHARPEMU_DUAL_QUEUE_SYNC_POLICY=conservative");
             }
 
             LoadDebugUtilsCommands();
@@ -9675,7 +10811,8 @@ internal static unsafe partial class VulkanVideoPresenter
             // frame, so saving after every slow creation compounds a warm-up
             // hitch into a multi-minute stall. Coalesce all creations into one
             // periodic snapshot; shutdown still forces a final save.
-            if (Environment.TickCount64 - _lastPipelineCacheSaveTick >= 30_000)
+            if (Environment.TickCount64 - _lastPipelineCacheSaveTick >=
+                _pipelineCacheSaveIntervalMsV7631)
             {
                 SavePipelineCache(force: false);
             }
@@ -9980,7 +11117,7 @@ internal static unsafe partial class VulkanVideoPresenter
                 SType = StructureType.CommandBufferAllocateInfo,
                 CommandPool = _commandPool,
                 Level = CommandBufferLevel.Primary,
-                CommandBufferCount = MaxFramesInFlight,
+                CommandBufferCount = (uint)MaxFramesInFlight,
             };
             _frameCommandBuffers = new CommandBuffer[MaxFramesInFlight];
             fixed (CommandBuffer* frameCommandBuffers = _frameCommandBuffers)
@@ -10528,7 +11665,8 @@ internal static unsafe partial class VulkanVideoPresenter
             IReadOnlyList<GuestImageResource> traceImages,
             IReadOnlyList<(VkBuffer Buffer, DeviceMemory Memory)>? retireBuffers = null,
             IReadOnlyList<TranslatedDrawResources>? referencedResources = null,
-            IReadOnlyList<VulkanDetilePass.Transients>? retireDetile = null)
+            IReadOnlyList<VulkanDetilePass.Transients>? retireDetile = null,
+            IReadOnlyList<VulkanQueueAccessV7615>? explicitQueueAccessesV76383 = null)
         {
             // V61.14_SUBMISSION_RETIREMENT_HARD_CAP
             // Final invariant: utility and batched paths must not bypass capacity.
@@ -10566,18 +11704,26 @@ internal static unsafe partial class VulkanVideoPresenter
                     var crossQueueSyncV7615 = ResolveCrossQueueWaitV7615(
                         physicalComputeQueueV1131,
                         resources,
-                        referencedResources);
+                        referencedResources,
+                        explicitQueueAccessesV76383);
 
                     if (physicalComputeQueueV1131)
                     {
                         physicalSignalValueV1131 = ++_computeQueueSignalValueV1131;
                         physicalSignalSemaphoreV1131 =
                             _computeQueueTimelineSemaphoreV1131;
-                        physicalWaitValueV1131 = crossQueueSyncV7615.HasTrackedAccess
-                            ? crossQueueSyncV7615.WaitValue
-                            : physicalLaneSwitchV1131
-                                ? _graphicsQueueSignalValueV1131
-                                : 0;
+                        physicalWaitValueV1131 =
+                            ResolvePhysicalCrossQueueWaitV76383(
+                                computeLane: true,
+                                physicalLaneSwitch: physicalLaneSwitchV1131,
+                                hasTrackedAccess: crossQueueSyncV7615.HasTrackedAccess,
+                                trackedWaitValue: crossQueueSyncV7615.WaitValue);
+                        physicalWaitValueV1131 =
+                            ApplyGuestBinkStrictCrossLaneOrderV762413(
+                                computeLane: true,
+                                physicalLaneSwitch: physicalLaneSwitchV1131,
+                                resourceWaitValue: physicalWaitValueV1131,
+                                hadTrackedAccess: crossQueueSyncV7615.HasTrackedAccess);
                         if (physicalWaitValueV1131 != 0)
                         {
                             physicalWaitSemaphoreV1131 =
@@ -10589,11 +11735,18 @@ internal static unsafe partial class VulkanVideoPresenter
                         physicalSignalValueV1131 = ++_graphicsQueueSignalValueV1131;
                         physicalSignalSemaphoreV1131 =
                             _graphicsQueueTimelineSemaphoreV1131;
-                        physicalWaitValueV1131 = crossQueueSyncV7615.HasTrackedAccess
-                            ? crossQueueSyncV7615.WaitValue
-                            : physicalLaneSwitchV1131
-                                ? _computeQueueSignalValueV1131
-                                : 0;
+                        physicalWaitValueV1131 =
+                            ResolvePhysicalCrossQueueWaitV76383(
+                                computeLane: false,
+                                physicalLaneSwitch: physicalLaneSwitchV1131,
+                                hasTrackedAccess: crossQueueSyncV7615.HasTrackedAccess,
+                                trackedWaitValue: crossQueueSyncV7615.WaitValue);
+                        physicalWaitValueV1131 =
+                            ApplyGuestBinkStrictCrossLaneOrderV762413(
+                                computeLane: false,
+                                physicalLaneSwitch: physicalLaneSwitchV1131,
+                                resourceWaitValue: physicalWaitValueV1131,
+                                hadTrackedAccess: crossQueueSyncV7615.HasTrackedAccess);
                         if (physicalWaitValueV1131 != 0)
                         {
                             physicalWaitSemaphoreV1131 =
@@ -10642,7 +11795,8 @@ internal static unsafe partial class VulkanVideoPresenter
                         physicalComputeQueueV1131,
                         physicalSignalValueV1131,
                         resources,
-                        referencedResources);
+                        referencedResources,
+                        explicitQueueAccessesV76383);
                     _hasPhysicalSubmitV1131 = true;
                     _lastPhysicalSubmitWasComputeV1131 = physicalComputeQueueV1131;
                     var laneSubmitCountV1131 = physicalComputeQueueV1131
@@ -10736,9 +11890,24 @@ internal static unsafe partial class VulkanVideoPresenter
                     _pendingGuestSubmissions.Count));
             _lastSubmittedTimelineByGuestQueue[_activeGuestQueue.Name] =
                 _submitTimeline;
+
+            // V76.0.26: account only a submit that is successfully queued and
+            // now has a tracked fence retirement path. Never block before submit.
+            if (physicalComputeQueueV1131)
+            {
+                VulkanQueueSubmitHooksV7622.NoteComputeSubmit();
+            }
+            else
+            {
+                VulkanQueueSubmitHooksV7622.NoteGraphicsSubmit();
+            }
         }
 
-        private void TransitionNewGuestImageToSampled(Image image, uint mipLevels)
+        private void TransitionNewGuestImageToSampled(
+            Image image,
+            uint mipLevels,
+            ulong guestAddress,
+            ulong guestLengthV76383)
         {
             var commandBuffer = AllocateGuestCommandBuffer();
             var beginInfo = new CommandBufferBeginInfo
@@ -10777,7 +11946,21 @@ internal static unsafe partial class VulkanVideoPresenter
                 "vkEndCommandBuffer(guest image init)");
             // Same-queue submission order makes the transition visible to any
             // later use of the image; no CPU-side wait is needed.
-            SubmitGuestCommandBuffer(commandBuffer, [], []);
+            IReadOnlyList<VulkanQueueAccessV7615>? explicitAccessV76383 =
+                guestAddress != 0
+                    ? new[]
+                    {
+                        new VulkanQueueAccessV7615(
+                            guestAddress,
+                            Math.Max(guestLengthV76383, 1UL),
+                            true),
+                    }
+                    : null;
+            SubmitGuestCommandBuffer(
+                commandBuffer,
+                [],
+                [],
+                explicitQueueAccessesV76383: explicitAccessV76383);
         }
         private void EnsureGuestSubmissionCapacity()
         {
@@ -11214,6 +12397,14 @@ internal static unsafe partial class VulkanVideoPresenter
                 _completedTimeline = submission.Timeline;
             }
 
+            // V76.3.4: execute CPU-visible RELEASE_MEM side effects whose exact
+            // EOP timeline has now retired.  This is intentionally after the
+            // completed-timeline update and before normal post-retirement work.
+            DrainDeferredReleaseQueueCompletionV7634();
+
+            // V76.0.26: one completion for each tracked successful guest submit.
+            VulkanQueueSubmitHooksV7622.NoteSubmitComplete();
+
             if (_traceGpuRetirementPhasesV74050 && retireStartV74050 != 0)
             {
                 var tickToMsV74050 = 1000.0 / Stopwatch.Frequency;
@@ -11589,19 +12780,56 @@ internal static unsafe partial class VulkanVideoPresenter
                     continue;
                 }
 
-                var sourceV74051 =
-                    guestBuffer.Data.AsSpan(
-                        0,
-                        guestBuffer.Length);
+                // V76.3.21.2_GLOBAL_SNAPSHOT_BOUNDS
+                //
+                // A global binding can describe the complete guest range while
+                // carrying only a prefix/deferred CPU snapshot. Treat every
+                // Data.Length < Length descriptor like V117.12's zero-byte
+                // deferred descriptor and consult live guest memory instead.
+                var partialSnapshotV763212 =
+                    guestBuffer.Length > 0 &&
+                    guestBuffer.Data.Length < guestBuffer.Length;
+                ReadOnlySpan<byte> sourceV74051 =
+                    partialSnapshotV763212
+                        ? ReadOnlySpan<byte>.Empty
+                        : guestBuffer.Data.AsSpan(
+                            0,
+                            guestBuffer.Length);
                 var shadowV74051 =
                     allocationV74051.Shadow.AsSpan(
                         checked((int)guestOffsetV74051),
                         guestBuffer.Length);
 
                 var needsRefreshV74051 =
-                    !sourceV74051.SequenceEqual(shadowV74051);
+                    partialSnapshotV763212
+                        ? _guestMemory?.TryCompare(
+                            guestBuffer.BaseAddress,
+                            shadowV74051) != true
+                        : !sourceV74051.SequenceEqual(shadowV74051);
+
+                if (partialSnapshotV763212)
+                {
+                    var partialCountV763212 = Interlocked.Increment(
+                        ref _v763212PartialGlobalSnapshotCount);
+                    if (partialCountV763212 <= 64 ||
+                        (partialCountV763212 &
+                         (partialCountV763212 - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V76.3.21.2][GLOBAL_SNAPSHOT_REPAIR] " +
+                            $"count={partialCountV763212} " +
+                            $"phase=refresh-check " +
+                            $"queue={_activeGuestQueue.Name} " +
+                            $"submission={_activeGuestQueue.SubmissionId} " +
+                            $"base=0x{guestBuffer.BaseAddress:X16} " +
+                            $"snapshot_bytes={guestBuffer.Data.Length} " +
+                            $"logical_bytes={guestBuffer.Length} " +
+                            $"action=live-guest-compare");
+                    }
+                }
 
                 if (!needsRefreshV74051 &&
+                    !partialSnapshotV763212 &&
                     _guestMemory is not null &&
                     guestBuffer.Length > 0)
                 {
@@ -11807,8 +13035,369 @@ internal static unsafe partial class VulkanVideoPresenter
         }
 
 
-        private bool TryExecuteOrderedGuestAction(VulkanOrderedGuestAction work)
+        private bool TryScheduleDeferredReleaseQueueCompletionV7634(
+            VulkanOrderedGuestAction work,
+            in PendingGuestWork pending)
         {
+            if (!_deferReleaseQueueCompletionV7634 ||
+                !work.RequiresQueueCompletionOnly ||
+                work.RequireGlobalVisibility ||
+                work.RequiresGpuToCpuVisibility ||
+                !work.DebugName.StartsWith("release_mem ", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Materialize every command before RELEASE_MEM into a real Vulkan
+            // submission.  This creates the exact EOP timeline without waiting
+            // for it on the CPU.  Later work stays ordered because all guest
+            // queues currently map to the same physical VkQueue policy.
+            FlushBatchedGuestCommands();
+
+            if (!_lastSubmittedTimelineByGuestQueue.TryGetValue(
+                    _activeGuestQueue.Name,
+                    out var targetTimeline) ||
+                targetTimeline <= _completedTimeline)
+            {
+                Interlocked.Increment(ref _v7634DeferredReleaseImmediate);
+                return false;
+            }
+
+            if (!_deferredQueueCompletionActionsV7634.TryGetValue(
+                    targetTimeline,
+                    out var actions))
+            {
+                actions = new List<DeferredQueueCompletionActionV7634>(2);
+                _deferredQueueCompletionActionsV7634.Add(targetTimeline, actions);
+            }
+
+            actions.Add(new DeferredQueueCompletionActionV7634(pending, work));
+            var scheduled = Interlocked.Increment(ref _v7634DeferredReleaseScheduled);
+            if (scheduled <= 64 || (scheduled & (scheduled - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[V76.3.4][RELEASE_EOP_DEFER] count={scheduled} " +
+                    $"queue={_activeGuestQueue.Name} " +
+                    $"submission={_activeGuestQueue.SubmissionId} " +
+                    $"target_timeline={targetTimeline} completed={_completedTimeline} " +
+                    $"pending_callbacks={actions.Count} " +
+                    $"work_sequence={pending.Sequence} name='{work.DebugName}'");
+            }
+
+            return true;
+        }
+
+        private void DrainDeferredReleaseQueueCompletionV7634()
+        {
+            while (_deferredQueueCompletionActionsV7634.Count != 0)
+            {
+                var first = _deferredQueueCompletionActionsV7634.First();
+                if (first.Key > _completedTimeline)
+                {
+                    break;
+                }
+
+                _deferredQueueCompletionActionsV7634.Remove(first.Key);
+                foreach (var deferred in first.Value)
+                {
+                    try
+                    {
+                        deferred.Work.Action();
+                        RenderPhaseProfile.RecordOrderedAction(
+                            deferred.Work.DebugName,
+                            completed: true);
+                    }
+                    finally
+                    {
+                        // Preserve WaitForGuestWork/sequence semantics: this
+                        // ordered work becomes complete only when its EOP fence
+                        // has actually retired, while later queue items are free
+                        // to be submitted out-of-order by the host scheduler.
+                        CompleteGuestWork(deferred.Pending);
+                    }
+
+                    var completed = Interlocked.Increment(
+                        ref _v7634DeferredReleaseCompleted);
+                    if (completed <= 64 || (completed & (completed - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V76.3.4][RELEASE_EOP_RETIRE] count={completed} " +
+                            $"timeline={first.Key} completed_timeline={_completedTimeline} " +
+                            $"work_sequence={deferred.Pending.Sequence} " +
+                            $"name='{deferred.Work.DebugName}'");
+                    }
+                }
+            }
+        }
+
+        private static bool IsOrderedActionMicrobatchEligibleV76380(
+            VulkanOrderedGuestAction work)
+        {
+            // V76.3.8.1: classify host-only EVENT_WRITE before the generic
+            // visibility flags. TryExecuteOrderedGuestAction already treats this
+            // exact form as no-flush/no-readback, so rejecting it here made the
+            // V76.3.8.0 microbatch unreachable in the real workload.
+            var hostEventOnly =
+                !work.RequireGlobalVisibility &&
+                work.DebugName.StartsWith(
+                    "event_write type=",
+                    StringComparison.Ordinal);
+            if (hostEventOnly)
+            {
+                return work.WaitProducerMemory is null &&
+                       work.WaitProducerAddress == 0 &&
+                       work.WaitProducerLength == 0;
+            }
+
+            if (work.RequireGlobalVisibility ||
+                work.RequiresGpuToCpuVisibility ||
+                work.RequiresQueueCompletionOnly ||
+                work.WaitProducerMemory is not null ||
+                work.WaitProducerAddress != 0 ||
+                work.WaitProducerLength != 0)
+            {
+                return false;
+            }
+
+            return _disabledAcquireNoFlushV7405617 &&
+                   !SharpEmu.HLE.GuestImageWriteTracker.Enabled &&
+                   work.DebugName.StartsWith("acquire_mem_flush ", StringComparison.Ordinal);
+        }
+
+        private int DrainOrderedActionMicrobatchV76380(
+            in PendingGuestWork firstPending,
+            VulkanOrderedGuestAction firstAction)
+        {
+            if (!_orderedActionMicrobatchV76380 ||
+                !IsOrderedActionMicrobatchEligibleV76380(firstAction))
+            {
+                return 0;
+            }
+
+            var drained = 0;
+            var eventCount = 0;
+            var acquireCount = 0;
+            while (drained + 1 < _orderedActionMicrobatchMaxV76380)
+            {
+                PendingGuestWork next;
+                lock (_gate)
+                {
+                    if (!_pendingGuestWorkByQueue.TryGetValue(firstPending.Queue.Name, out var queue) ||
+                        queue.First is not { } head ||
+                        head.Value.Queue.SubmissionId != firstPending.Queue.SubmissionId ||
+                        head.Value.Work is not VulkanOrderedGuestAction action ||
+                        !IsOrderedActionMicrobatchEligibleV76380(action) ||
+                        (!IsGuestWorkCompletedLocked(head.Value.RequiredSequence) &&
+                         head.Value.RequiredSequence != firstPending.Sequence))
+                    {
+                        break;
+                    }
+
+                    next = head.Value;
+                    RemoveTakenGuestWorkLocked(
+                        firstPending.Queue.Name,
+                        queue,
+                        advanceScheduleCursor: false);
+                }
+
+                var nextAction = (VulkanOrderedGuestAction)next.Work;
+                _activeGuestWorkSequence = next.Sequence;
+                Volatile.Write(ref _executingGuestWorkSequence, next.Sequence);
+                _activeGuestWorkLabel = DescribeGuestWork(next.Work, next.Queue, next.Sequence);
+                _lastGuestWorkLabel = _activeGuestWorkLabel;
+
+                var requeued = false;
+                try
+                {
+                    if (!TryExecuteOrderedGuestAction(
+                            nextAction,
+                            next,
+                            out var deferredToTimeline) ||
+                        deferredToTimeline)
+                    {
+                        // Eligibility above makes this unreachable in the normal
+                        // path.  Fail closed by putting the item back at the head.
+                        requeued = RequeueGuestWorkFront(next);
+                        break;
+                    }
+                }
+                finally
+                {
+                    // If Action() throws, match the normal single-item path: the
+                    // selected item is considered consumed.  A deliberately
+                    // requeued item, however, must remain incomplete.
+                    if (!requeued)
+                    {
+                        CompleteGuestWork(next);
+                    }
+                }
+
+                if (requeued)
+                {
+                    break;
+                }
+
+                drained++;
+                if (nextAction.DebugName.StartsWith("event_write type=", StringComparison.Ordinal))
+                {
+                    eventCount++;
+                }
+                else
+                {
+                    acquireCount++;
+                }
+            }
+
+            if (drained != 0)
+            {
+                var batches = Interlocked.Increment(ref _orderedActionMicrobatchBatchCountV76380);
+                var totalActions = Interlocked.Add(
+                    ref _orderedActionMicrobatchActionCountV76380,
+                    drained + 1);
+                if (firstAction.DebugName.StartsWith("event_write type=", StringComparison.Ordinal))
+                {
+                    eventCount++;
+                }
+                else
+                {
+                    acquireCount++;
+                }
+                Interlocked.Add(ref _orderedActionMicrobatchEventCountV76380, eventCount);
+                Interlocked.Add(ref _orderedActionMicrobatchAcquireCountV76380, acquireCount);
+
+                if (batches <= 128 || (batches & (batches - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V76.3.8.1][ORDERED_MICROBATCH] batches={batches} " +
+                        $"batch_actions={drained + 1} total_actions={totalActions} " +
+                        $"event={Volatile.Read(ref _orderedActionMicrobatchEventCountV76380)} " +
+                        $"acquire={Volatile.Read(ref _orderedActionMicrobatchAcquireCountV76380)} " +
+                        $"queue={firstPending.Queue.Name} submission={firstPending.Queue.SubmissionId}");
+                }
+            }
+
+            // Restore outer-item diagnostics; its finally block will clear them.
+            _activeGuestWorkSequence = firstPending.Sequence;
+            Volatile.Write(ref _executingGuestWorkSequence, firstPending.Sequence);
+            _activeGuestWorkLabel = DescribeGuestWork(
+                firstPending.Work,
+                firstPending.Queue,
+                firstPending.Sequence);
+            return drained;
+        }
+
+        private int DrainDrawCommandBufferV76383(
+            in PendingGuestWork firstPending)
+        {
+            if (!_drawCommandBufferV76383)
+            {
+                return 0;
+            }
+
+            var drained = 0;
+            while (drained + 1 < _drawCommandBufferMaxV76383)
+            {
+                PendingGuestWork next;
+                var chargeClosurePayload = false;
+                lock (_gate)
+                {
+                    if (!_pendingGuestWorkByQueue.TryGetValue(firstPending.Queue.Name, out var queue) ||
+                        queue.First is not { } head ||
+                        head.Value.Queue.SubmissionId != firstPending.Queue.SubmissionId ||
+                        head.Value.Work is not VulkanOffscreenGuestDraw ||
+                        !IsGuestWorkCompletedLocked(head.Value.RequiredSequence))
+                    {
+                        break;
+                    }
+
+                    // If this run is part of an active producer closure, every
+                    // extra buffered draw is still real payload and therefore
+                    // needs one payload token. Fail closed before removing it.
+                    chargeClosurePayload =
+                        _producerDependencyClosureQueueV76380 == firstPending.Queue.Name &&
+                        head.Value.Queue.SubmissionId <= _producerDependencyClosureTargetSubmissionV76380;
+                    if (chargeClosurePayload && _producerDependencyClosureRemainingV76380 <= 0)
+                    {
+                        break;
+                    }
+
+                    next = head.Value;
+                    RemoveTakenGuestWorkLocked(
+                        firstPending.Queue.Name,
+                        queue,
+                        advanceScheduleCursor: false);
+                }
+
+                var draw = (VulkanOffscreenGuestDraw)next.Work;
+                _activeGuestWorkSequence = next.Sequence;
+                Volatile.Write(ref _executingGuestWorkSequence, next.Sequence);
+                _activeGuestWorkLabel = DescribeGuestWork(next.Work, next.Queue, next.Sequence);
+                _lastGuestWorkLabel = _activeGuestWorkLabel;
+
+                var requeued = false;
+                try
+                {
+                    if (TryPrepareWritableGlobalRefreshV74051(draw.Draw.GlobalMemoryBuffers))
+                    {
+                        ExecuteOffscreenDraw(draw);
+                    }
+                    else
+                    {
+                        requeued = RequeueGuestWorkFront(next);
+                        break;
+                    }
+                }
+                finally
+                {
+                    if (!requeued)
+                    {
+                        CompleteGuestWork(next);
+                    }
+                }
+
+                if (requeued)
+                {
+                    break;
+                }
+
+                if (chargeClosurePayload)
+                {
+                    _producerDependencyClosureRemainingV76380--;
+                    Interlocked.Increment(ref _producerDependencyClosurePayloadTakeCountV76383);
+                }
+
+                drained++;
+            }
+
+            if (drained != 0)
+            {
+                var batches = Interlocked.Increment(ref _drawCommandBufferBatchCountV76383);
+                var totalDraws = Interlocked.Add(ref _drawCommandBufferDrawCountV76383, drained + 1);
+                if (batches <= 128 || (batches & (batches - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[V76.3.8.3][DRAW_COMMAND_BUFFER] batches={batches} " +
+                        $"batch_draws={drained + 1} total_draws={totalDraws} " +
+                        $"queue={firstPending.Queue.Name} submission={firstPending.Queue.SubmissionId} " +
+                        $"pending={Volatile.Read(ref _pendingGuestWorkCount)}");
+                }
+            }
+
+            _activeGuestWorkSequence = firstPending.Sequence;
+            Volatile.Write(ref _executingGuestWorkSequence, firstPending.Sequence);
+            _activeGuestWorkLabel = DescribeGuestWork(
+                firstPending.Work,
+                firstPending.Queue,
+                firstPending.Sequence);
+            return drained;
+        }
+
+        private bool TryExecuteOrderedGuestAction(
+            VulkanOrderedGuestAction work,
+            in PendingGuestWork pending,
+            out bool completionDeferredToTimeline)
+        {
+            completionDeferredToTimeline = false;
             // RootFix V17.1: EVENT_WRITE without a guest-memory payload only
             // triggers an HLE event notification. It remains ordered in the
             // guest-work queue, but does not require all prior Vulkan compute
@@ -11859,9 +13448,22 @@ internal static unsafe partial class VulkanVideoPresenter
                 }
                 else if (work.RequiresQueueCompletionOnly)
                 {
-                    // V73.5: preserve the PM4 position in this logical queue.
-                    // The immediate packet payload is already CPU-resident, so
-                    // completed shader/storage buffers do not need readback.
+                    // V76.3.4: RELEASE_MEM/EOP can be tied to the prior Vulkan
+                    // timeline without stalling host submission of later work.
+                    // The CPU-visible label action still runs only after that
+                    // fence retires.  Other queue-completion actions retain the
+                    // older conservative path.
+                    if (TryScheduleDeferredReleaseQueueCompletionV7634(work, pending))
+                    {
+                        completionDeferredToTimeline = true;
+                        RenderPhaseProfile.RecordOrderedAction(
+                            work.DebugName,
+                            completed: false);
+                        return true;
+                    }
+
+                    // V73.5 fallback: preserve the PM4 position in this logical
+                    // queue and wait for prior queue completion.
                     if (!TryMakeActiveGuestQueueSubmissionsCpuVisible())
                     {
                         RenderPhaseProfile.RecordOrderedAction(work.DebugName, completed: false);
@@ -12056,7 +13658,22 @@ internal static unsafe partial class VulkanVideoPresenter
                 Check(
                     _vk.EndCommandBuffer(commandBuffer),
                     "vkEndCommandBuffer(flip capture)");
-                SubmitGuestCommandBuffer(commandBuffer, [], []);
+                var flipQueueAccessesV76383 = new[]
+                {
+                    new VulkanQueueAccessV7615(
+                        source.Address,
+                        GetCrossQueueGuestImageExtentV762413(source),
+                        false),
+                    new VulkanQueueAccessV7615(
+                        snapshot.Address,
+                        GetCrossQueueGuestImageExtentV762413(snapshot),
+                        true),
+                };
+                SubmitGuestCommandBuffer(
+                    commandBuffer,
+                    [],
+                    [],
+                    explicitQueueAccessesV76383: flipQueueAccessesV76383);
                 submitted = true;
 
                 // Do not publish the snapshot to the presentation thread until
@@ -12439,6 +14056,7 @@ internal static unsafe partial class VulkanVideoPresenter
             }
             Check(_vk.ResetFences(_device, 1, &fence), "vkResetFences(frame)");
             _frameFencePending[slot] = false;
+            VulkanQueueSubmitHooksV7622.NoteSubmitComplete();
             if (_frameTimelines[slot] > _completedTimeline)
             {
                 _completedTimeline = _frameTimelines[slot];
@@ -12541,11 +14159,40 @@ internal static unsafe partial class VulkanVideoPresenter
             IReadOnlyList<GuestImageResource>? renderTargets = null,
             ulong shaderAddress = 0)
         {
+            // V76.2.7: Bink pixel-truth tracing is submission/fence based.
+            // V76.2.6 had a Bink-specific predicate in
+            // ShouldTraceGuestImageContents(), but this early return ran first
+            // whenever the broad guest-image tracer was disabled. That made
+            // SHARPEMU_BINK_YUV_VALIDATE silently produce zero readbacks.
+            var binkPixelTruthV7627 =
+                _traceGuestBinkPixelTruthV7627 &&
+                BinkGuestOwnedRuntimeV7600.IsGuestMovieActive;
             if (!_traceGuestImagesEnabled &&
                 !_traceGuestImageAddressFilterEnabled &&
-                GuestImageTraceInterval() is null)
+                GuestImageTraceInterval() is null &&
+                !_traceGuestBinkYuvV7626 &&
+                !binkPixelTruthV7627)
             {
                 return Array.Empty<GuestImageResource>();
+            }
+
+            var selected = new HashSet<GuestImageResource>();
+
+            // Capture the first large render target produced by a graphics
+            // draw that actually bound a current-session Bink Y/UV producer.
+            // This gives us the post YUV->RGB truth without guessing a shader
+            // address and without tracing unrelated title/UI passes.
+            if (binkPixelTruthV7627 && resources.UsesGuestBinkYuvV7613)
+            {
+                foreach (var renderTarget in renderTargets ?? [])
+                {
+                    if (ShouldTraceGuestBinkCompositeOutputV7627(
+                            renderTarget,
+                            shaderAddress))
+                    {
+                        selected.Add(renderTarget);
+                    }
+                }
             }
 
             var candidates = new HashSet<GuestImageResource>();
@@ -12556,16 +14203,67 @@ internal static unsafe partial class VulkanVideoPresenter
 
             foreach (var texture in resources.Textures)
             {
-                if ((texture.IsStorage || _traceGuestImageAddressFilterEnabled) &&
+                if ((texture.IsStorage || _traceGuestImageAddressFilterEnabled ||
+                     _traceGuestBinkYuvV7626) &&
                     texture.GuestImage is { } image)
                 {
                     candidates.Add(image);
                 }
             }
 
-            return candidates
-                .Where(image => ShouldTraceGuestImageContents(image, shaderAddress))
-                .ToArray();
+            foreach (var image in candidates)
+            {
+                if (ShouldTraceGuestImageContents(image, shaderAddress))
+                {
+                    selected.Add(image);
+                }
+            }
+
+            return selected.ToArray();
+        }
+
+        private bool ShouldTraceGuestBinkCompositeOutputV7627(
+            GuestImageResource image,
+            ulong shaderAddress)
+        {
+            if (image.Address == 0 ||
+                image.Width < 1280 ||
+                image.Height < 720 ||
+                Volatile.Read(ref _v7627GuestBinkRgbTraceScheduled) >=
+                    _traceGuestBinkRgbLimitV7627)
+            {
+                return false;
+            }
+
+            var count = _v7627GuestBinkRgbTraceCounts.TryGetValue(
+                image.Address,
+                out var previous)
+                ? previous + 1
+                : 1;
+            _v7627GuestBinkRgbTraceCounts[image.Address] = count;
+
+            if (count != 1 &&
+                (_traceGuestBinkRgbEveryV7627 <= 0 ||
+                 count % _traceGuestBinkRgbEveryV7627 != 0))
+            {
+                return false;
+            }
+
+            var scheduled = Interlocked.Increment(
+                ref _v7627GuestBinkRgbTraceScheduled);
+            if (scheduled > _traceGuestBinkRgbLimitV7627)
+            {
+                return false;
+            }
+
+            _v7627GuestBinkTraceRoles[image.Address] = "rgb-after-yuv";
+            Console.Error.WriteLine(
+                "[BINK-GUEST][V76.2.7][RGB-READBACK] " +
+                $"n={scheduled} addr=0x{image.Address:X16} " +
+                $"size={image.Width}x{image.Height} format={image.Format} " +
+                $"shader=0x{shaderAddress:X16} " +
+                "reason=draw-bound-exact-yuv-producer");
+            return true;
         }
 
         private void CreateGuestDrawResources()
@@ -18292,11 +19990,16 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
         private TextureResource GetOrCreateGuestBinkNeutralYuvV7602(
             GuestDrawTexture texture)
         {
+            var binkSamplerV7624 =
+                NormalizeGuestBinkIntegerSamplerV7624(
+                    texture.Sampler,
+                    texture.Format,
+                    texture.Address);
             var key = (
                 texture.Format,
                 texture.NumberType,
                 texture.DstSelect,
-                texture.Sampler);
+                binkSamplerV7624);
             if (_v7602GuestBinkNeutralYuvTextures.TryGetValue(
                     key,
                     out var cached))
@@ -18312,6 +20015,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 : new byte[] { 128, 128 };
             var neutral = texture with
             {
+                Sampler = binkSamplerV7624,
                 Address = 0,
                 Width = 1,
                 Height = 1,
@@ -18458,7 +20162,10 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                         Type = binkYuvProducerV7602.Type,
                         RowLength = binkYuvProducerV7602.Width,
                         DstSelect = texture.DstSelect,
-                        SamplerState = texture.Sampler,
+                        SamplerState = NormalizeGuestBinkIntegerSamplerV7624(
+                            texture.Sampler,
+                            texture.Format,
+                            texture.Address),
                         GuestImage = binkYuvProducerV7602,
                     };
                 }
@@ -19819,6 +21526,24 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
         }
 
         private readonly Dictionary<TextureContentIdentity, TextureResource> _textureCache = new();
+        private readonly record struct DetileProbeResidencyObservationV76381(
+            ulong Fingerprint,
+            long WriteGeneration,
+            int StableMatches);
+        private readonly Dictionary<V76375TextureStorageKey, DetileProbeResidencyObservationV76381>
+            _detileProbeResidencyV76381 = new();
+        private static readonly bool _detileProbeResidencyAuditV76381 =
+            !string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_DETILE_PROBE_RESIDENCY_AUDIT"),
+                "0",
+                StringComparison.Ordinal);
+        private long _detileProbeResidencyProbeCountV76381;
+        private long _detileProbeResidencyRepeatCountV76381;
+        private long _detileProbeResidencyChangeCountV76381;
+        private long _detileProbeResidencyRepeatBytesV76381;
+        private long _detileStableResidencyAdmissionsV76382;
+        private long _detileStableResidencyPreservesV76382;
+        private long _detileStableResidencyAvoidedBytesV76382;
         // SHARPEMU_V74_0_99_DCC_FALLBACK_RESOURCE_CACHE
         // A missing DCC producer resolves to the same immutable 1x1 fallback,
         // but V98 created/destroyed a Vulkan image, allocation and view for
@@ -20518,6 +22243,148 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 candidate.HasExtendedDescriptor == requested.HasExtendedDescriptor;
         }
 
+        private bool TryCreateStorageImageAliasV76375(
+            in TextureContentIdentity requestedKey,
+            GuestDrawTexture texture,
+            out TextureResource alias)
+        {
+            alias = null!;
+
+            if (texture.IsStorage ||
+                texture.Address == 0 ||
+                _textureCache.Count == 0 ||
+                !TryGetTextureStorageCanonicalV76375(
+                    requestedKey,
+                    out var canonicalV76375) ||
+                canonicalV76375.Equals(requestedKey) ||
+                !_textureCache.TryGetValue(
+                    canonicalV76375,
+                    out var backingV76375) ||
+                !backingV76375.Cached ||
+                !backingV76375.OwnsStorage ||
+                backingV76375.NeedsUpload ||
+                backingV76375.DeferredDestroyPendingV74055 ||
+                backingV76375.DestroyedV74055 ||
+                backingV76375.GuestImage is not null ||
+                backingV76375.GuestDepth is not null ||
+                backingV76375.StagingBuffer.Handle != 0 ||
+                backingV76375.StagingMemory.Handle != 0 ||
+                backingV76375.Image.Handle == 0 ||
+                backingV76375.View.Handle == 0)
+            {
+                return false;
+            }
+
+            var aliasViewV76375 = backingV76375.View;
+            var ownsAliasViewV76375 = false;
+            if (canonicalV76375.DstSelect != requestedKey.DstSelect)
+            {
+                var aliasViewInfoV76375 = new ImageViewCreateInfo
+                {
+                    SType = StructureType.ImageViewCreateInfo,
+                    Image = backingV76375.Image,
+                    ViewType = GetGuestTextureViewType(
+                        texture.Type,
+                        texture.ArrayedView),
+                    Format = GetTextureFormat(
+                        texture.Format,
+                        texture.NumberType),
+                    Components = ToVkComponentMapping(
+                        texture.DstSelect),
+                    SubresourceRange = ColorSubresourceRange(
+                        layerCount: backingV76375.Layers),
+                };
+                Check(
+                    _vk.CreateImageView(
+                        _device,
+                        &aliasViewInfoV76375,
+                        null,
+                        out aliasViewV76375),
+                    "vkCreateImageView(V76.3.7.5 texture storage alias)");
+                ownsAliasViewV76375 = true;
+                Interlocked.Increment(
+                    ref _v76375TextureStorageAliasViewCreates);
+            }
+
+            Interlocked.Increment(
+                ref backingV76375.SamplerAliasBorrowCountV74073);
+            TouchStandaloneTextureV7408(backingV76375);
+
+            alias = new TextureResource
+            {
+                Address = backingV76375.Address,
+                Image = backingV76375.Image,
+                View = aliasViewV76375,
+                Width = backingV76375.Width,
+                Height = backingV76375.Height,
+                Depth = backingV76375.Depth,
+                Type = backingV76375.Type,
+                RowLength = backingV76375.RowLength,
+                DstSelect = texture.DstSelect,
+                Layers = backingV76375.Layers,
+                MipLevel = backingV76375.MipLevel,
+                NeedsUpload = false,
+                OwnsStorage = false,
+                IsStorage = false,
+                Cached = false,
+                V7408ResidentBytes = 0,
+                CpuContentFingerprint = backingV76375.CpuContentFingerprint,
+                UpdatesCpuContent = backingV76375.UpdatesCpuContent,
+                SamplerState = texture.Sampler,
+                Sampler = default,
+                WriteGeneration = backingV76375.WriteGeneration,
+                FeedbackSource = backingV76375.FeedbackSource,
+                DepthFeedbackSource = backingV76375.DepthFeedbackSource,
+                SamplerAliasBackingV74073 = backingV76375,
+                OwnsAliasViewV76375 = ownsAliasViewV76375,
+            };
+
+            long avoidedBytesV76375 = 0;
+            if (texture.DeferredTiledGuestRead &&
+                texture.DeferredTiledGuestSliceBytes > 0)
+            {
+                var aliasLayersV76375 = GetEffectiveTextureArrayLayers(
+                    texture.Type,
+                    texture.ArrayedView,
+                    texture.ArrayLayers);
+                avoidedBytesV76375 = checked(
+                    (long)texture.DeferredTiledGuestSliceBytes *
+                    aliasLayersV76375);
+            }
+            else
+            {
+                avoidedBytesV76375 =
+                    texture.RgbaPixels.LongLength +
+                    (texture.TiledSource?.LongLength ?? 0L);
+            }
+
+            if (avoidedBytesV76375 > 0)
+            {
+                Interlocked.Add(
+                    ref _v76375TextureStorageAvoidedBytes,
+                    avoidedBytesV76375);
+            }
+
+            var hitV76375 = Interlocked.Increment(
+                ref _v76375TextureStorageBindingHits);
+            if (hitV76375 <= 64 || (hitV76375 & (hitV76375 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[V76.3.7.5][TEXTURE_STORAGE_ALIAS] " +
+                    $"phase=bind count={hitV76375} " +
+                    $"addr=0x{texture.Address:X16} " +
+                    $"size={texture.Width}x{texture.Height} " +
+                    $"fmt={texture.Format}/{texture.NumberType} " +
+                    $"tile={texture.TileMode} " +
+                    $"canonical_dst=0x{canonicalV76375.DstSelect:X3} " +
+                    $"requested_dst=0x{texture.DstSelect:X3} " +
+                    $"alias_view={(ownsAliasViewV76375 ? 1 : 0)} " +
+                    $"avoided_mb={Volatile.Read(ref _v76375TextureStorageAvoidedBytes) / (1024.0 * 1024.0):F2}");
+            }
+
+            return true;
+        }
+
         private bool TryCreateSamplerImageAliasV74073(
             in TextureContentIdentity requestedKey,
             GuestDrawTexture texture,
@@ -20631,6 +22498,101 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             return false;
         }
 
+        private bool RecordDetileProbeResidencyV76381(
+            in TextureContentIdentity requestedKey,
+            GuestDrawTexture texture)
+        {
+            if (!_detileProbeResidencyAuditV76381 ||
+                !texture.DeferredTiledGuestRead ||
+                texture.DeferredTiledGuestSliceBytes <= 0 ||
+                texture.Address == 0)
+            {
+                return false;
+            }
+
+            var layers = GetEffectiveTextureArrayLayers(
+                texture.Type,
+                texture.ArrayedView,
+                texture.ArrayLayers);
+            var fingerprint = ComputeDeferredTiledGuestFingerprintV74088(texture, layers);
+            var storageKey = GetTextureStorageKeyV76375(requestedKey);
+            var probe = Interlocked.Increment(ref _detileProbeResidencyProbeCountV76381);
+
+            if (_detileProbeResidencyV76381.TryGetValue(storageKey, out var previous))
+            {
+                var generationCompatible =
+                    previous.WriteGeneration < 0 ||
+                    texture.WriteGeneration < 0 ||
+                    previous.WriteGeneration == texture.WriteGeneration;
+                if (previous.Fingerprint == fingerprint && generationCompatible)
+                {
+                    var stableMatches = previous.StableMatches == int.MaxValue
+                        ? int.MaxValue
+                        : previous.StableMatches + 1;
+                    _detileProbeResidencyV76381[storageKey] =
+                        new DetileProbeResidencyObservationV76381(
+                            fingerprint,
+                            texture.WriteGeneration,
+                            stableMatches);
+
+                    var repeats = Interlocked.Increment(ref _detileProbeResidencyRepeatCountV76381);
+                    var repeatBytes = checked((long)texture.DeferredTiledGuestSliceBytes * layers);
+                    var totalRepeatBytes = Interlocked.Add(
+                        ref _detileProbeResidencyRepeatBytesV76381,
+                        repeatBytes);
+                    if (repeats <= 64 || (repeats & (repeats - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V76.3.8.2][DETILE_STABLE_RESIDENCY] phase=proof probes={probe} repeats={repeats} " +
+                            $"stable_matches={stableMatches} " +
+                            $"changes={Volatile.Read(ref _detileProbeResidencyChangeCountV76381)} " +
+                            $"addr=0x{texture.Address:X16} generation={texture.WriteGeneration} " +
+                            $"fingerprint=0x{fingerprint:X16} repeat_mb={repeatBytes / (1024 * 1024)} " +
+                            $"repeat_mb_total={totalRepeatBytes / (1024 * 1024)}");
+                    }
+
+                    // One independent repeat is enough to admit the newly-created
+                    // standalone image. This uses the same sparse guest-content
+                    // coherence contract already used by the normal texture cache.
+                    return stableMatches >= 1;
+                }
+
+                Interlocked.Increment(ref _detileProbeResidencyChangeCountV76381);
+            }
+
+            _detileProbeResidencyV76381[storageKey] =
+                new DetileProbeResidencyObservationV76381(
+                    fingerprint,
+                    texture.WriteGeneration,
+                    0);
+            return false;
+        }
+
+        private bool ShouldPreserveStableDetileResidencyV76382(
+            in TextureContentIdentity key,
+            TextureResource resource,
+            string reason)
+        {
+            if (!resource.DetileStableResidencyV76382 ||
+                resource.GuestImage is not null ||
+                resource.GuestDepth is not null ||
+                resource.DestroyedV74055 ||
+                resource.DeferredDestroyPendingV74055 ||
+                resource.Image.Handle == 0 ||
+                !string.Equals(reason, "storage-destination", StringComparison.Ordinal) &&
+                !string.Equals(reason, "render-target", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            // Revalidate the exact existing untracked sparse-content probe before
+            // suppressing an invalidation. A compatible GPU GuestImage is resolved
+            // earlier than this standalone cache, so keeping this CPU fallback alive
+            // cannot override a newer GPU producer. If guest bytes changed, the
+            // normal invalidation path still executes.
+            return IsTextureContentCached(key);
+        }
+
         private TextureResource GetOrCreateCachedTextureResource(GuestDrawTexture texture)
         {
             if (texture.Address == 0)
@@ -20708,6 +22670,17 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 return cached;
             }
 
+            // V76.3.7.5: storage-equivalent bindings may differ by sampler
+            // and/or component swizzle. Resolve the already-uploaded canonical
+            // image before any self-heal guest-memory read or GPU detile.
+            if (TryCreateStorageImageAliasV76375(
+                    key,
+                    texture,
+                    out var storageAliasV76375))
+            {
+                return storageAliasV76375;
+            }
+
             // V74.0.73: exact key includes Sampler. Before allocating another
             // VkImage/staging resource, borrow a fully-uploaded and freshly
             // revalidated image whose identity differs ONLY by sampler state.
@@ -20718,6 +22691,14 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             {
                 return samplerAliasV74073;
             }
+
+            // V76.3.8.1: prove repeated deferred-tiled content before attempting
+            // any cross-generation resource retention. The V76.3.8.0 alias was
+            // unreachable while the canonical cache resource was alive and unsafe
+            // to resurrect after eviction. Audit exact storage+probe repeats here;
+            // detile behavior itself remains unchanged until runtime proves reuse.
+            var detileStableResidencyV76382 =
+                RecordDetileProbeResidencyV76381(key, texture);
 
             // Empty pixels mean the submit thread skipped the guest-memory
             // copy because this identity was marked cached; a miss here is
@@ -20739,11 +22720,25 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             if (resource.OwnsStorage)
             {
                 resource.Cached = true;
+                resource.DetileStableResidencyV76382 =
+                    detileStableResidencyV76382;
+                if (detileStableResidencyV76382)
+                {
+                    var admission = Interlocked.Increment(
+                        ref _detileStableResidencyAdmissionsV76382);
+                    if (admission <= 64 || (admission & (admission - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V76.3.8.2][DETILE_STABLE_RESIDENCY] phase=admit count={admission} " +
+                            $"addr=0x{texture.Address:X16} size={texture.Width}x{texture.Height} " +
+                            $"layers={GetEffectiveTextureArrayLayers(texture.Type, texture.ArrayedView, texture.ArrayLayers)} " +
+                            $"bytes={resource.V7408ResidentBytes}");
+                    }
+                }
                 resource.V7408LastUseSerial =
                     Interlocked.Increment(ref _v7408StandaloneTextureUseSerial);
                 _textureCache[key] = resource;
                 MarkTextureContentCached(key, texture);
-
                 var trace = Interlocked.Increment(
                     ref _v7408StandaloneTextureTraceCount);
                 if (trace <= 64 || (trace & (trace - 1)) == 0)
@@ -21353,18 +23348,23 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 return;
             }
 
-            var hasStandalone = false;
+            // V76.3.8.2: do not flush an open payload batch merely because a
+            // render/storage destination reuses an address whose standalone
+            // deferred-tiled fallback has independently proven byte-stable.
+            // GPU aliases are resolved before the standalone cache path.
+            var hasStandaloneToRemove = false;
             foreach (var key in keys)
             {
                 if (_textureCache.TryGetValue(key, out var resource) &&
-                    resource.GuestImage is null)
+                    resource.GuestImage is null &&
+                    !ShouldPreserveStableDetileResidencyV76382(key, resource, reason))
                 {
-                    hasStandalone = true;
+                    hasStandaloneToRemove = true;
                     break;
                 }
             }
 
-            if (hasStandalone && _batchOpen)
+            if (hasStandaloneToRemove && _batchOpen)
             {
                 FlushBatchedGuestCommands();
             }
@@ -21373,6 +23373,30 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             var removed = 0;
             foreach (var key in keys)
             {
+                if (!_textureCache.TryGetValue(key, out var candidate))
+                {
+                    continue;
+                }
+
+                if (ShouldPreserveStableDetileResidencyV76382(key, candidate, reason))
+                {
+                    TouchStandaloneTextureV7408(candidate);
+                    var preserve = Interlocked.Increment(
+                        ref _detileStableResidencyPreservesV76382);
+                    var totalAvoided = Interlocked.Add(
+                        ref _detileStableResidencyAvoidedBytesV76382,
+                        checked((long)Math.Min(candidate.V7408ResidentBytes, (ulong)long.MaxValue)));
+                    if (preserve <= 64 || (preserve & (preserve - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V76.3.8.2][DETILE_STABLE_RESIDENCY] phase=preserve count={preserve} " +
+                            $"addr=0x{address:X16} reason={reason} " +
+                            $"resource_mb={candidate.V7408ResidentBytes / (1024 * 1024)} " +
+                            $"avoided_mb_total={totalAvoided / (1024 * 1024)}");
+                    }
+                    continue;
+                }
+
                 if (!_textureCache.Remove(key, out var resource))
                 {
                     continue;
@@ -21380,6 +23404,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
 
                 UnmarkTextureContentCached(key);
                 resource.Cached = false;
+                resource.DetileStableResidencyV76382 = false;
                 removed++;
 
                 if (resource.GuestImage is null)
@@ -22668,6 +24693,13 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
         {
             if (guestBuffer.BaseAddress == 0)
             {
+                if (TryCreateRuntimeScalarGlobalBufferResourceV7633(
+                        guestBuffer,
+                        out var runtimeScalarV7633))
+                {
+                    return runtimeScalarV7633;
+                }
+
                 return CreateTransientGlobalBufferResource(guestBuffer);
             }
 
@@ -22719,9 +24751,11 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                     $"{GuestStorageBufferOffsetAlignment}");
             }
 
+            // V76.3.21.2: a non-empty prefix is still a deferred
+            // snapshot when the logical shader range is larger.
             var deferredLiveReadV11712 =
-                guestBuffer.Data.Length == 0 &&
-                guestBuffer.Length > 0;
+                guestBuffer.Length > 0 &&
+                guestBuffer.Data.Length < guestBuffer.Length;
             var source = deferredLiveReadV11712
                 ? ReadOnlySpan<byte>.Empty
                 : guestBuffer.Data.AsSpan(0, guestBuffer.Length);
@@ -22904,8 +24938,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             // Empty Data + positive Length is a validated read-only descriptor
             // emitted by V117.12. Read current guest bytes directly into mapped
             // Vulkan staging instead of guest->ArrayPool->mapped staging.
-            if (guestBuffer.Data.Length == 0 &&
-                guestBuffer.Length > 0)
+            if (guestBuffer.Length > 0 &&
+                guestBuffer.Data.Length < guestBuffer.Length)
             {
                 // SHARPEMU_V74_0_117_13_SHADER_GLOBAL_PERSISTENT_RESIDENCY
                 var residentV11713 =
@@ -23041,6 +25075,62 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
         }
 
 
+        private static bool TryComputeResidentAdmissionFingerprintV76375(
+            SharpEmu.HLE.ICpuMemory memory,
+            ulong baseAddress,
+            int byteLength,
+            out ulong fingerprint)
+        {
+            fingerprint = 0;
+            if (baseAddress == 0 || byteLength <= 0)
+            {
+                return false;
+            }
+
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = (offsetBasis ^ baseAddress) * prime;
+            hash = (hash ^ (ulong)(uint)byteLength) * prime;
+
+            Span<byte> sample = stackalloc byte[64];
+            Span<ulong> offsets = stackalloc ulong[3];
+            var length = (ulong)byteLength;
+            offsets[0] = 0;
+            offsets[1] = length > 64 ? (length - 64) / 2 : 0;
+            offsets[2] = length > 64 ? length - 64 : 0;
+
+            ulong previousOffset = ulong.MaxValue;
+            for (var sampleIndex = 0; sampleIndex < offsets.Length; sampleIndex++)
+            {
+                var offset = offsets[sampleIndex];
+                if (offset == previousOffset)
+                {
+                    continue;
+                }
+                previousOffset = offset;
+
+                var sampleLength = (int)Math.Min(64UL, length - offset);
+                if (sampleLength <= 0 ||
+                    baseAddress > ulong.MaxValue - offset ||
+                    !TryReadGuestTextureBacking(
+                        memory,
+                        baseAddress + offset,
+                        sample[..sampleLength]))
+                {
+                    return false;
+                }
+
+                hash = (hash ^ offset) * prime;
+                for (var index = 0; index < sampleLength; index++)
+                {
+                    hash = (hash ^ sample[index]) * prime;
+                }
+            }
+
+            fingerprint = hash;
+            return true;
+        }
+
         private GlobalBufferResource? TryCreateResidentReadOnlyGlobalBufferV11713(
             GuestMemoryBuffer guestBuffer,
             ulong byteBias,
@@ -23053,9 +25143,115 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 _guestMemory is null ||
                 guestBuffer.Writable ||
                 guestBuffer.BaseAddress == 0 ||
-                guestBuffer.Length < 4096)
+                guestBuffer.Length < _shaderGlobalResidencyMinimumBytesV7631)
             {
                 return null;
+            }
+
+            var guestMemoryV76375 = _guestMemory!;
+
+            if (_residentAdmissionPausedV7633)
+            {
+                return null;
+            }
+
+            // If BAR allocations are already failing, preserving the transient
+            // direct path is more valuable than admitting another persistent
+            // global. Existing residents remain valid; only new admission stops.
+            if (Volatile.Read(ref _v1190RebarGlobalFallbackCount) >=
+                _shaderGlobalResidencyRebarPauseFallbacksV7633)
+            {
+                _residentAdmissionPausedV7633 = true;
+                var pauseV7633 = Interlocked.Increment(
+                    ref _v7633ResidentAdmissionPauseTraceCount);
+                Console.Error.WriteLine(
+                    "[V76.3.3][REBAR_HOTSET] " +
+                    $"action=pause-admission count={pauseV7633} " +
+                    $"rebar_fallbacks={Volatile.Read(ref _v1190RebarGlobalFallbackCount)} " +
+                    $"entries={_residentReadOnlyGlobalsV11713.Count} " +
+                    $"resident_mb={_residentReadOnlyGlobalBytesV11713 / (1024.0 * 1024.0):F2}");
+                return null;
+            }
+
+            if (_shaderGlobalResidencyHotAdmissionV7631)
+            {
+                var shapeV7631 = new ResidentReadOnlyGlobalShapeV7631(
+                    guestBuffer.BaseAddress,
+                    guestBuffer.Length,
+                    byteBias,
+                    guestSize);
+
+                if (!TryComputeResidentAdmissionFingerprintV76375(
+                        guestMemoryV76375,
+                        guestBuffer.BaseAddress,
+                        guestBuffer.Length,
+                        out var candidateFingerprintV76375))
+                {
+                    Interlocked.Increment(
+                        ref _v76375ResidentCandidateProbeFailures);
+                    return null;
+                }
+
+                if (!_residentReadOnlyGlobalCandidatesV7631.TryGetValue(
+                        shapeV7631,
+                        out var candidateV76375))
+                {
+                    if (_residentReadOnlyGlobalCandidatesV7631.Count <
+                        V7631MaximumResidencyCandidates)
+                    {
+                        _residentReadOnlyGlobalCandidatesV7631.Add(
+                            shapeV7631,
+                            new ResidentAdmissionCandidateV76375(
+                                1,
+                                candidateFingerprintV76375));
+                    }
+
+                    return null;
+                }
+
+                if (candidateV76375.Fingerprint !=
+                    candidateFingerprintV76375)
+                {
+                    _residentReadOnlyGlobalCandidatesV7631[shapeV7631] =
+                        new ResidentAdmissionCandidateV76375(
+                            1,
+                            candidateFingerprintV76375);
+                    Interlocked.Increment(
+                        ref _v76375ResidentCandidateContentChanges);
+                    return null;
+                }
+
+                var requiredObservationsV7636 =
+                    _shaderGlobalResidencyAdmissionObservationsV7633;
+                if (guestBuffer.Length >= _shaderGlobalResidencyLargeBytesV7636)
+                {
+                    requiredObservationsV7636 = Math.Min(
+                        requiredObservationsV7636,
+                        _shaderGlobalResidencyLargeObservationsV7636);
+                }
+                else if (guestBuffer.Length >= _shaderGlobalResidencyMediumBytesV7636)
+                {
+                    requiredObservationsV7636 = Math.Min(
+                        requiredObservationsV7636,
+                        _shaderGlobalResidencyMediumObservationsV7636);
+                }
+
+                var observationsV76375 =
+                    candidateV76375.Observations;
+                if (observationsV76375 < requiredObservationsV7636)
+                {
+                    observationsV76375++;
+                    _residentReadOnlyGlobalCandidatesV7631[shapeV7631] =
+                        new ResidentAdmissionCandidateV76375(
+                            observationsV76375,
+                            candidateFingerprintV76375);
+                    Interlocked.Increment(
+                        ref _v76375ResidentCandidateStableObservations);
+                    if (observationsV76375 < requiredObservationsV7636)
+                    {
+                        return null;
+                    }
+                }
             }
 
             if (_residentDisabledBaseV11713.Contains(
@@ -23108,6 +25304,20 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 return null;
             }
 
+            // V76.3.1 stable-only policy: after a base has been admitted, the
+            // first observed guest write disables residency for that base. This
+            // prevents dynamic constants from consuming the bounded cache with
+            // one allocation per generation and avoids repeated page-fault churn.
+            if (_residentCachedGenerationByBaseV7631.TryGetValue(
+                    guestBuffer.BaseAddress,
+                    out var cachedGenerationV7631) &&
+                cachedGenerationV7631 != generationBeforeV11713)
+            {
+                _residentDisabledBaseV11713.Add(guestBuffer.BaseAddress);
+                Interlocked.Increment(ref _v11713ResidentGenerationChanges);
+                return null;
+            }
+
             var keyV11713 = new ResidentReadOnlyGlobalKeyV11713(
                 guestBuffer.BaseAddress,
                 guestBuffer.Length,
@@ -23133,11 +25343,11 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                     WriteBackToGuest = false,
                     Buffer = cachedV11713.Buffer,
                     Memory = cachedV11713.Memory,
-                    Mapped = 0,
+                    Mapped = cachedV11713.Mapped,
                     UploadBuffer = cachedV11713.UploadBuffer,
                     UploadMemory = cachedV11713.UploadMemory,
                     NeedsUpload = cachedV11713.NeedsUpload,
-                    DeviceLocal = true,
+                    DeviceLocal = cachedV11713.DeviceLocal,
                     Offset = 0,
                     Size = cachedV11713.DescriptorSize,
                     GuestOffset = cachedV11713.GuestOffset,
@@ -23165,9 +25375,11 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                     byteBias,
                     guestSize,
                     descriptorSize,
-                    descriptorLength);
+                    descriptorLength,
+                    allowRebarDirectV7633: false);
 
-            if (!createdV11713.DeviceLocal ||
+            if ((createdV11713.Buffer.Handle == 0 ||
+                 (!createdV11713.DeviceLocal && createdV11713.Mapped == 0)) ||
                 !SharpEmu.HLE.GuestImageWriteTracker
                     .TryGetShaderGlobalWriteGeneration(
                         guestBuffer.BaseAddress,
@@ -23185,9 +25397,11 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                     Key = keyV11713,
                     Buffer = createdV11713.Buffer,
                     Memory = createdV11713.Memory,
+                    Mapped = createdV11713.Mapped,
                     UploadBuffer = createdV11713.UploadBuffer,
                     UploadMemory = createdV11713.UploadMemory,
                     NeedsUpload = createdV11713.NeedsUpload,
+                    DeviceLocal = createdV11713.DeviceLocal,
                     DescriptorSize = createdV11713.Size,
                     GuestOffset = createdV11713.GuestOffset,
                     GuestSize = createdV11713.GuestSize,
@@ -23198,6 +25412,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 backingV11713);
             _residentReadOnlyGlobalBytesV11713 +=
                 createdV11713.Size;
+            _residentCachedGenerationByBaseV7631[guestBuffer.BaseAddress] =
+                generationAfterV11713;
             createdV11713.ResidentBackingV11713 =
                 backingV11713;
 
@@ -23233,7 +25449,10 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 $"entries={_residentReadOnlyGlobalsV11713.Count} " +
                 $"resident_mb={_residentReadOnlyGlobalBytesV11713 / (1024.0 * 1024.0):F2} " +
                 $"saved_mb={Volatile.Read(ref _v11713ResidentSavedReadBytes) / (1024.0 * 1024.0):F2} " +
-                $"created_mb={Volatile.Read(ref _v11713ResidentCreatedBytes) / (1024.0 * 1024.0):F2}");
+                $"created_mb={Volatile.Read(ref _v11713ResidentCreatedBytes) / (1024.0 * 1024.0):F2} " +
+                $"candidate_stable={Volatile.Read(ref _v76375ResidentCandidateStableObservations)} " +
+                $"candidate_changes={Volatile.Read(ref _v76375ResidentCandidateContentChanges)} " +
+                $"candidate_probe_fail={Volatile.Read(ref _v76375ResidentCandidateProbeFailures)}");
         }
 
         private GlobalBufferResource CreateDeferredReadOnlyGlobalBufferResourceV11712(
@@ -23241,7 +25460,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             ulong byteBias,
             ulong guestSize,
             ulong descriptorSize,
-            int descriptorLength)
+            int descriptorLength,
+            bool allowRebarDirectV7633 = true)
         {
             if (_guestMemory is null)
             {
@@ -23255,7 +25475,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             var rebarMemoryV1190 = default(DeviceMemory);
             nint rebarMappedV1190 = 0;
             var rebarDirectV1190 = false;
-            if (_rebarGlobalDirectV1190)
+            if (_rebarGlobalDirectV1190 && allowRebarDirectV7633)
             {
                 rebarDirectV1190 =
                     TryCreateRebarHostBufferUninitializedV1190(
@@ -23407,6 +25627,118 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 $"count={Volatile.Read(ref _v11712DirectUploadCount)} " +
                 $"bytes={Volatile.Read(ref _v11712DirectUploadBytes)} " +
                 $"failures={Volatile.Read(ref _v11712DirectUploadFailures)}");
+        }
+
+        private bool TryCreateRuntimeScalarGlobalBufferResourceV7633(
+            GuestMemoryBuffer guestBuffer,
+            out GlobalBufferResource resource)
+        {
+            resource = null!;
+            if (!_runtimeScalarDirectV7633 ||
+                guestBuffer.BaseAddress != 0 ||
+                guestBuffer.Writable ||
+                guestBuffer.Length <= 0 ||
+                guestBuffer.Length > _runtimeScalarDirectMaximumBytesV7633 ||
+                guestBuffer.Data.Length < guestBuffer.Length)
+            {
+                Interlocked.Increment(ref _v7633RuntimeScalarFallbackCount);
+                return false;
+            }
+
+            var descriptorSize = checked(
+                ((ulong)Math.Max(guestBuffer.Length, sizeof(uint)) + 3UL) & ~3UL);
+            var descriptorLength = checked((int)descriptorSize);
+
+            var directBufferV7633 = default(VkBuffer);
+            var directMemoryV7633 = default(DeviceMemory);
+            nint directMappedV7633 = 0;
+            var rebarV7633 = false;
+            if (_rebarGlobalDirectV1190)
+            {
+                rebarV7633 = TryCreateRebarHostBufferUninitializedV1190(
+                    descriptorSize,
+                    BufferUsageFlags.StorageBufferBit,
+                    out directBufferV7633,
+                    out directMemoryV7633,
+                    out directMappedV7633);
+            }
+
+            if (!rebarV7633)
+            {
+                directBufferV7633 = CreateHostBufferUninitializedV11712(
+                    descriptorSize,
+                    BufferUsageFlags.StorageBufferBit,
+                    out directMemoryV7633,
+                    out directMappedV7633);
+            }
+
+            var successV7633 = false;
+            try
+            {
+                var mappedSpanV7633 = new Span<byte>(
+                    (void*)directMappedV7633,
+                    descriptorLength);
+                mappedSpanV7633.Clear();
+                guestBuffer.Data.AsSpan(0, guestBuffer.Length).CopyTo(
+                    mappedSpanV7633);
+
+                resource = new GlobalBufferResource
+                {
+                    BaseAddress = 0,
+                    Writable = false,
+                    WriteBackToGuest = false,
+                    Buffer = directBufferV7633,
+                    Memory = directMemoryV7633,
+                    Mapped = directMappedV7633,
+                    NeedsUpload = false,
+                    DeviceLocal = false,
+                    Offset = 0,
+                    Size = descriptorSize,
+                    GuestOffset = 0,
+                    GuestSize = (ulong)Math.Max(guestBuffer.Length, sizeof(uint)),
+                };
+                successV7633 = true;
+
+                var countV7633 = Interlocked.Increment(
+                    ref _v7633RuntimeScalarDirectCount);
+                var bytesV7633 = Interlocked.Add(
+                    ref _v7633RuntimeScalarDirectBytes,
+                    guestBuffer.Length);
+                if (rebarV7633)
+                {
+                    Interlocked.Increment(ref _v7633RuntimeScalarRebarCount);
+                }
+                else
+                {
+                    Interlocked.Increment(ref _v7633RuntimeScalarHostCount);
+                }
+
+                if (countV7633 <= 16 ||
+                    (countV7633 & (countV7633 - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        "[V76.3.3][RUNTIME_SCALAR_DIRECT] " +
+                        $"count={countV7633} bytes={bytesV7633} " +
+                        $"rebar={Volatile.Read(ref _v7633RuntimeScalarRebarCount)} " +
+                        $"host={Volatile.Read(ref _v7633RuntimeScalarHostCount)} " +
+                        $"fallbacks={Volatile.Read(ref _v7633RuntimeScalarFallbackCount)} " +
+                        "staging_copy=0 transfer_barrier=0");
+                }
+
+                return true;
+            }
+            finally
+            {
+                if (!successV7633 && directBufferV7633.Handle != 0)
+                {
+                    RecycleHostBuffer(directBufferV7633, directMemoryV7633);
+                }
+
+                if (guestBuffer.Pooled)
+                {
+                    GuestDataPool.Shared.Return(guestBuffer.Data);
+                }
+            }
         }
 
         private GlobalBufferResource CreateTransientGlobalBufferResource(
@@ -23910,6 +26242,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 Memory = memory,
                 OwnsBuffer = ownsBuffer,
                 Size = size,
+                GuestAddress = guestBuffer.BaseAddress,
                 Location = guestBuffer.Location,
                 ComponentCount = guestBuffer.ComponentCount,
                 DataFormat = guestBuffer.DataFormat,
@@ -23928,6 +26261,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             Memory = shared.Memory,
             OwnsBuffer = false,
             Size = shared.Size,
+            GuestAddress = guestBuffer.BaseAddress,
             Location = guestBuffer.Location,
             ComponentCount = guestBuffer.ComponentCount,
             DataFormat = guestBuffer.DataFormat,
@@ -25145,6 +27479,11 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
 
             var localInvocations =
                 (ulong)work.LocalSizeX * work.LocalSizeY * work.LocalSizeZ;
+            if (localInvocations > 0 && localInvocations < 64)
+            {
+                return "wave64-partial-single-wave-v762414";
+            }
+
             if (localInvocations == 64)
             {
                 return "wave64-cross-subgroup";
@@ -25197,7 +27536,9 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                         $"textures={work.Textures.Count} storage={storageV7601} " +
                         $"globals={work.GlobalMemoryBuffers.Count} " +
                         $"spirv_bytes={work.ComputeSpirv.Length} " +
-                        "coalesce=off submit_boundary=per-dispatch");
+                        (_binkProvenComputePairV76383
+                            ? "coalesce=proven-pair2 submit_boundary=hazard-or-pair2"
+                            : "coalesce=off submit_boundary=per-dispatch"));
                 }
             }
             GuestResourceProvenance.TraceConsumer(
@@ -25280,11 +27621,12 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 _disjointComputePair2V7401177 &&
                 _preservePayloadBatchV7405620 &&
                 singleHostComputeV7401174 &&
-                !strictGuestBinkGpuV7601 &&
+                (!strictGuestBinkGpuV7601 || _binkProvenComputePairV76383) &&
                 !isolateComputeV74099 &&
                 _batchOpen &&
                 _batchDrawCount > 0 &&
-                _batchComputeCountV7401174 == 1 &&
+                _batchComputeCountV7401174 >= 1 &&
+                _batchComputeCountV7401174 < _computeChainMaxV763171 &&
                 _batchLastPayloadWasComputeV74099 &&
                 string.Equals(
                     _batchLastPayloadQueueV74099,
@@ -25301,6 +27643,26 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             if (disjointComputePairV7401177)
             {
                 Interlocked.Increment(ref _v7401177PairAccepted);
+                if (string.Equals(
+                        disjointPairReasonV7401177,
+                        "write-overlap-barrier",
+                        StringComparison.Ordinal))
+                {
+                    var traceV7635 = Interlocked.Increment(
+                        ref _v7635BarrieredWriteOverlapPairTraceCount);
+                    if (traceV7635 <= 128 ||
+                        (traceV7635 & (traceV7635 - 1)) == 0)
+                    {
+                        Console.Error.WriteLine(
+                            $"[V76.3.5][WRITE_OVERLAP_PAIR] " +
+                            $"count={traceV7635} " +
+                            $"queue={_activeGuestQueue.Name} " +
+                            $"submission={_activeGuestQueue.SubmissionId} " +
+                            $"prev_cs=0x{priorComputeShaderV7401175:X16} " +
+                            $"curr_cs=0x{work.ShaderAddress:X16} " +
+                            "action=share-command-buffer-full-memory-barrier");
+                    }
+                }
             }
 
             if (!continueComputeBatchV74099 &&
@@ -25512,7 +27874,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 actualDisjointComputePairV7401177 =
                     disjointComputePairV7401177 &&
                     _batchOpen &&
-                    _batchComputeCountV7401174 == 1 &&
+                    _batchComputeCountV7401174 >= 1 &&
+                _batchComputeCountV7401174 < _computeChainMaxV763171 &&
                     _batchLastPayloadWasComputeV74099 &&
                     string.Equals(
                         _batchLastPayloadQueueV74099,
@@ -25606,7 +27969,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 // transferred to the batch fence exactly like a translated draw.
                 var useSharedComputeBatchV7405617 =
                     _computeSharedBatchV7405617 &&
-                    !strictGuestBinkGpuV7601 &&
+                    (!strictGuestBinkGpuV7601 || _binkProvenComputePairV76383) &&
                     !work.IsIndirect &&
                     batchCount == 1;
 
@@ -25763,13 +28126,34 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                     // A joined graphics->compute edge is submitted immediately.
                     // This keeps V98's one-compute boundary while removing the
                     // separate submit that previously occurred BEFORE compute.
+                    var chainLimitReachedV763171 =
+                        actualDisjointComputePairV7401177 &&
+                        _batchComputeCountV7401174 >= _computeChainMaxV763171;
+
+                    if (actualDisjointComputePairV7401177 &&
+                        _batchComputeCountV7401174 > 2)
+                    {
+                        var extendedV763171 = Interlocked.Increment(
+                            ref _v763171ComputeChainExtendedCount);
+                        if (extendedV763171 <= 128 ||
+                            (extendedV763171 & (extendedV763171 - 1)) == 0)
+                        {
+                            Console.Error.WriteLine(
+                                $"[V76.3.17.1][COMPUTE_CHAIN] " +
+                                $"count={extendedV763171} " +
+                                $"queue={_activeGuestQueue.Name} " +
+                                $"submission={_activeGuestQueue.SubmissionId} " +
+                                $"compute_in_batch={_batchComputeCountV7401174} " +
+                                $"max={_computeChainMaxV763171} " +
+                                $"edge={disjointPairReasonV7401177} " +
+                                "barrier=all-commands-memory-rw");
+                        }
+                    }
+
                     if (++_batchDrawCount >= computeBatchLimitV74099 ||
                         joinPriorGraphicsBatchV7401174 ||
-                        actualDisjointComputePairV7401177)
+                        chainLimitReachedV763171)
                     {
-                        // V117.7 cap=2: a validated compute pair is submitted
-                        // immediately after its second dispatch. No third compute
-                        // can enter the same physical payload submit.
                         FlushBatchedGuestCommands();
                     }
 
@@ -29240,7 +31624,21 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             Check(_vk.BindImageMemory(_device, image, memory, 0), "vkBindImageMemory(offscreen)");
             // Rendering and uploads only define the mips they touch; define the whole
             // chain once so full-chain sampled binds never read Undefined layout.
-            TransitionNewGuestImageToSampled(image, mipLevels);
+            // V76.3.8.3 also publishes the guest address range to cross-queue
+            // hazard tracking, so the utility transition does not need a global
+            // compute<->graphics lane join.
+            var transitionGuestBytesV76383 = Math.Max(
+                GetTextureByteCount(
+                    target.Format,
+                    target.Width,
+                    target.Height,
+                    depth),
+                1UL);
+            TransitionNewGuestImageToSampled(
+                image,
+                mipLevels,
+                target.Address,
+                transitionGuestBytesV76383);
 
             var viewInfo = new ImageViewCreateInfo
             {
@@ -30100,7 +32498,18 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 MarkGuestImageContentWrittenV60(resource, "format-convert");
 
                 Check(_vk.EndCommandBuffer(commandBuffer), "vkEndCommandBuffer(format-convert)");
-                SubmitGuestCommandBuffer(commandBuffer, [], []);
+                var formatConvertAccessesV76383 = new[]
+                {
+                    new VulkanQueueAccessV7615(
+                        resource.Address,
+                        GetCrossQueueGuestImageExtentV762413(resource),
+                        true),
+                };
+                SubmitGuestCommandBuffer(
+                    commandBuffer,
+                    [],
+                    [],
+                    explicitQueueAccessesV76383: formatConvertAccessesV76383);
 
                 if (_traceGuestImageEvents)
                 {
@@ -30542,19 +32951,90 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             foreach (var blocked in
                      _v74042VisibilityBlockedUntilTimeline.ToArray())
             {
-                if (blocked.Value <= _completedTimeline)
+                var unblock = blocked.Value <= _completedTimeline;
+                var unblockSourceV763841 = unblock
+                    ? "global-retired"
+                    : "not-ready";
+
+                // SHARPEMU_V76_3_8_4_1_1_EXACT_VISIBILITY_QUEUE_UNBLOCK
+                // V76.3.8.4 proved that publishing RELEASE_MEM callbacks from
+                // an out-of-order fence is the wrong layer: it increased slow
+                // waits and callback polling.  The actual head-of-line problem
+                // is narrower.  V74.0.42 excludes a logical queue until a
+                // process-global timeline advances, even when the exact Vulkan
+                // fence that caused this queue's CPU-visibility block is already
+                // signalled on its own physical lane.
+                //
+                // Only clear the scheduler exclusion here.  Do NOT execute an
+                // ordered action, complete guest work, retire resources, return
+                // a fence, or advance _completedTimeline.  The selected queue
+                // will retry its normal ordered action, whose existing
+                // TryMakeActiveGuestQueueSubmissionsCpuVisible() path re-checks
+                // the same exact fence before allowing the CPU-visible side
+                // effect.  This preserves guest FIFO/WAIT/RELEASE semantics
+                // while removing cross-lane global-timeline head-of-line drag.
+                if (!unblock)
+                {
+                    PendingGuestSubmission? exactTargetV763841 = null;
+                    foreach (var submission in _pendingGuestSubmissions)
+                    {
+                        if (submission.Timeline == blocked.Value)
+                        {
+                            exactTargetV763841 = submission;
+                            break;
+                        }
+                    }
+
+                    if (exactTargetV763841 is null)
+                    {
+                        foreach (var submission in _abandonedGuestSubmissions)
+                        {
+                            if (submission.Timeline == blocked.Value)
+                            {
+                                exactTargetV763841 = submission;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (exactTargetV763841 is not null)
+                    {
+                        var exactStatusV763841 = _vk.GetFenceStatus(
+                            _device,
+                            exactTargetV763841.Fence);
+                        if (exactStatusV763841 == Result.Success)
+                        {
+                            unblock = true;
+                            unblockSourceV763841 = "exact-fence-signalled";
+                        }
+                        else if (exactStatusV763841 == Result.ErrorDeviceLost)
+                        {
+                            _deviceLost = true;
+                            return;
+                        }
+                        else if (exactStatusV763841 != Result.NotReady)
+                        {
+                            Check(
+                                exactStatusV763841,
+                                $"vkGetFenceStatus(visibility-block timeline={blocked.Value})");
+                        }
+                    }
+                }
+
+                if (unblock)
                 {
                     _v74042VisibilityBlockedUntilTimeline.Remove(blocked.Key);
                     var unblockCount = Interlocked.Increment(
                         ref _v74042VisibilityQueueUnblockTraceCount);
-                    if (unblockCount <= 64 ||
+                    if (unblockCount <= 128 ||
                         (unblockCount & (unblockCount - 1)) == 0)
                     {
                         Console.Error.WriteLine(
-                            $"[V74.0.42][QUEUE_TIMELINE_UNBLOCK] " +
+                            $"[V76.3.8.4.1.1][VISIBILITY_EXACT_UNBLOCK] " +
                             $"count={unblockCount} queue={blocked.Key} " +
                             $"target_timeline={blocked.Value} " +
-                            $"completed_timeline={_completedTimeline}");
+                            $"completed_timeline={_completedTimeline} " +
+                            $"source={unblockSourceV763841}");
                     }
 
                     continue;
@@ -31232,6 +33712,9 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
 
                 _lastGuestWorkLabel = _activeGuestWorkLabel;
                 var deferGuestWork = false;
+                var deferGuestWorkCompletionToTimelineV7634 = false;
+                var orderedMicrobatchedV76380 = 0;
+                var drawBufferedV76383 = 0;
 
                 var traceWork = _traceRenderWork;
                 var workStart = traceWork || _traceSlowRenderWorkV740293 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
@@ -31276,6 +33759,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                                         offscreenDraw.Draw.GlobalMemoryBuffers))
                                 {
                                     ExecuteOffscreenDraw(offscreenDraw);
+                                    drawBufferedV76383 = DrainDrawCommandBufferV76383(
+                                        pendingGuestWork);
                                 }
                                 else
                                 {
@@ -31339,7 +33824,16 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                         case VulkanOrderedGuestAction orderedAction:
                             using (RenderPhaseProfile.Measure(RenderPhaseProfile.Phase.OrderedAction))
                             {
-                                deferGuestWork = !TryExecuteOrderedGuestAction(orderedAction);
+                                deferGuestWork = !TryExecuteOrderedGuestAction(
+                                    orderedAction,
+                                    pendingGuestWork,
+                                    out deferGuestWorkCompletionToTimelineV7634);
+                                if (!deferGuestWork && !deferGuestWorkCompletionToTimelineV7634)
+                                {
+                                    orderedMicrobatchedV76380 = DrainOrderedActionMicrobatchV76380(
+                                        pendingGuestWork,
+                                        orderedAction);
+                                }
                             }
 
                             break;
@@ -31363,7 +33857,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 {
                     using (RenderPhaseProfile.Measure(RenderPhaseProfile.Phase.CompleteWork))
                     {
-                        if (!deferGuestWork || !RequeueGuestWorkFront(pendingGuestWork))
+                        if (!deferGuestWorkCompletionToTimelineV7634 &&
+                            (!deferGuestWork || !RequeueGuestWorkFront(pendingGuestWork)))
                         {
                             CompleteGuestWork(pendingGuestWork);
                         }
@@ -31432,7 +33927,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                     }
                 }
 
-                completedWork++;
+                completedWork += 1 + orderedMicrobatchedV76380 + drawBufferedV76383;
 
                 if (_kytyPresentationFirstV74034 &&
                     HasReadyPresentationV74034(_presentedSequence))
@@ -32024,9 +34519,9 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             if (_dualPhysicalQueueEnabledV1131)
             {
                 presentComputeWaitValueV1131 =
-                    presentCrossQueueSyncV7615.HasTrackedAccess
-                        ? presentCrossQueueSyncV7615.WaitValue
-                        : _computeQueueSignalValueV1131;
+                    ResolvePresentComputeWaitV76383(
+                        presentCrossQueueSyncV7615.HasTrackedAccess,
+                        presentCrossQueueSyncV7615.WaitValue);
                 presentGraphicsSignalValueV1131 = ++_graphicsQueueSignalValueV1131;
 
                 presentWaitSemaphoresV1131[0] = imageAvailable;
@@ -32114,6 +34609,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             _frameTimelines[frameSlot] = _submitTimeline;
             _frameFencePending[frameSlot] = true;
             _frameTranslatedResources[frameSlot] = translatedResources;
+            // V76.0.26: frame fence retirement in TryWaitFrameSlot owns completion.
+            VulkanQueueSubmitHooksV7622.NoteGraphicsSubmit();
             if (translatedResources is not null)
             {
                 // CPU-side layout bookkeeping only; later command buffers are
@@ -32181,6 +34678,7 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             }
 
             CheckSwapchainResult(presentResult, "vkQueuePresentKHR");
+            VulkanQueueSubmitHooksV7622.NotePresented();
             if (translatedResources is { UsesGuestBinkYuvV7613: true })
             {
                 BinkGuestAvClockV7613.NotifyPresentedFrame(
@@ -32553,10 +35051,16 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
 
                     var nonzeroBytes = 0L;
                     ulong hash = 14695981039346656037UL;
+                    ulong byteSumV7627 = 0;
+                    byte byteMinV7627 = byte.MaxValue;
+                    byte byteMaxV7627 = byte.MinValue;
                     foreach (var value in bytes)
                     {
                         nonzeroBytes += value == 0 ? 0 : 1;
                         hash = (hash ^ value) * 1099511628211UL;
+                        byteSumV7627 += value;
+                        byteMinV7627 = Math.Min(byteMinV7627, value);
+                        byteMaxV7627 = Math.Max(byteMaxV7627, value);
                     }
 
                     var nonblackPixels = CountNonblackPixels(
@@ -32569,14 +35073,34 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                         (int)bytesPerPixel);
                     var center = Convert.ToHexString(
                         bytes.Slice(centerOffset, (int)bytesPerPixel));
+                    var sampleUniqueV7627 =
+                        CountSampledUniquePixels(bytes, bytesPerPixel);
                     Console.Error.WriteLine(
                         "[LOADER][TRACE] " +
                         $"vk.guest_image addr=0x{image.Address:X16} " +
                         $"size={image.Width}x{image.Height} format={image.Format} " +
                         $"nonzero_bytes={nonzeroBytes}/{byteCount} " +
                         $"nonblack_pixels={nonblackPixels}/{(ulong)image.Width * image.Height} " +
-                        $"center={center} sample_unique={CountSampledUniquePixels(bytes, bytesPerPixel)} " +
+                        $"center={center} sample_unique={sampleUniqueV7627} " +
                         $"hash=0x{hash:X16}");
+
+                    if (_v7627GuestBinkTraceRoles.TryGetValue(
+                            image.Address,
+                            out var binkTraceRoleV7627))
+                    {
+                        var meanByteV7627 = byteCount == 0
+                            ? 0.0
+                            : byteSumV7627 / (double)byteCount;
+                        Console.Error.WriteLine(
+                            "[BINK-GUEST][V76.2.7][PIXEL-TRUTH] " +
+                            $"role={binkTraceRoleV7627} addr=0x{image.Address:X16} " +
+                            $"size={image.Width}x{image.Height} format={image.Format} " +
+                            $"nonzero_bytes={nonzeroBytes}/{byteCount} " +
+                            $"sample_unique={sampleUniqueV7627} center={center} " +
+                            $"byte_min={byteMinV7627} byte_max={byteMaxV7627} " +
+                            $"byte_mean={meanByteV7627:F3} hash=0x{hash:X16}");
+                    }
+
                     DumpGuestImageBytes(image, bytes);
                 }
                 finally
@@ -34570,6 +37094,41 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 return false;
             }
 
+            // V76.2.6: opt-in content truth for final guest Bink Y/UV planes.
+            // Addresses change between runs, so the diagnostic identifies the
+            // tile-5 R8/RG8 storage surfaces directly instead of requiring a
+            // manually copied SHARPEMU_TRACE_GUEST_IMAGE_ADDRS list.
+            if (_traceGuestBinkYuvV7626 &&
+                BinkGuestOwnedRuntimeV7600.IsGuestMovieActive &&
+                image.TileModeKnown &&
+                image.TileMode == 5 &&
+                image.Width >= 640 &&
+                image.Height >= 360 &&
+                image.Format is Format.R8Uint or Format.R8G8Uint)
+            {
+                var count = _guestImageTraceCounts.TryGetValue(
+                    image.Address,
+                    out var previousBinkYuvV7626)
+                    ? previousBinkYuvV7626 + 1
+                    : 1;
+                _guestImageTraceCounts[image.Address] = count;
+                var initialTraceLimitV7627 =
+                    _traceGuestBinkPixelTruthV7627 ? 1L : 2L;
+                if (count <= initialTraceLimitV7627 ||
+                    (_traceGuestBinkYuvEveryV7626 > 0 &&
+                     count % _traceGuestBinkYuvEveryV7626 == 0))
+                {
+                    _v7627GuestBinkTraceRoles[image.Address] =
+                        image.Format == Format.R8Uint ? "y-plane" : "uv-plane";
+                    Console.Error.WriteLine(
+                        "[BINK-GUEST][V76.2.7][YUV-READBACK] " +
+                        $"addr=0x{image.Address:X16} size={image.Width}x{image.Height} " +
+                        $"format={image.Format} tile={image.TileMode} occurrence={count} " +
+                        "stage=post-submit-fence-retirement");
+                    return true;
+                }
+            }
+
             if (_traceGuestImageShaderFilterEnabled &&
                 !AddressListContains(
                     "SHARPEMU_TRACE_GUEST_IMAGE_SHADER_ADDRS",
@@ -34641,6 +37200,12 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
         }
 
         private readonly Dictionary<ulong, long> _guestImageTraceCounts = new();
+        // V76.2.7: role metadata survives until fence retirement so the raw
+        // readback can say whether it is a final Y/UV plane or the first RGB
+        // target that consumed those exact producers.
+        private readonly Dictionary<ulong, string> _v7627GuestBinkTraceRoles = new();
+        private readonly Dictionary<ulong, long> _v7627GuestBinkRgbTraceCounts = new();
+        private long _v7627GuestBinkRgbTraceScheduled;
         private long _globalGuestImageDrawCount;
         private long _intervalReadbackCount;
 
@@ -34774,6 +37339,49 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             !string.IsNullOrWhiteSpace(
                 Environment.GetEnvironmentVariable(
                     "SHARPEMU_TRACE_GUEST_IMAGE_ADDRS"));
+        // V76.2.8: the V76.2.7 pixel-truth path uses blocking queue-idle
+        // readback and was proven by A/B to trigger/detect a device-lost during
+        // Demon's Souls Bink playback. Keep it quarantined behind an explicit
+        // unsafe diagnostics opt-in; normal guest Bink must never enter it.
+        private static readonly bool _allowBlockingGuestImageReadbackV7628 =
+            string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_UNSAFE_BLOCKING_GUEST_READBACK"),
+                "1",
+                StringComparison.Ordinal);
+        private static readonly bool _traceGuestBinkYuvV7626 =
+            _allowBlockingGuestImageReadbackV7628 &&
+            string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_YUV_VALIDATE"),
+                "1",
+                StringComparison.Ordinal);
+        private static readonly long _traceGuestBinkYuvEveryV7626 =
+            long.TryParse(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_YUV_TRACE_EVERY"),
+                out var traceGuestBinkYuvEveryV7626) &&
+            traceGuestBinkYuvEveryV7626 > 0
+                ? traceGuestBinkYuvEveryV7626
+                : 0;
+        private static readonly bool _traceGuestBinkPixelTruthV7627 =
+            _allowBlockingGuestImageReadbackV7628 &&
+            string.Equals(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_PIXEL_TRUTH"),
+                "1",
+                StringComparison.Ordinal);
+        private static readonly long _traceGuestBinkRgbEveryV7627 =
+            long.TryParse(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_RGB_TRACE_EVERY"),
+                out var traceGuestBinkRgbEveryV7627) &&
+            traceGuestBinkRgbEveryV7627 > 0
+                ? traceGuestBinkRgbEveryV7627
+                : 0;
+        private static readonly long _traceGuestBinkRgbLimitV7627 =
+            long.TryParse(
+                Environment.GetEnvironmentVariable("SHARPEMU_BINK_RGB_TRACE_LIMIT"),
+                out var traceGuestBinkRgbLimitV7627) &&
+            traceGuestBinkRgbLimitV7627 > 0
+                ? Math.Min(traceGuestBinkRgbLimitV7627, 8)
+                : 2;
         private static readonly double _renderResolutionScale =
             double.TryParse(
                 Environment.GetEnvironmentVariable("SHARPEMU_RENDER_SCALE"),
@@ -35172,6 +37780,20 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
                 if (texture is null)
                 {
                     continue;
+                }
+
+                // V76.3.7.5: a swizzle/storage alias may own a view while
+                // borrowing the canonical image. Destroy only that view; never
+                // touch the backing image or its device memory.
+                if (texture.OwnsAliasViewV76375 &&
+                    texture.View.Handle != 0)
+                {
+                    _vk.DestroyImageView(
+                        _device,
+                        texture.View,
+                        null);
+                    texture.View = default;
+                    texture.OwnsAliasViewV76375 = false;
                 }
 
                 // SHARPEMU_V74_0_73_SAMPLER_IMAGE_ALIAS
@@ -36428,6 +39050,8 @@ return new HostMovieTextureBindings(lumaIndex, chromaIndex);
             // rented objects in _deviceBufferPool and are destroyed by its
             // Dispose() below. Clear only host-side lookup metadata here.
             _residentReadOnlyGlobalsV11713.Clear();
+            _residentReadOnlyGlobalCandidatesV7631.Clear();
+            _residentCachedGenerationByBaseV7631.Clear();
             _residentTrackedLengthByBaseV11713.Clear();
             _residentDisabledBaseV11713.Clear();
             _residentReadOnlyGlobalBytesV11713 = 0;

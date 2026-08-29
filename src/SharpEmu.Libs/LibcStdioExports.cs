@@ -515,7 +515,7 @@ public static class LibcStdioExports
                 }
                 else
                 {
-                    Console.Out.Write(System.Text.Encoding.UTF8.GetString(buffer, 0, request));
+                    KernelMemoryCompatExports.WriteGuestConsoleTextV7637111(System.Text.Encoding.UTF8.GetString(buffer, 0, request));
                 }
 
                 totalWritten += (ulong)request;
@@ -627,7 +627,7 @@ public static class LibcStdioExports
         }
         else
         {
-            Console.Out.Write(rendered);
+            KernelMemoryCompatExports.WriteGuestConsoleTextV7637111(rendered);
         }
 
         ctx[CpuRegister.Rax] = (ulong)payload.Length;

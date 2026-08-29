@@ -71,7 +71,8 @@ internal sealed class RadBinkNativeSdkDecoderV7500 :
     {
         decoder = null;
 
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(moviePath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(moviePath))
         {
             return false;
         }

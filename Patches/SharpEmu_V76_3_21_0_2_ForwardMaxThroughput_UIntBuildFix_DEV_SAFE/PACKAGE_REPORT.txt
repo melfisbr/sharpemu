@@ -1,0 +1,11 @@
+﻿tag=V76.3.21.0.2-FORWARD-MAX-THROUGHPUT-UINT-BUILDFIX
+configuration=Debug
+source_replacement=0
+original_v21_merge=preserved
+semantic_bridge_v2101=preserved
+compile_error=CS0266
+compile_site=VulkanVideoPresenter.CommandBufferCount
+cause=MaxFramesInFlight-const-int-to-static-readonly-int
+fix=CommandBufferCount=(uint)MaxFramesInFlight
+runtime_behavior_change_from_buildfix=0
+rollback=original-v21-plus-wrapper-presenter

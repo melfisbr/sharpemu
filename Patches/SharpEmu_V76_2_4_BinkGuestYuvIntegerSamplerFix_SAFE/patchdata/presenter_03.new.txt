@@ -1,6 +1,0 @@
-                        DstSelect = texture.DstSelect,
-                        SamplerState = NormalizeGuestBinkIntegerSamplerV7624(
-                            texture.Sampler,
-                            texture.Format,
-                            texture.Address),
-                        GuestImage = binkYuvProducerV7602,

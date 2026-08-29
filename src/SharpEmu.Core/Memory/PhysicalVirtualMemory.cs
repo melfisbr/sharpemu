@@ -1,4 +1,4 @@
-// Copyright (C) 2026 SharpEmu Emulator Project
+﻿// Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Collections.Concurrent;
@@ -45,7 +45,10 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
             Environment.GetEnvironmentVariable("SHARPEMU_SHADER_PVM_READ_ACCESS_CACHE"),
             "1",
             StringComparison.Ordinal);
-    private const int ShaderLargeReadCacheSlotsV11711 = 64;
+    // V76.3.6: large shader/texture reads showed tens of thousands of
+    // region/access misses with the 64-slot direct-mapped validation cache.
+    // This caches only region/protection metadata, never guest bytes.
+    private const int ShaderLargeReadCacheSlotsV11711 = 1024;
     private const int ShaderLargeReadMinimumBytesV11711 = 4096;
 
     [ThreadStatic]
@@ -1924,6 +1927,7 @@ public sealed unsafe class PhysicalVirtualMemory : IVirtualMemory, IGuestMemoryA
 
         Console.Error.WriteLine(
             "[V74.0.117.11][PVM_SHADER_READ_CACHE] " +
+            $"slots={ShaderLargeReadCacheSlotsV11711} " +
             $"reads={Volatile.Read(ref V11711LargeReadCalls)} " +
             $"region_hit={Volatile.Read(ref V11711RegionHits)} " +
             $"region_miss={Volatile.Read(ref V11711RegionMisses)} " +

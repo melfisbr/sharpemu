@@ -45,7 +45,7 @@ internal static unsafe partial class VulkanVideoPresenter
     {
         var fileName = Path.GetFileName(movieName ?? string.Empty);
         // V76.1.7: attract/intro/logo family
-        if (!SharpEmu.Libs.Media.BinkHandoffMoviesV7617.ShouldArm(fileName))
+        if (!SharpEmu.Libs.Media.BinkHandoffMoviesV7624.ShouldArm(fileName))
         {
             return;
         }

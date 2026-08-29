@@ -1,0 +1,199 @@
+﻿tag=V76.3.21.3.1.1.2-STANDALONE-PRECHECK-FIX-AUTHORITATIVE-SYNC512-DEV-SAFE
+runtime_seconds=171.097
+exit_code=
+authoritative_presenter_active=True
+closure_sync512_lines=39
+closure_sync4096_lines=0
+closure_sync_contract_ok=True
+natural_ps_studios_request=True
+max_agc_processed_count=2048
+max_draw_submission=2813
+max_direct_scanout_frame=112
+scene_gap_hull_stage_active=0
+scene_gap_nonresident_dcc=0
+geometry_draw_probe_lines=4100
+guest_thread_snapshot_lines=4081
+gather_resource_file_info_seen=True
+device_lost_markers=0
+access_violation_markers=0
+fatal_markers=0
+
+--- AUTHORITATIVE PROFILE ---
+[V76.3.21.3.1.1.2][AUTHORITATIVE_GUEST_PROGRESS] active=1 closure_sync_budget=512 consumer=VulkanVideoPresenter disabled=0
+
+--- CLOSURE ACTIVATE LAST ---
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=8 queue=acb.compute[32] head_submission=70 target_submission=73 watched_ranges=1 age_ms=399,682 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=9 queue=acb.compute[32] head_submission=94 target_submission=97 watched_ranges=1 age_ms=317,758 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=10 queue=dcb.graphics head_submission=120 target_submission=120 watched_ranges=1 age_ms=300,348 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=11 queue=acb.compute[32] head_submission=118 target_submission=121 watched_ranges=1 age_ms=303,369 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=12 queue=acb.compute[40] head_submission=167 target_submission=167 watched_ranges=1 age_ms=306,998 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=13 queue=dcb.graphics head_submission=182 target_submission=192 watched_ranges=1 age_ms=1386,291 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=14 queue=acb.compute[32] head_submission=190 target_submission=193 watched_ranges=1 age_ms=1518,167 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=15 queue=dcb.graphics head_submission=196 target_submission=197 watched_ranges=1 age_ms=1477,062 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=16 queue=acb.compute[40] head_submission=215 target_submission=215 watched_ranges=1 age_ms=300,814 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=17 queue=dcb.graphics head_submission=216 target_submission=216 watched_ranges=1 age_ms=302,610 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=18 queue=acb.compute[32] head_submission=214 target_submission=217 watched_ranges=1 age_ms=327,802 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=19 queue=dcb.graphics head_submission=242 target_submission=245 watched_ranges=1 age_ms=391,962 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=20 queue=dcb.graphics head_submission=244 target_submission=252 watched_ranges=1 age_ms=301,730 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=21 queue=dcb.graphics head_submission=252 target_submission=253 watched_ranges=1 age_ms=329,355 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=22 queue=dcb.graphics head_submission=253 target_submission=254 watched_ranges=1 age_ms=410,385 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=23 queue=dcb.graphics head_submission=254 target_submission=264 watched_ranges=1 age_ms=313,309 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=24 queue=dcb.graphics head_submission=264 target_submission=269 watched_ranges=1 age_ms=301,121 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=25 queue=dcb.graphics head_submission=288 target_submission=288 watched_ranges=1 age_ms=300,432 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=26 queue=acb.compute[32] head_submission=358 target_submission=361 watched_ranges=1 age_ms=300,902 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=27 queue=dcb.graphics head_submission=528 target_submission=528 watched_ranges=1 age_ms=300,641 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=28 queue=acb.compute[40] head_submission=719 target_submission=719 watched_ranges=1 age_ms=309,381 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=29 queue=dcb.graphics head_submission=720 target_submission=720 watched_ranges=1 age_ms=358,327 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=30 queue=acb.compute[32] head_submission=958 target_submission=961 watched_ranges=1 age_ms=332,632 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=31 queue=dcb.graphics head_submission=964 target_submission=965 watched_ranges=1 age_ms=352,166 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=32 queue=acb.compute[64] head_submission=969 target_submission=969 watched_ranges=1 age_ms=364,190 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=33 queue=dcb.graphics head_submission=984 target_submission=984 watched_ranges=1 age_ms=305,025 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=34 queue=dcb.graphics head_submission=2102 target_submission=2112 watched_ranges=1 age_ms=300,963 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=35 queue=dcb.graphics head_submission=2112 target_submission=2117 watched_ranges=1 age_ms=408,998 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=36 queue=dcb.graphics head_submission=2177 target_submission=2187 watched_ranges=1 age_ms=301,049 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=37 queue=acb.compute[32] head_submission=2185 target_submission=2188 watched_ranges=1 age_ms=325,388 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=38 queue=dcb.graphics head_submission=2187 target_submission=2192 watched_ranges=1 age_ms=332,393 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+[V76.3.8.3][WEIGHTED_PRODUCER_CLOSURE] phase=activate count=39 queue=acb.compute[64] head_submission=2196 target_submission=2196 watched_ranges=1 age_ms=373,199 payload_budget=128 sync_budget=512 sliced=1 max_slices=8 slice_pause_us=1000
+
+--- NATURAL PS STUDIOS ---
+[BINK-HOST][V76.3.0][NATURAL-REQUEST] file='ps_studios_logo.bk2' host_decoder_allowed=True route=HostMovieBridge
+[LOADER][INFO] bink2.natural_guest_movie_observed n=1 file='ps_studios_logo.bk2'
+
+--- SCENE PIPELINE GAPS ---
+
+--- GEOMETRY DRAW PROBE LAST ---
+[V25][DRAW] agc.draw_auto_candidate#4037 queue=dcb.graphics submission=1512 packet=0x0000000446404470 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4038 queue=dcb.graphics submission=1512 packet=0x00000004464044DC count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4039 queue=dcb.graphics submission=1512 packet=0x0000000446404548 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4040 queue=dcb.graphics submission=1512 packet=0x00000004464045B4 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4041 queue=dcb.graphics submission=1512 packet=0x0000000446404620 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4042 queue=dcb.graphics submission=1512 packet=0x000000044640468C count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4043 queue=dcb.graphics submission=1512 packet=0x00000004464046F8 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4044 queue=dcb.graphics submission=1512 packet=0x0000000446404764 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4045 queue=dcb.graphics submission=1512 packet=0x00000004464047D0 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4046 queue=dcb.graphics submission=1512 packet=0x000000044640483C count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4047 queue=dcb.graphics submission=1512 packet=0x00000004464048A8 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4048 queue=dcb.graphics submission=1512 packet=0x0000000446404914 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4049 queue=dcb.graphics submission=1512 packet=0x0000000446404980 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4050 queue=dcb.graphics submission=1512 packet=0x00000004464049EC count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4051 queue=dcb.graphics submission=1512 packet=0x0000000446404A58 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4052 queue=dcb.graphics submission=1512 packet=0x0000000446404B34 count=6 prim=0x4 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4053 queue=dcb.graphics submission=1512 packet=0x0000000446404DF4 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4054 queue=dcb.graphics submission=1516 packet=0x0000000442C004E8 count=3 prim=0x7 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4055 queue=dcb.graphics submission=1525 packet=0x0000000444E00874 count=3 prim=0x7 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4056 queue=dcb.graphics submission=1525 packet=0x0000000444E00A30 count=3 prim=0x7 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4057 queue=dcb.graphics submission=1526 packet=0x0000000445600120 count=3 prim=0x7 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#4058 queue=dcb.graphics submission=1526 packet=0x0000000445600C94 count=3 prim=0x7 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.indirect_base#4059 queue=dcb.graphics submission=1536 packet=0x0000000445E0076C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4060 queue=dcb.graphics submission=1536 packet=0x0000000445E00798 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4061 queue=dcb.graphics submission=1536 packet=0x0000000445E007C4 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4062 queue=dcb.graphics submission=1536 packet=0x0000000445E007F0 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4063 queue=dcb.graphics submission=1536 packet=0x0000000445E0081C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4064 queue=dcb.graphics submission=1536 packet=0x0000000445E00848 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4065 queue=dcb.graphics submission=1536 packet=0x0000000445E00874 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4066 queue=dcb.graphics submission=1536 packet=0x0000000445E008A0 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4067 queue=dcb.graphics submission=1536 packet=0x0000000445E008CC addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4068 queue=dcb.graphics submission=1536 packet=0x0000000445E008F8 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4069 queue=dcb.graphics submission=1536 packet=0x0000000445E00924 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4070 queue=dcb.graphics submission=1536 packet=0x0000000445E00950 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4071 queue=dcb.graphics submission=1536 packet=0x0000000445E0097C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4072 queue=dcb.graphics submission=1536 packet=0x0000000445E009A8 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4073 queue=dcb.graphics submission=1536 packet=0x0000000445E009D4 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4074 queue=dcb.graphics submission=1536 packet=0x0000000445E00A00 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4075 queue=dcb.graphics submission=1536 packet=0x0000000445E00A2C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4076 queue=dcb.graphics submission=1536 packet=0x0000000445E00A58 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4077 queue=dcb.graphics submission=1536 packet=0x0000000445E00A84 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4078 queue=dcb.graphics submission=1536 packet=0x0000000445E00AB0 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4079 queue=dcb.graphics submission=1536 packet=0x0000000445E00ADC addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4080 queue=dcb.graphics submission=1536 packet=0x0000000445E00B08 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4081 queue=dcb.graphics submission=1536 packet=0x0000000445E00B34 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4082 queue=dcb.graphics submission=1536 packet=0x0000000445E00B60 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4083 queue=dcb.graphics submission=1536 packet=0x0000000445E00B8C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4084 queue=dcb.graphics submission=1536 packet=0x0000000445E00BB8 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4085 queue=dcb.graphics submission=1536 packet=0x0000000445E00BE4 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4086 queue=dcb.graphics submission=1536 packet=0x0000000445E00C10 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4087 queue=dcb.graphics submission=1536 packet=0x0000000445E00C3C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4088 queue=dcb.graphics submission=1536 packet=0x0000000445E00C68 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4089 queue=dcb.graphics submission=1536 packet=0x0000000445E00C94 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4090 queue=dcb.graphics submission=1536 packet=0x0000000445E00CC0 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4091 queue=dcb.graphics submission=1536 packet=0x0000000445E00FB0 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4092 queue=dcb.graphics submission=1536 packet=0x0000000445E00FDC addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4093 queue=dcb.graphics submission=1536 packet=0x0000000445E01008 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4094 queue=dcb.graphics submission=1536 packet=0x0000000445E01034 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4095 queue=dcb.graphics submission=1536 packet=0x0000000445E01060 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#4096 queue=dcb.graphics submission=1536 packet=0x0000000445E0108C addr=0x00000004BF67F7A0
+[V25][DRAW] agc.indirect_base#5000 queue=dcb.graphics submission=1824 packet=0x0000000446700848 addr=0x00000004BF67F7A0
+[V25][DRAW] agc.draw_auto_candidate#6000 queue=dcb.graphics submission=2126 packet=0x0000000441B00C94 count=3 prim=0x7 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#7000 queue=dcb.graphics submission=2429 packet=0x00000010BE7049EC count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+[V25][DRAW] agc.draw_auto_candidate#8000 queue=dcb.graphics submission=2741 packet=0x00000010C1A04404 count=4 prim=0x6 instances=1 indirect_base=0x0000000447E7FEC0
+
+--- GUEST THREAD SNAPSHOTS LAST ---
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6C260 name='ncaPumpThread' state=Running executor=True imports=95762 nid=tn3VlD0hG60 ret=0x0000000801E6C61C block=none wake=none host_managed=67 host_tid=60928
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6F290 name='snd_stream_parsing_thread' state=Running executor=True imports=19962 nid=tn3VlD0hG60 ret=0x0000000801E4C504 block=none wake=none host_managed=68 host_tid=69084
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6A240 name='snd_stream_reader_thread' state=Running executor=True imports=68352 nid=tn3VlD0hG60 ret=0x0000000801E4C504 block=none wake=none host_managed=69 host_tid=44584
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EEECD0 name='RADSS Thread' state=Exited executor=False imports=2298 nid=QOQtbeDqsT4 ret=0x0000000801ED7C8D block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EEFCE0 name='Bink Snd' state=Exited executor=False imports=2554 nid=tn3VlD0hG60 ret=0x0000000801EFAFBD block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EE9C80 name='Bink IO' state=Exited executor=False imports=32 nid=tn3VlD0hG60 ret=0x0000000801EFAFBD block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555F090 name='BPE JobWorkerThread CPU0' state=Running executor=True imports=7 nid=2Z+PpY6CaJg ret=0x00000008015BF223 block=none wake=none host_managed=36 host_tid=50656
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555A040 name='BPE JobWorkerThread CPU1' state=Running executor=True imports=147470 nid=tn3VlD0hG60 ret=0x0000000801E7048B block=none wake=none host_managed=35 host_tid=60032
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5559030 name='BPE JobWorkerThread CPU2' state=Running executor=True imports=161044 nid=tn3VlD0hG60 ret=0x0000000801E7048B block=none wake=none host_managed=34 host_tid=20964
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555C060 name='BPE JobWorkerThread CPU3' state=Running executor=True imports=165537 nid=gSRnr79F8tQ ret=0x0000000801CEA150 block=none wake=none host_managed=33 host_tid=55732
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555D070 name='BPE JobWorkerThread CPU4' state=Running executor=True imports=201429 nid=wr23dPKyWc0 ret=0x0000000801CEA9AC block=none wake=none host_managed=32 host_tid=55356
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555B050 name='BPE JobWorkerThread CPU5' state=Running executor=True imports=657127 nid=1D0H2KNjshE ret=0x0000000801DFB952 block=none wake=none host_managed=31 host_tid=16808
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55610B0 name='BPE JobWorkerThread CPU6' state=Running executor=True imports=85682 nid=i1jyy49AjXU ret=0x0000000801CF890B block=none wake=none host_managed=41 host_tid=55312
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55620C0 name='BPE JobWorkerThread CPU7' state=Running executor=True imports=118748 nid=PFT2S-tJ7Uk ret=0x0000000800827941 block=none wake=none host_managed=42 host_tid=61744
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55630D0 name='BPE JobWorkerThread CPU8' state=Running executor=True imports=824629 nid=tn3VlD0hG60 ret=0x0000000801E7048B block=none wake=none host_managed=43 host_tid=19740
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55640E0 name='BPE JobWorkerThread CPU9' state=Running executor=True imports=263 nid=tn3VlD0hG60 ret=0x0000000800826BE1 block=none wake=none host_managed=44 host_tid=66536
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55650F0 name='BPE JobWorkerThread CPU10' state=Running executor=True imports=549702 nid=wr23dPKyWc0 ret=0x0000000801CEA9AC block=none wake=none host_managed=45 host_tid=61192
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5566100 name='BPE JobWorkerThread CPU11' state=Running executor=True imports=346 nid=PFT2S-tJ7Uk ret=0x0000000800827941 block=none wake=none host_managed=46 host_tid=59976
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5402180 name='BPE JobWorkerThread CPU12' state=Running executor=True imports=711288 nid=z2duB-hHQSM ret=0x0000000801CF82F2 block=none wake=none host_managed=47 host_tid=64484
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F54051B0 name='BinkAsy1' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90350 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F54071D0 name='BinkAsy2' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90354 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F54061C0 name='BinkAsy3' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90349 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5400160 name='BinkAsy4' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90351 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC67210 name='HighGraphics' state=Exited executor=False imports=5 nid=tn3VlD0hG60 ret=0x0000000804035DB7 block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6B250 name='Core.Res.Decompressor' state=Blocked executor=False imports=10 nid=WKAXJ4XBPQ4 ret=0x00000008010FAD5A block=pthread_cond_wait wake=pthread_cond_waiter:136 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC68220 name='Core.Res.FileLoader' state=Blocked executor=False imports=10 nid=WKAXJ4XBPQ4 ret=0x00000008010FAD5A block=pthread_cond_wait wake=pthread_cond_waiter:138 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC66200 name='Core.Res.TaskManager' state=Blocked executor=False imports=61031 nid=WKAXJ4XBPQ4 ret=0x00000008010FAD5A block=pthread_cond_wait wake=pthread_cond_waiter:77088 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC641E0 name='NexusRevolution Event' state=Running executor=True imports=3794 nid=tn3VlD0hG60 ret=0x00000008010FB21D block=none wake=none host_managed=65 host_tid=62664
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6E280 name='NexusRevolution Surveillance' state=Running executor=True imports=22001 nid=iQw3iQPhvUQ ret=0x00000008013E9D5E block=none wake=none host_managed=66 host_tid=44708
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6C260 name='ncaPumpThread' state=Running executor=True imports=96446 nid=tn3VlD0hG60 ret=0x0000000801E6C61C block=none wake=none host_managed=67 host_tid=60928
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6F290 name='snd_stream_parsing_thread' state=Running executor=True imports=20100 nid=tn3VlD0hG60 ret=0x0000000801E4C504 block=none wake=none host_managed=68 host_tid=69084
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6A240 name='snd_stream_reader_thread' state=Running executor=True imports=68818 nid=9UK1vLZQft4 ret=0x0000000801E4C476 block=none wake=none host_managed=69 host_tid=44584
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EEECD0 name='RADSS Thread' state=Exited executor=False imports=2298 nid=QOQtbeDqsT4 ret=0x0000000801ED7C8D block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EEFCE0 name='Bink Snd' state=Exited executor=False imports=2554 nid=tn3VlD0hG60 ret=0x0000000801EFAFBD block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EE9C80 name='Bink IO' state=Exited executor=False imports=32 nid=tn3VlD0hG60 ret=0x0000000801EFAFBD block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555F090 name='BPE JobWorkerThread CPU0' state=Running executor=True imports=7 nid=2Z+PpY6CaJg ret=0x00000008015BF223 block=none wake=none host_managed=36 host_tid=50656
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555A040 name='BPE JobWorkerThread CPU1' state=Running executor=True imports=149535 nid=-HOOCn0JY48 ret=0x0000000801CF820F block=none wake=none host_managed=35 host_tid=60032
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5559030 name='BPE JobWorkerThread CPU2' state=Running executor=True imports=164226 nid=tn3VlD0hG60 ret=0x0000000801E7048B block=none wake=none host_managed=34 host_tid=20964
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555C060 name='BPE JobWorkerThread CPU3' state=Running executor=True imports=166087 nid=wr23dPKyWc0 ret=0x0000000801CEA9AC block=none wake=none host_managed=33 host_tid=55732
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555D070 name='BPE JobWorkerThread CPU4' state=Running executor=True imports=202526 nid=pztV4AF18iI ret=0x0000000801E8D448 block=none wake=none host_managed=32 host_tid=55356
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F555B050 name='BPE JobWorkerThread CPU5' state=Running executor=True imports=661824 nid=PFT2S-tJ7Uk ret=0x0000000800827941 block=none wake=none host_managed=31 host_tid=16808
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55610B0 name='BPE JobWorkerThread CPU6' state=Running executor=True imports=86615 nid=2Z+PpY6CaJg ret=0x00000008015BA828 block=none wake=none host_managed=41 host_tid=55312
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55620C0 name='BPE JobWorkerThread CPU7' state=Running executor=True imports=120062 nid=wr23dPKyWc0 ret=0x0000000801CEA9AC block=none wake=none host_managed=42 host_tid=61744
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55630D0 name='BPE JobWorkerThread CPU8' state=Running executor=True imports=827912 nid=i1jyy49AjXU ret=0x0000000801CF890B block=none wake=none host_managed=43 host_tid=19740
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55640E0 name='BPE JobWorkerThread CPU9' state=Running executor=True imports=272 nid=tn3VlD0hG60 ret=0x0000000800826BE1 block=none wake=none host_managed=44 host_tid=66536
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F55650F0 name='BPE JobWorkerThread CPU10' state=Running executor=True imports=550623 nid=eZ4+17OQz4Q ret=0x0000000801CF8C6F block=none wake=none host_managed=45 host_tid=61192
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5566100 name='BPE JobWorkerThread CPU11' state=Running executor=True imports=352 nid=PFT2S-tJ7Uk ret=0x0000000800827941 block=none wake=none host_managed=46 host_tid=59976
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5402180 name='BPE JobWorkerThread CPU12' state=Running executor=True imports=713336 nid=wr23dPKyWc0 ret=0x0000000801CEA9AC block=none wake=none host_managed=47 host_tid=64484
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F54051B0 name='BinkAsy1' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90350 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F54071D0 name='BinkAsy2' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90354 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F54061C0 name='BinkAsy3' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90349 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257F5400160 name='BinkAsy4' state=Blocked executor=False imports=13 nid=WKAXJ4XBPQ4 ret=0x0000000801EFAF3B block=pthread_cond_wait wake=pthread_cond_waiter:90351 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC67210 name='HighGraphics' state=Exited executor=False imports=5 nid=tn3VlD0hG60 ret=0x0000000804035DB7 block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6B250 name='Core.Res.Decompressor' state=Blocked executor=False imports=10 nid=WKAXJ4XBPQ4 ret=0x00000008010FAD5A block=pthread_cond_wait wake=pthread_cond_waiter:136 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC68220 name='Core.Res.FileLoader' state=Blocked executor=False imports=10 nid=WKAXJ4XBPQ4 ret=0x00000008010FAD5A block=pthread_cond_wait wake=pthread_cond_waiter:138 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC66200 name='Core.Res.TaskManager' state=Blocked executor=False imports=61031 nid=WKAXJ4XBPQ4 ret=0x00000008010FAD5A block=pthread_cond_wait wake=pthread_cond_waiter:77088 host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC641E0 name='NexusRevolution Event' state=Running executor=True imports=3824 nid=tn3VlD0hG60 ret=0x00000008010FB21D block=none wake=none host_managed=65 host_tid=62664
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6E280 name='NexusRevolution Surveillance' state=Running executor=True imports=22168 nid=iQw3iQPhvUQ ret=0x00000008013E9D5E block=none wake=none host_managed=66 host_tid=44708
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6C260 name='ncaPumpThread' state=Running executor=True imports=97130 nid=tn3VlD0hG60 ret=0x0000000801E6C61C block=none wake=none host_managed=67 host_tid=60928
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6F290 name='snd_stream_parsing_thread' state=Running executor=True imports=20238 nid=tn3VlD0hG60 ret=0x0000000801E4C504 block=none wake=none host_managed=68 host_tid=69084
+[LOADER][TRACE] guest_thread.snapshot handle=0x00000257FCC6A240 name='snd_stream_reader_thread' state=Running executor=True imports=69279 nid=tn3VlD0hG60 ret=0x0000000801E4C504 block=none wake=none host_managed=69 host_tid=44584
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EEECD0 name='RADSS Thread' state=Exited executor=False imports=2298 nid=QOQtbeDqsT4 ret=0x0000000801ED7C8D block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EEFCE0 name='Bink Snd' state=Exited executor=False imports=2554 nid=tn3VlD0hG60 ret=0x0000000801EFAFBD block=none wake=none host_managed=0 host_tid=0
+[LOADER][TRACE] guest_thread.snapshot handle=0x0000025892EE9C80 name='Bink IO' state=Exited executor=False imports=32 nid=tn3VlD0hG60 ret=0x0000000801EFAFBD block=none wake=none host_managed=0 host_tid=0
+
+--- GATHER RESOURCE INFO ---
+[MSG-Init] ResourcePool::GatherResourceFileInfo() took 00:01:09.11
+
+--- LAST MEMORY STATE ---

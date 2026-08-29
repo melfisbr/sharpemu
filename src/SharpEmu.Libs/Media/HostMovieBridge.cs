@@ -1324,7 +1324,8 @@ internal static class HostMovieBridge
 
     private static void AttachMovieLocked(string hostPath, MovieMode mode)
     {
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
         {
             BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
             Console.Error.WriteLine(
@@ -1653,7 +1654,8 @@ internal static class HostMovieBridge
     private static bool AttachRadNativeMovieLocked(
         string hostPath)
     {
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
         {
             return false;
         }
@@ -1712,7 +1714,8 @@ internal static class HostMovieBridge
 
     private static bool AttachRadMovieLocked(string hostPath)
     {
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
         {
             return false;
         }
@@ -1763,7 +1766,8 @@ internal static class HostMovieBridge
 
     private static bool AttachNihavMovieLocked(string hostPath)
     {
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
         {
             return false;
         }
@@ -1808,7 +1812,8 @@ internal static class HostMovieBridge
 
     private static bool AttachFfmpegMovieLocked(string hostPath)
     {
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
         {
             return false;
         }
@@ -3103,7 +3108,8 @@ internal static class HostMovieBridge
 
         completionShim = default;
 
-        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        if (BinkGuestOwnedRuntimeV7600.Enabled &&
+            BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
         {
             observed = true;
             _ = BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
@@ -3126,6 +3132,14 @@ internal static class HostMovieBridge
                 _ = BinkGuestOwnedRuntimeV7600.ObserveGuestMovie(hostPath);
             }
             return false;
+        }
+
+        if (BinkGuestOwnedRuntimeV7600.IsBinkPath(hostPath))
+        {
+            Console.Error.WriteLine(
+                "[BINK-HOST][V76.3.0][NATURAL-REQUEST] " +
+                $"file='{Path.GetFileName(hostPath)}' " +
+                "host_decoder_allowed=True route=HostMovieBridge");
         }
 
         observed = ObserveGuestMovie(hostPath);
@@ -3278,6 +3292,15 @@ internal static class HostMovieBridge
 
     internal static void NotifyGuestMovieClosed(string hostPath)
     {
+        try
+        {
+            SharpEmu.Libs.VideoOut.BlackScreenRecoveryV7624
+                .OnBootMovieClosed(hostPath);
+        }
+        catch
+        {
+        }
+
         if (BinkGuestOwnedRuntimeV7600.Enabled)
         {
             return;

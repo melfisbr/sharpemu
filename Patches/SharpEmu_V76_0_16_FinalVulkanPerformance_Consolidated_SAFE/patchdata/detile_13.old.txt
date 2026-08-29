@@ -1,8 +1,0 @@
-        return fence;
-    }
-
-    private void DestroyBuffer(VkBuffer buffer, DeviceMemory memory)
-    {
-        if (buffer.Handle != 0)
-        {
-            _vk.DestroyBuffer(_device, buffer, null);

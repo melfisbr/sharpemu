@@ -1,1 +1,0 @@
-    internal const string Marker = "V76.0.2_GUEST_BINK2_EXACT_YUV_PRODUCER";

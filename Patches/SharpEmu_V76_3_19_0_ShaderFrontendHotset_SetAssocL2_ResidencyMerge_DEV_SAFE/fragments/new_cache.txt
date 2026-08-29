@@ -1,0 +1,82 @@
+    // SHARPEMU_V74_0_117_10_SHADER_THREAD_CACHE_L2
+    // V117.9 proved a one-entry L1 only catches ~25% of repeated decodes.
+    // V76.3.19.0_SHADER_FRONTEND_SET_ASSOC_L2
+    //
+    // The old 4096-entry cache was direct-mapped: unrelated shader addresses
+    // hashing to the same slot evicted one another even though the frontend
+    // repeatedly revisits a small working set. Keep exact memory+address keys,
+    // but use a 4-way per-thread set-associative cache. No decoded program or
+    // metadata semantics change; the shared cache remains authoritative.
+    private const int V190ThreadCacheWays = 4;
+    private static readonly int V190ThreadCacheSets =
+        NormalizeV190ThreadCacheSets(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_SHADER_THREAD_CACHE_SETS_V190"),
+                out var setsV190)
+                ? setsV190
+                : 4096);
+    private static readonly int V11710ThreadCacheSlots =
+        V190ThreadCacheSets * V190ThreadCacheWays;
+
+    [ThreadStatic] private static ShaderThreadCacheV11710? _v11710ThreadCache;
+
+    private sealed class ShaderThreadCacheV11710
+    {
+        internal object? Memory;
+        internal readonly ulong[] ProgramAddresses =
+            new ulong[V11710ThreadCacheSlots];
+        internal readonly Gen5ShaderProgram?[] Programs =
+            new Gen5ShaderProgram?[V11710ThreadCacheSlots];
+        internal readonly ulong[] MetadataAddresses =
+            new ulong[V11710ThreadCacheSlots];
+        internal readonly Gen5ShaderMetadata?[] Metadata =
+            new Gen5ShaderMetadata?[V11710ThreadCacheSlots];
+        internal readonly bool[] MetadataKnown =
+            new bool[V11710ThreadCacheSlots];
+        internal readonly byte[] ProgramVictim =
+            new byte[V190ThreadCacheSets];
+        internal readonly byte[] MetadataVictim =
+            new byte[V190ThreadCacheSets];
+
+        internal void Reset(object memory)
+        {
+            Memory = memory;
+            Array.Clear(ProgramAddresses, 0, ProgramAddresses.Length);
+            Array.Clear(Programs, 0, Programs.Length);
+            Array.Clear(MetadataAddresses, 0, MetadataAddresses.Length);
+            Array.Clear(Metadata, 0, Metadata.Length);
+            Array.Clear(MetadataKnown, 0, MetadataKnown.Length);
+            Array.Clear(ProgramVictim, 0, ProgramVictim.Length);
+            Array.Clear(MetadataVictim, 0, MetadataVictim.Length);
+        }
+    }
+
+    public static long V11710ProgramL2Hits;
+    public static long V11710ProgramL2Misses;
+    public static long V11710MetadataL2Hits;
+    public static long V11710MetadataL2Misses;
+    public static long V7636ProgramL2ConflictEvictions;
+    public static long V7636MetadataL2ConflictEvictions;
+    public static long V190ProgramSetAssocHits;
+    public static long V190MetadataSetAssocHits;
+
+    private static int NormalizeV190ThreadCacheSets(int requested)
+    {
+        requested = Math.Clamp(requested, 256, 8192);
+        var normalized = 1;
+        while (normalized < requested)
+        {
+            normalized <<= 1;
+        }
+
+        return normalized;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetV11710ThreadCacheSlot(ulong address)
+    {
+        var mixed = address ^ (address >> 17) ^ (address >> 33);
+        var set = (int)(mixed & (ulong)(V190ThreadCacheSets - 1));
+        return set * V190ThreadCacheWays;
+    }

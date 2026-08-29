@@ -1,0 +1,40 @@
+V76.3.21.4.1 CONTRACT
+
+PRESERVE:
+- V76.3.21.3.1.1.2 authoritative Sync512
+- producer_scan=512
+- closure sync scan=512
+- closure age=300ms
+- closure slices=8
+- payload budget=128
+- slice pause=1000us
+- work_per_render=1024
+- ordered microbatch=32
+- compute_chain=4
+- draw_cb=8
+- wait_fullscan=16ms
+- dual physical Vulkan queues/resource timeline when supported
+- Async AGC command processor
+- V21.2 global snapshot bounds repair
+- resident shader/global/descriptor caches
+- BINK_AUTO_BOOT=0
+- natural guest movie request path
+
+REMOVE:
+- V76.3.21.4_AGC_PUBLISH_FAIRNESS_BEGIN/END
+- NoteAgcBuilderV763214
+- NoteAgcDriverSubmitV763214
+- _v763214BuilderOps
+- _v763214BuilderSinceSubmit
+- _v763214DriverSubmits
+- _v763214FairnessYields
+- System.Threading.Thread.Yield() introduced by V21.4
+
+DO NOT CHANGE:
+- guest PM4 packet contents
+- WAIT_REG_MEM semantics
+- WRITE_DATA semantics
+- RELEASE_MEM semantics
+- command-buffer ordering
+- Vulkan submission ordering
+- hazard/range tracking

@@ -1,6 +1,0 @@
-﻿Tag=V76.2.4.4-BINK-GUEST-YUV-INTEGER-SAMPLER-PATCHES-PATH-INIT-BUILDFIX
-TargetPackage=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_2_4_1_BinkGuestYuvIntegerSamplerFix_ValidatorPathFix_SAFE
-TargetScript=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_2_4_1_BinkGuestYuvIntegerSamplerFix_ValidatorPathFix_SAFE\scripts\patch_target.ps1
-TargetRunner=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_2_4_1_BinkGuestYuvIntegerSamplerFix_ValidatorPathFix_SAFE\RUN_2_PATCH_AND_REVALIDATE_V76_2_4.cmd
-State=Ready
-LegacyJoinPathPatchesCount=1

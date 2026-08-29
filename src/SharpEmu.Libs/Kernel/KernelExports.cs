@@ -67,6 +67,93 @@ public static class KernelExports
     private static bool ShouldTraceJoinWaiterV1837(long count) =>
         _traceJoinWaiterV1837 && (count <= 32 || (count & (count - 1)) == 0);
 
+    // V76.3.8: DBFZ render-exit chain compatibility.
+    // V76.3.7 proved RTHeartBeat can complete once guest TLS/runtime cleanup is
+    // bypassed for that title-scoped thread. The next pthread_join target is
+    // RenderThread 0, which reaches the same pthread_exit stall. Keep the old
+    // RTHeartBeat compatibility and extend the bypass only to RenderThread.
+    private const string DbfzRtHeartbeatExitCompatEnvV7637 =
+        "SHARPEMU_DBFZ_RT_HEARTBEAT_EXIT_COMPAT";
+    private const string DbfzRenderThreadExitCompatEnvV7638 =
+        "SHARPEMU_DBFZ_RENDER_THREAD_EXIT_COMPAT";
+
+    private static bool IsDbfzThreadExitCompatEnabledV7638(
+        out string threadName,
+        out string cleanupKind)
+    {
+        threadName = string.Empty;
+        cleanupKind = string.Empty;
+        if (!KernelMemoryCompatExports.IsConfiguredApplicationTitle("PPSA09790"))
+        {
+            return false;
+        }
+
+        var currentHandle = GuestThreadExecution.CurrentGuestThreadHandle;
+        if (currentHandle == 0 || GuestThreadExecution.Scheduler is not { } scheduler)
+        {
+            return false;
+        }
+
+        foreach (var snapshot in scheduler.SnapshotThreads())
+        {
+            if (snapshot.ThreadHandle != currentHandle)
+            {
+                continue;
+            }
+
+            threadName = snapshot.Name;
+            if (threadName.StartsWith("RTHeartBeat", StringComparison.Ordinal) &&
+                !string.Equals(
+                    Environment.GetEnvironmentVariable(DbfzRtHeartbeatExitCompatEnvV7637),
+                    "0",
+                    StringComparison.Ordinal))
+            {
+                cleanupKind = "rt-heartbeat";
+                return true;
+            }
+
+            if (threadName.StartsWith("RenderThread", StringComparison.Ordinal) &&
+                !string.Equals(
+                    Environment.GetEnvironmentVariable(DbfzRenderThreadExitCompatEnvV7638),
+                    "0",
+                    StringComparison.Ordinal))
+            {
+                cleanupKind = "render-thread";
+                return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private static int CompletePthreadExitV7638(
+        CpuContext ctx,
+        string reason,
+        ulong value,
+        bool posix)
+    {
+        if (IsDbfzThreadExitCompatEnabledV7638(out var threadName, out var cleanupKind))
+        {
+            var handle = GuestThreadExecution.CurrentGuestThreadHandle;
+            Console.Error.WriteLine(
+                $"[DBFZ-PTHREAD-EXIT][V76.3.8] action=direct-entry-exit " +
+                $"api={(posix ? "pthread_exit" : "scePthreadExit")} " +
+                $"thread=0x{handle:X16} name='{threadName}' value=0x{value:X16} " +
+                $"cleanup={cleanupKind}-bypass scope=PPSA09790");
+            GuestThreadExecution.RequestCurrentEntryExit(reason, value);
+            ctx[CpuRegister.Rax] = value;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
+        KernelPthreadExtendedCompatExports.RunThreadLocalDestructors(ctx);
+        KernelMemoryCompatExports.RunThreadDtors(ctx);
+        GuestThreadExecution.RequestCurrentEntryExit(reason, value);
+        ctx[CpuRegister.Rax] = value;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
     private readonly record struct CxaDestructorEntry(
         ulong Function,
         ulong Argument,
@@ -408,11 +495,7 @@ public static int InitEnv(CpuContext ctx)
     {
         var value = ctx[CpuRegister.Rdi];
         // Run cleanup on the still-executable thread before unwinding it.
-        KernelPthreadExtendedCompatExports.RunThreadLocalDestructors(ctx);
-        KernelMemoryCompatExports.RunThreadDtors(ctx);
-        GuestThreadExecution.RequestCurrentEntryExit("scePthreadExit", value);
-        ctx[CpuRegister.Rax] = value;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        return CompletePthreadExitV7638(ctx, "scePthreadExit", value, posix: false);
     }
 
     [SysAbiExport(
@@ -423,11 +506,7 @@ public static int InitEnv(CpuContext ctx)
     public static int PosixPthreadExit(CpuContext ctx)
     {
         var value = ctx[CpuRegister.Rdi];
-        KernelPthreadExtendedCompatExports.RunThreadLocalDestructors(ctx);
-        KernelMemoryCompatExports.RunThreadDtors(ctx);
-        GuestThreadExecution.RequestCurrentEntryExit("pthread_exit", value);
-        ctx[CpuRegister.Rax] = value;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        return CompletePthreadExitV7638(ctx, "pthread_exit", value, posix: true);
     }
 
     [SysAbiExport(
@@ -539,25 +618,44 @@ public static int InitEnv(CpuContext ctx)
         ExportName = "sceKernelOpen",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
-    public static int KernelOpen(CpuContext ctx)
-    {
-        // SHARPEMU_DBFZ_KERNEL_OPEN_DIRECTORY_COMPAT_V1_5_0
-        // sceKernelOpen and _open share the same path/flag/fd machinery. Keeping a
-        // second implementation here caused O_DIRECTORY-only DBFZ probes
-        // (flags=0x00020000) to return EINVAL even though the compatibility open
-        // correctly treats them as read-only directory opens.
-        var flags = unchecked((int)ctx[CpuRegister.Rsi]);
-        var result = KernelMemoryCompatExports.KernelOpenUnderscore(ctx);
-
-        if (flags == 0x00020000)
-        {
-            var rax = ctx[CpuRegister.Rax];
-            Console.Error.WriteLine(
-                $"[LOADER][TRACE] dbfz.kernel_open_directory flags=0x{flags:X8} " +
-                $"mode=0x{unchecked((uint)ctx[CpuRegister.Rdx]):X8} result=0x{unchecked((uint)result):X8} rax=0x{rax:X16}");
-        }
-
-        return result;
+    public static int KernelOpen(CpuContext ctx)
+
+    {
+
+        // SHARPEMU_DBFZ_KERNEL_OPEN_DIRECTORY_COMPAT_V1_5_0
+
+        // sceKernelOpen and _open share the same path/flag/fd machinery. Keeping a
+
+        // second implementation here caused O_DIRECTORY-only DBFZ probes
+
+        // (flags=0x00020000) to return EINVAL even though the compatibility open
+
+        // correctly treats them as read-only directory opens.
+
+        var flags = unchecked((int)ctx[CpuRegister.Rsi]);
+
+        var result = KernelMemoryCompatExports.KernelOpenUnderscore(ctx);
+
+
+
+        if (flags == 0x00020000)
+
+        {
+
+            var rax = ctx[CpuRegister.Rax];
+
+            Console.Error.WriteLine(
+
+                $"[LOADER][TRACE] dbfz.kernel_open_directory flags=0x{flags:X8} " +
+
+                $"mode=0x{unchecked((uint)ctx[CpuRegister.Rdx]):X8} result=0x{unchecked((uint)result):X8} rax=0x{rax:X16}");
+
+        }
+
+
+
+        return result;
+
     }
 
     [SysAbiExport(

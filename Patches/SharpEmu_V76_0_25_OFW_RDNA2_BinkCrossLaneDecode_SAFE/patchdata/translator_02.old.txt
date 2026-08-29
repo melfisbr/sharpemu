@@ -1,2 +1,0 @@
-                    "DsSwizzleB32" => [Gen5Operand.Vector(vectorData0)],
-                    // DS_CMPST operand order is reversed vs buffer/image cmpswap:

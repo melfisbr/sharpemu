@@ -1,0 +1,60 @@
+    private static bool TryGetProgramV11710(
+        object memory,
+        ulong address,
+        out Gen5ShaderProgram? program)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        program = cache.Programs[slot];
+        if (program is not null && cache.ProgramAddresses[slot] == address)
+        {
+            Interlocked.Increment(ref V11710ProgramL2Hits);
+            return true;
+        }
+
+        Interlocked.Increment(ref V11710ProgramL2Misses);
+        program = null;
+        return false;
+    }
+
+    private static void PutProgramV11710(
+        object memory,
+        ulong address,
+        Gen5ShaderProgram program)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        cache.ProgramAddresses[slot] = address;
+        cache.Programs[slot] = program;
+    }
+
+    private static bool TryGetMetadataV11710(
+        object memory,
+        ulong address,
+        out Gen5ShaderMetadata? metadata)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        if (cache.MetadataKnown[slot] && cache.MetadataAddresses[slot] == address)
+        {
+            Interlocked.Increment(ref V11710MetadataL2Hits);
+            metadata = cache.Metadata[slot];
+            return true;
+        }
+
+        Interlocked.Increment(ref V11710MetadataL2Misses);
+        metadata = null;
+        return false;
+    }
+
+    private static void PutMetadataV11710(
+        object memory,
+        ulong address,
+        Gen5ShaderMetadata? metadata)
+    {
+        var cache = GetV11710ThreadCache(memory);
+        var slot = GetV11710ThreadCacheSlot(address);
+        cache.MetadataAddresses[slot] = address;
+        cache.Metadata[slot] = metadata;
+        cache.MetadataKnown[slot] = true;
+    }

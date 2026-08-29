@@ -1,8 +1,0 @@
-            0xB0 => "DsStoreAddtidB32",
-            // GFX10/RDNA2 paired ADDTID LDS load.
-            0xB1 => "DsReadAddtidB32",
-            // V76.0.25: RDNA2 half-wave cross-lane data-share operations.
-            // They route through LDS hardware but do not access LDS memory.
-            0xB2 => "DsPermuteB32",
-            0xB3 => "DsBpermuteB32",
-            0xDE => "DsWriteB96",

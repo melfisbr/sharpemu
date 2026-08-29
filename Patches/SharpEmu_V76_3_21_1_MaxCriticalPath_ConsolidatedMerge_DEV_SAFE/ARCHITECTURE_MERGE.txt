@@ -1,0 +1,79 @@
+﻿SharpEmu V76.3.21.1 — Maximum Critical-Path Consolidated Merge
+
+PURPOSE
+=======
+The current checkout already contains V19, V20.x and V21.0. This package does
+not add another independent scheduler. It creates one final authoritative
+Demon's Souls performance policy and one small AGC scheduling improvement.
+
+PROVEN WORKING AND PRESERVED
+============================
+- Real physical graphics + compute Vulkan queues.
+- Resource/range hazard tracking and timeline synchronization.
+- V17.0.1 asynchronous AGC command processor.
+- V20.4 watched WRITE_DATA packet-position/direct-drain path.
+- V20.5/V21 shader and resource residency.
+- V15.1 safe memcpy.
+- Host-only sideband remains OFF after its functional regression.
+- Ordered microbatch remains ON.
+- Balanced queue envelope 192/96, burst4, inflight16 remains.
+- V20.1 100ms wait watchdog and V20.2 256/128 deep-feed remain reverted.
+
+NEW SOURCE IMPROVEMENT
+======================
+The planned-producer read-only lookup historically scans only 64 recent producer
+records. V21.1 makes that discovery depth configurable:
+- normal planned producer query: 256
+- aged critical producer query: 1024
+- hard source clamp: 64..4096
+
+This changes only how the scheduler DISCOVERS an existing planned producer.
+It does not:
+- execute WRITE_DATA early;
+- skip DCB packets;
+- synthesize a wait value;
+- complete a fence;
+- reorder same-queue FIFO.
+
+CRITICAL PRODUCER POLICY
+========================
+- closure activation age: 300ms -> 50ms
+- FIFO watched-producer discovery: 512 -> 4096
+- closure sync scan: 512 -> 4096
+- closure payload budget: 128
+- slices: 8 -> 16
+- fairness pause: 1000us -> 250us
+- lifetime: 5000ms
+- direct producer drain remains enabled
+- known-producer redundant visibility remains elided
+
+SAFE BATCHING
+=============
+- compute chain: 4 -> 8
+- draw command buffer: 16 -> 32
+- ordered-action microbatch: 32 -> 64
+- generic FIFO payload train stays OFF
+- every compute edge still passes the existing hazard proof
+- broad Vulkan overlap barrier is unchanged
+- host/global/metadata/control/unknown boundaries remain hard
+
+CAPACITY POLICY
+===============
+No blind increase to cache/VRAM budgets:
+- resident shader 2048
+- descriptor cache 4096
+- global residency 1536 / 512MiB
+- host buffer 256MiB
+- device buffer 1024MiB
+- guest buffer 512MiB
+- sampled image 1024MiB
+- standalone texture 4096MiB
+
+Current traces show these caches are not capacity-bound. Increasing them would
+raise private memory without solving the producer stall.
+
+A/B
+===
+Set:
+  SHARPEMU_V763211_DISABLE=1
+before launch to restore V21.0 behavior without source rollback.

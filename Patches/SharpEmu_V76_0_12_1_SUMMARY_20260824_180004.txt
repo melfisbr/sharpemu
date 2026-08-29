@@ -1,5 +1,0 @@
-﻿Tag=V76.0.12.1-BINK-GUEST-YUV-STORAGE-EPOCH-BUILDFIX
-Status=BUILD_FAILED_ROLLBACK
-ExitCode=1
-Backup=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_12_1_PREVIOUS_FILES_20260824_180004.zip
-BuildLog=C:\Users\Edpo\Documents\GitHub\sharpemu\Patches\SharpEmu_V76_0_12_1_BUILD_20260824_180004.log

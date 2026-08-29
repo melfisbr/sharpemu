@@ -59,14 +59,55 @@ public static class PlayGoExports
     // chunks must be reported as locally present or the BPE level streamer can
     // remain in its loading path after attract_movie.
     //
-    // Keep this title-scoped and opt-in so games that intentionally enumerate
-    // until BAD_CHUNK_ID retain the generic firmware-compatible behavior.
+    // Auto-enable for PPSA01341 (Demon's Souls) local dumps. Other titles that
+    // intentionally enumerate until BAD_CHUNK_ID keep the generic firmware
+    // behavior. Explicit override:
+    //   SHARPEMU_DEMONS_PLAYGO_CHUNKS_24_31=1  force on
+    //   SHARPEMU_DEMONS_PLAYGO_CHUNKS_24_31=0  force off
     private static readonly bool _demonsPlayGoChunks24To31V7405631 =
-        string.Equals(
-            Environment.GetEnvironmentVariable(
-                "SHARPEMU_DEMONS_PLAYGO_CHUNKS_24_31"),
-            "1",
-            StringComparison.Ordinal);
+        ResolveDemonsPlayGoChunks24To31V7405631();
+
+    private static bool ResolveDemonsPlayGoChunks24To31V7405631()
+    {
+        var overrideEnv = Environment.GetEnvironmentVariable(
+            "SHARPEMU_DEMONS_PLAYGO_CHUNKS_24_31");
+        if (string.Equals(overrideEnv, "0", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (string.Equals(overrideEnv, "1", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Default ON when the launch path / title id is Demon's Souls.
+        var app0 = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR")
+            ?? string.Empty;
+        if (app0.IndexOf("PPSA01341", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+
+        var titleId = Environment.GetEnvironmentVariable("SHARPEMU_TITLE_ID")
+            ?? Environment.GetEnvironmentVariable("SHARPEMU_PARAM_TITLE_ID")
+            ?? string.Empty;
+        if (string.Equals(titleId, "PPSA01341", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Fall back to argv scan (same pattern used by DemonsSoulsGpuQueueEnvelope).
+        foreach (var arg in Environment.GetCommandLineArgs())
+        {
+            if (arg.Contains("PPSA01341", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private const ushort DemonsPlayGoCompatFirstChunkV7405631 = 24;
     private const ushort DemonsPlayGoCompatLastChunkV7405631 = 31;
@@ -781,13 +822,10 @@ public static class PlayGoExports
                 Path.DirectorySeparatorChar,
                 Path.AltDirectorySeparatorChar);
 
-        var isDemonsSoulsV7405631 =
-            normalizedApp0V7405631.EndsWith(
-                "PPSA01341",
-                StringComparison.OrdinalIgnoreCase);
-
-        if (_demonsPlayGoChunks24To31V7405631 &&
-            isDemonsSoulsV7405631)
+        // Flag already auto-detects PPSA01341 (path / title / argv). When active,
+        // expand the local install set with chunks 24..31 so the BPE level
+        // streamer does not stall after attract_movie on a complete dump.
+        if (_demonsPlayGoChunks24To31V7405631)
         {
             var beforeCountV7405631 = mergedChunkIds.Count;
 

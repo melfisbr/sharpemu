@@ -1,6 +1,0 @@
-        _radPlayback?.Dispose();
-        _radPlayback = null;
-
-        _activePath = null;
-        _activeInfo = default;
-        _frameBuffer = null;

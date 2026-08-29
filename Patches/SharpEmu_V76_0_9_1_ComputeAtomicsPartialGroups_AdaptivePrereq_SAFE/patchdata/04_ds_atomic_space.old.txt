@@ -1,4 +1,0 @@
-                    value: () => GetRawSource(
-                        instruction,
-                        atomicOp == SpirvOp.AtomicCompareExchange ? 2 : 1),
-                    comparator: () => GetRawSource(instruction, 1));

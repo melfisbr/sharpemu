@@ -1,3 +1,0 @@
-﻿Tag=V76.0.12.2-BINK-GUEST-YUV-STORAGE-EPOCH-BUILDFIX
-RepositoryRoot=C:\Users\Edpo\Documents\GitHub\sharpemu
-Error=V76.0.11.1 shader-cache prerequisite mismatch expected=09b7daedf5eab60c1979012d6cf125c9a607623e8df5072f6d487c9907ccbbd3 actual=4c40d35df93d1434f03c8092c1ccb0406063e0bfae2cb90a335f8895621ad09f

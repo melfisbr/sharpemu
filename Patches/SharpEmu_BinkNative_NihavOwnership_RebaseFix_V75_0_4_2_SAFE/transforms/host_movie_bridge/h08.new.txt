@@ -1,7 +1,0 @@
-        $"{info.FramesPerSecondDenominator} " +
-        $"tracks={source.AudioTrackCount} " +
-        $"embedded_audio_active={source.EmbeddedAudioActive} " +
-        $"decoder=native-ffmpeg-core-av " +
-        $"dll='{RadBinkNativeSdkDecoderV7500.RuntimeLibraryPath}'");
-    return true;
-}

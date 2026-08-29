@@ -11,6 +11,7 @@ using System.Diagnostics;
 using SharpEmu.Libs.VideoOut;
 
 using SharpEmu.Libs.Media;
+using SharpEmu.Libs.Kernel;
 
 namespace SharpEmu.Libs.Audio;
 
@@ -33,6 +34,21 @@ public static class AudioOutExports
     private static readonly bool _traceOutput = string.Equals(
         Environment.GetEnvironmentVariable("SHARPEMU_LOG_AUDIO_OUT"), "1", StringComparison.Ordinal);
     private static long _outputCount;
+
+    // V76.3.6: DBFZ can call the single-port sceAudioOutOutput(handle, NULL)
+    // as an audio drain/scheduling point.  The multi-port sceAudioOutOutputs
+    // path already paces entries with a NULL source through pacingPort, while
+    // the single-port path historically returned immediately.  That asymmetry
+    // can turn the Gen5 audio thread into a hot non-blocking HLE loop.
+    // Keep the correction title-scoped and independently disableable.
+    private static readonly bool _dbfzAudioOutNullPaceEnabledV7636 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable("SHARPEMU_DBFZ_AUDIOOUT_NULL_PACE"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _dbfzAudioOutNullPaceCountV7636;
+    private static long _dbfzAudioOutNonNullCountV7636;
+
     // SHARPEMU_DEMONS_POST_STUDIOS_GUEST_AUDIO_MUTE_V1_1_5
     private static long _v115PostStudiosMutedOutputCount;
     // SHARPEMU_DEMONS_STARTUP_AUDIOOUT_MUTE_V1_1_6
@@ -337,9 +353,23 @@ public static class AudioOutExports
                 : (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
         }
 
+        // V76.3.6 DBFZ AudioOut NULL pacing.  AudioOutOutputs already treats a
+        // NULL descriptor as a pacing point; mirror that contract for the
+        // single-output Gen5 entry instead of returning in a tight loop.
         if (sourceAddress == 0)
         {
+            if (IsDbfzAudioOutNullPaceEnabledV7636())
+            {
+                port.PaceSilence();
+                TraceDbfzAudioOutV7636(port, handle, sourceAddress, isNull: true);
+            }
+
             return ctx.SetReturn(0);
+        }
+
+        if (IsDbfzAudioOutNullPaceEnabledV7636())
+        {
+            TraceDbfzAudioOutV7636(port, handle, sourceAddress, isNull: false);
         }
 
         var buffer = ArrayPool<byte>.Shared.Rent(port.BufferByteLength);
@@ -381,6 +411,33 @@ public static class AudioOutExports
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static bool IsDbfzAudioOutNullPaceEnabledV7636() =>
+        _dbfzAudioOutNullPaceEnabledV7636 &&
+        KernelMemoryCompatExports.IsConfiguredApplicationTitle("PPSA09790");
+
+    private static void TraceDbfzAudioOutV7636(
+        PortState port,
+        int handle,
+        ulong sourceAddress,
+        bool isNull)
+    {
+        var n = isNull
+            ? Interlocked.Increment(ref _dbfzAudioOutNullPaceCountV7636)
+            : Interlocked.Increment(ref _dbfzAudioOutNonNullCountV7636);
+        if (n <= 8 || (n & (n - 1)) == 0)
+        {
+            var periodMs = 1000.0 * port.BufferLength / port.Frequency;
+            Console.Error.WriteLine(
+                $"[DBFZ-AUDIOOUT][V76.3.6] " +
+                $"kind={(isNull ? "null-paced" : "non-null")} n={n} " +
+                $"handle={handle} source=0x{sourceAddress:X16} " +
+                $"frames={port.BufferLength} hz={port.Frequency} " +
+                $"period_ms={periodMs:F3} " +
+                $"queued_ms={(port.Backend?.QueuedMilliseconds ?? -1)} " +
+                $"backend={(port.Backend is null ? "none" : "present")} title=PPSA09790");
         }
     }
 

@@ -190,6 +190,11 @@ public static partial class Gen5SpirvTranslator
         private readonly IReadOnlyList<Gen5PixelOutputBinding> _pixelOutputBindings;
         private readonly uint _waveLaneCount;
         private readonly bool _emulateWave64;
+        // V76.2.4.14: Vulkan workgroups smaller than a guest wave64 are still
+        // one logical RDNA2 wave. Track the number of physically active lanes
+        // so subgroup collectives and READLANE do not fall back to host-wave32
+        // semantics or consume undefined values from inactive guest lanes.
+        private readonly uint _singleWave64ActiveLanesV762414;
         // V76.0.4: a compute workgroup can contain more than one logical PS5
         // wave64. Keep the V76.0.3 single-wave barrier path, but identify
         // multi-wave workgroups separately so wave collectives can rendezvous
@@ -408,7 +413,8 @@ public static partial class Gen5SpirvTranslator
             _emulateWave64 =
                 stage == Gen5SpirvStage.Compute &&
                 _waveLaneCount == 64 &&
-                localInvocationCount == 64;
+                localInvocationCount > 0 &&
+                localInvocationCount <= 64;
             _multiWave64Bridge =
                 stage == Gen5SpirvStage.Compute &&
                 _waveLaneCount == 64 &&
@@ -418,6 +424,9 @@ public static partial class Gen5SpirvTranslator
             _guestWaveCount = _multiWave64Bridge
                 ? checked((uint)(localInvocationCount / 64))
                 : 0u;
+            _singleWave64ActiveLanesV762414 = _emulateWave64
+                ? checked((uint)localInvocationCount)
+                : 0u;
             var immutableFeatures = AnalyzeImmutableProgramFeatures(
                 state.Program.Instructions);
             _usesLds = immutableFeatures.UsesLds;
@@ -425,6 +434,23 @@ public static partial class Gen5SpirvTranslator
             _usesSubgroupBroadcast = immutableFeatures.UsesSubgroupBroadcast;
             _usesWaveControl = immutableFeatures.UsesWaveControl;
             _usesSubgroupOperations = immutableFeatures.UsesSubgroupOperations;
+            TraceWave64AuditV7627(
+                state.Program.Instructions,
+                localInvocationCount,
+                localSizeX,
+                localSizeY,
+                localSizeZ);
+            if (_emulateWave64 &&
+                _singleWave64ActiveLanesV762414 < 64 &&
+                _usesSubgroupOperations)
+            {
+                System.Console.Error.WriteLine(
+                    "[V76.2.4.14][WAVE64-PARTIAL-BRIDGE] " +
+                    $"shader=0x{state.Program.Address:X16} " +
+                    $"local={localSizeX}x{localSizeY}x{localSizeZ} " +
+                    $"active_lanes={_singleWave64ActiveLanesV762414} " +
+                    "guest_wave=64 action=single-wave-workgroup-bridge");
+            }
             _localSizeX = localSizeX;
             _localSizeY = localSizeY;
             _localSizeZ = localSizeZ;
@@ -2266,14 +2292,23 @@ public static partial class Gen5SpirvTranslator
 
         private bool TryGetBranchCondition(string opcode, out uint condition)
         {
+            // V76.2.8 RDNA2 wave-control correctness:
+            // S_CBRANCH_{EXEC,VCC}{Z,NZ} is a scalar-wave decision.  A PS5
+            // wave64 can span two host subgroup32 fragments on NVIDIA, so
+            // SubgroupAny(_exec/_vcc) lets the two halves take different
+            // scalar branches.  The guest-visible EXEC/VCC SGPR pairs are the
+            // authoritative 64-bit wave masks and are kept synchronized by
+            // StoreS/StoreWaveMask.  Test the full masks directly.
+            var vccNonZeroV7628 = IsNotZero64(LoadS64(106));
+            var execNonZeroV7628 = IsNotZero64(LoadS64(126));
             condition = opcode switch
             {
                 "SCbranchScc0" => LogicalNot(Load(_boolType, _scc)),
                 "SCbranchScc1" => Load(_boolType, _scc),
-                "SCbranchVccz" => LogicalNot(SubgroupAny(Load(_boolType, _vcc))),
-                "SCbranchVccnz" => SubgroupAny(Load(_boolType, _vcc)),
-                "SCbranchExecz" => LogicalNot(SubgroupAny(Load(_boolType, _exec))),
-                "SCbranchExecnz" => SubgroupAny(Load(_boolType, _exec)),
+                "SCbranchVccz" => LogicalNot(vccNonZeroV7628),
+                "SCbranchVccnz" => vccNonZeroV7628,
+                "SCbranchExecz" => LogicalNot(execNonZeroV7628),
+                "SCbranchExecnz" => execNonZeroV7628,
                 _ => 0,
             };
             return condition != 0;
@@ -2304,6 +2339,11 @@ public static partial class Gen5SpirvTranslator
                 Store(_scc, comparison);
                 return true;
             }
+            if (TryEmitWaitcntV7626(instruction, out error))
+            {
+                return true;
+            }
+
             if (TryEmitScalarSchedulingNopV7610(instruction, out error))
             {
                 return true;
@@ -2311,15 +2351,10 @@ public static partial class Gen5SpirvTranslator
 
             if (instruction.Opcode is
                 "SNop" or
-                "SWaitcnt" or
                 // V76.0.10: S_CLAUSE is a hardware scheduling hint. SPIR-V/Vulkan
                 // does not expose guest wave clause scheduling, so preserving the
                 // instruction stream means treating it as host-irrelevant.
                 "SClause" or
-                // V76.0.10: dependency-scoreboard waits serialize hazards that are
-                // represented explicitly by SPIR-V SSA/data dependencies. They do
-                // not imply a guest memory barrier (unlike S_BARRIER).
-                "SWaitcntDepctr" or
                 "SInstPrefetch" or
                 "STtraceData" or
                 // SHARPEMU_V74_0_104_RDNA2_S_TRAP_COMPAT
@@ -6673,6 +6708,27 @@ public static partial class Gen5SpirvTranslator
             if (_multiWave64Bridge)
             {
                 return BooleanToMultiWave64MaskV7604(condition);
+            }
+
+            // V76.2.4.14: for a partial single guest wave (for example local=32
+            // with wave64 metadata), NVIDIA exposes only one subgroup32 fragment.
+            // Clear both halves before publishing the active subgroup fragment so
+            // inactive guest lanes can never inherit stale EXEC/VCC bits.
+            if (_emulateWave64 && _singleWave64ActiveLanesV762414 < 64)
+            {
+                var guestLaneV762414 = GuestWaveLane();
+                EmitConditional(
+                    _module.AddInstruction(
+                        SpirvOp.IEqual,
+                        _boolType,
+                        guestLaneV762414,
+                        UInt(0)),
+                    () =>
+                    {
+                        Store(WaveMaskScratchPointer(UInt(0)), UInt(0));
+                        Store(WaveMaskScratchPointer(UInt(1)), UInt(0));
+                    });
+                EmitWave64Barrier();
             }
 
             var ballot = _module.AddInstruction(

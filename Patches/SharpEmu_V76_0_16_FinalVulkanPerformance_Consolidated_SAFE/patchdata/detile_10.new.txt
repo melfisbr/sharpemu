@@ -1,7 +1,0 @@
-        if (free.Count >= MaxBuffersPerBucket ||
-            allocation.Capacity > remainingBudget)
-        {
-            DestroyBuffer(allocation.Buffer, allocation.Memory, allocation.Mapped);
-            _allAllocations.Remove(allocation);
-            return;
-        }

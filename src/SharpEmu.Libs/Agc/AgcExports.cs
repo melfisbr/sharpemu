@@ -367,11 +367,40 @@ public static partial class AgcExports
     private static long _epochRefillBeginCountV1829;
     private static long _epochRefillCompleteCountV1829;
 
-    private static bool IsBuilderReplayEnabledV1829() =>
-        string.Equals(
-            Environment.GetEnvironmentVariable("SHARPEMU_AGC_BUILDER_REPLAY"),
-            "1",
-            StringComparison.Ordinal);
+    // V76.3.3: DBFZ first-draw bridge.
+    // PPSA09790 builds most of the draw-bearing stream through AGC builders,
+    // while the driver submits a small control DCB containing completion
+    // RELEASE_MEM packets.  Keep the replay path title-scoped and reversible.
+    private const string DbfzFirstDrawTitleIdV7633 = "PPSA09790";
+    private const string DbfzFirstDrawBridgeEnvV7633 =
+        "SHARPEMU_DBFZ_FIRST_DRAW_BRIDGE";
+
+    private static bool IsDbfzFirstDrawBridgeEnabledV7633()
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(DbfzFirstDrawBridgeEnvV7633),
+                "0",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return KernelMemoryCompatExports.IsConfiguredApplicationTitle(
+            DbfzFirstDrawTitleIdV7633);
+    }
+
+    private static bool IsBuilderReplayEnabledV1829()
+    {
+        var setting =
+            Environment.GetEnvironmentVariable("SHARPEMU_AGC_BUILDER_REPLAY");
+        if (string.Equals(setting, "0", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(setting, "1", StringComparison.Ordinal) ||
+            IsDbfzFirstDrawBridgeEnabledV7633();
+    }
 
     private static bool TryClassifyBuiltDcbEpochV1829(
         CpuContext ctx,
@@ -389,7 +418,9 @@ public static partial class AgcExports
         }
 
         var dwords64 = (end - start) / sizeof(uint);
-        if (dwords64 < 8 || dwords64 > 4096)
+        var dbfzFirstDrawBridge = IsDbfzFirstDrawBridgeEnabledV7633();
+        var minimumDwords = dbfzFirstDrawBridge ? 5UL : 8UL;
+        if (dwords64 < minimumDwords || dwords64 > 4096)
         {
             return false;
         }
@@ -456,9 +487,10 @@ public static partial class AgcExports
             offset += length;
         }
 
+        var minimumPackets = dbfzFirstDrawBridge ? 1 : 4;
         if (!hasDraw ||
             unsafeSync ||
-            packetCount < 4)
+            packetCount < minimumPackets)
         {
             return false;
         }
@@ -598,22 +630,34 @@ public static partial class AgcExports
     private static readonly ConditionalWeakTable<object, CapturedDrawStreamTrackerV1830>
         _capturedDrawStreamTrackersV1830 = new();
 
-    private static readonly bool _externalCursorDrawStreamV1830Enabled =
-        string.Equals(
-            Environment.GetEnvironmentVariable("SHARPEMU_AGC_EXTERNAL_CURSOR_DRAW_STREAM"),
-            "1",
-            StringComparison.Ordinal);
+    private static bool IsExternalCursorDrawStreamEnabledV1830()
+    {
+        var setting = Environment.GetEnvironmentVariable(
+            "SHARPEMU_AGC_EXTERNAL_CURSOR_DRAW_STREAM");
+        if (string.Equals(setting, "0", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(setting, "1", StringComparison.Ordinal) ||
+            IsDbfzFirstDrawBridgeEnabledV7633();
+    }
 
     private static long _drawStreamDiscontinuityCountV1830;
     private static long _drawStreamCaptureCountV1830;
     private static long _drawStreamReplayCountV1830;
+    private static long _dbfzFirstDrawEmitCountV7633;
+    private static long _dbfzFirstDrawCaptureRejectCountV7633;
+    private static long _dbfzFirstDrawReplayCountV7633;
+    private static long _dbfzFirstDrawStateTraceCountV7634;
+    private static long _dbfzReplayOrderTraceCountV7634;
 
     private static void NoteBuiltDcbAllocationV1830(
         ulong commandBufferAddress,
         ulong commandAddress,
         uint dwords)
     {
-        if (!_externalCursorDrawStreamV1830Enabled ||
+        if (!IsExternalCursorDrawStreamEnabledV1830() ||
             commandBufferAddress == 0 ||
             commandAddress < 0x10000 ||
             dwords == 0)
@@ -650,7 +694,7 @@ public static partial class AgcExports
         ulong drawCommandAddress,
         uint drawDwords)
     {
-        if (!_externalCursorDrawStreamV1830Enabled ||
+        if (!IsExternalCursorDrawStreamEnabledV1830() ||
             _drawStreamBufferV1830 != commandBufferAddress)
         {
             return;
@@ -659,10 +703,39 @@ public static partial class AgcExports
         var drawEnd =
             drawCommandAddress + ((ulong)drawDwords * sizeof(uint));
 
+        var dbfzFirstDrawBridge = IsDbfzFirstDrawBridgeEnabledV7633();
+        if (dbfzFirstDrawBridge)
+        {
+            var emit = Interlocked.Increment(ref _dbfzFirstDrawEmitCountV7633);
+            if (emit <= 32 || (emit & (emit - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    $"[DBFZ-FIRST-DRAW][V76.3.3] emit={emit} " +
+                    $"buf=0x{commandBufferAddress:X16} " +
+                    $"stream_start=0x{_drawStreamStartV1830:X16} " +
+                    $"draw=0x{drawCommandAddress:X16} draw_dw={drawDwords} " +
+                    $"stream_end=0x{_drawStreamEndV1830:X16}");
+            }
+        }
+
         if (_drawStreamStartV1830 < 0x10000 ||
             _drawStreamStartV1830 > drawCommandAddress ||
             _drawStreamEndV1830 != drawEnd)
         {
+            if (dbfzFirstDrawBridge)
+            {
+                var rejected = Interlocked.Increment(
+                    ref _dbfzFirstDrawCaptureRejectCountV7633);
+                if (rejected <= 32 || (rejected & (rejected - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[DBFZ-FIRST-DRAW][V76.3.3] capture_reject={rejected} " +
+                        $"reason=range buf=0x{commandBufferAddress:X16} " +
+                        $"start=0x{_drawStreamStartV1830:X16} " +
+                        $"draw=0x{drawCommandAddress:X16} draw_end=0x{drawEnd:X16} " +
+                        $"tracked_end=0x{_drawStreamEndV1830:X16}");
+                }
+            }
             return;
         }
 
@@ -673,6 +746,18 @@ public static partial class AgcExports
                 drawEnd,
                 out var segment))
         {
+            if (dbfzFirstDrawBridge)
+            {
+                var rejected = Interlocked.Increment(
+                    ref _dbfzFirstDrawCaptureRejectCountV7633);
+                if (rejected <= 32 || (rejected & (rejected - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[DBFZ-FIRST-DRAW][V76.3.3] capture_reject={rejected} " +
+                        $"reason=classifier buf=0x{commandBufferAddress:X16} " +
+                        $"start=0x{_drawStreamStartV1830:X16} end=0x{drawEnd:X16}");
+                }
+            }
             return;
         }
 
@@ -707,6 +792,16 @@ public static partial class AgcExports
             $"end=0x{drawEnd:X16} dwords={segment.Dwords} " +
             $"packets={segment.PacketCount}");
 
+        if (dbfzFirstDrawBridge &&
+            (n <= 32 || (n & (n - 1)) == 0))
+        {
+            Console.Error.WriteLine(
+                $"[DBFZ-FIRST-DRAW][V76.3.3] capture={n} " +
+                $"buf=0x{commandBufferAddress:X16} " +
+                $"start=0x{segment.Address:X16} draw=0x{drawCommandAddress:X16} " +
+                $"dwords={segment.Dwords} packets={segment.PacketCount}");
+        }
+
         // A later contiguous allocation belongs to a new post-draw stream.
         _drawStreamStartV1830 = drawEnd;
         _drawStreamEndV1830 = drawEnd;
@@ -717,7 +812,7 @@ public static partial class AgcExports
         ulong submittedAddress,
         uint submittedDwords)
     {
-        if (!_externalCursorDrawStreamV1830Enabled)
+        if (!IsExternalCursorDrawStreamEnabledV1830())
         {
             return [];
         }
@@ -741,7 +836,7 @@ public static partial class AgcExports
         var submittedEnd =
             submittedAddress + ((ulong)submittedDwords * sizeof(uint));
 
-        return pending
+        var filtered = pending
             .Where(segment =>
             {
                 var segmentEnd =
@@ -750,7 +845,22 @@ public static partial class AgcExports
                     segmentEnd > segment.Address &&
                     !(segment.Address < submittedEnd &&
                       segmentEnd > submittedAddress);
-            })
+            });
+
+        // V76.3.4: AGC command streams are ordered by construction/submission
+        // chronology, not by their guest virtual address. PPSA09790 alternates
+        // between the main-image command area and refill buffers; sorting by VA
+        // inverted the observed sequence (A6... streams before 806... streams)
+        // and could consume a draw under the wrong shader/primitive state.
+        // Preserve the capture order only for the DBFZ title-scoped bridge.
+        if (IsDbfzFirstDrawBridgeEnabledV7633())
+        {
+            return filtered
+                .Take(16)
+                .ToArray();
+        }
+
+        return filtered
             .OrderBy(static segment => segment.Address)
             .Take(16)
             .ToArray();
@@ -1002,10 +1112,41 @@ public static partial class AgcExports
         uint submittedDwords,
         ulong submissionId)
     {
-        var segments = TakeCapturedDrawStreamsV1830(
+        var capturedSegments = TakeCapturedDrawStreamsV1830(
             ctx,
             submittedAddress,
             submittedDwords);
+        var epochSegments = TakeBuiltDcbEpochSegmentsV1829(
+            ctx,
+            submittedAddress,
+            submittedDwords);
+
+        var combinedSegments = new List<BuiltDcbReplaySegmentV1828>(
+            capturedSegments.Length + epochSegments.Length);
+        foreach (var segment in capturedSegments)
+        {
+            combinedSegments.Add(segment);
+        }
+
+        foreach (var segment in epochSegments)
+        {
+            var duplicate = combinedSegments.Any(existing =>
+                existing.Address == segment.Address &&
+                existing.Dwords == segment.Dwords);
+            if (!duplicate)
+            {
+                combinedSegments.Add(segment);
+            }
+        }
+
+        // V76.3.4: preserve guest build chronology for the DBFZ bridge. The
+        // generic replay path keeps its historical VA ordering for other titles.
+        var segments = IsDbfzFirstDrawBridgeEnabledV7633()
+            ? combinedSegments.Take(16).ToArray()
+            : combinedSegments
+                .OrderBy(static segment => segment.Address)
+                .Take(16)
+                .ToArray();
 
         if (segments.Length == 0)
         {
@@ -1023,6 +1164,20 @@ public static partial class AgcExports
                 $"submission={submissionId} buf=0x{segment.CommandBuffer:X16} " +
                 $"addr=0x{segment.Address:X16} dwords={segment.Dwords} " +
                 $"packets={segment.PacketCount}");
+
+            if (IsDbfzFirstDrawBridgeEnabledV7633())
+            {
+                var replayOrder = Interlocked.Increment(
+                    ref _dbfzReplayOrderTraceCountV7634);
+                if (replayOrder <= 32)
+                {
+                    Console.Error.WriteLine(
+                        $"[DBFZ-AGC-ORDER][V76.3.4] order={replayOrder} " +
+                        $"submission={submissionId} buf=0x{segment.CommandBuffer:X16} " +
+                        $"addr=0x{segment.Address:X16} dwords={segment.Dwords} " +
+                        $"packets={segment.PacketCount}");
+                }
+            }
 
             PreindexSubmittedProducerIntents(
                 ctx,
@@ -1045,6 +1200,20 @@ public static partial class AgcExports
                 $"agc.draw_stream_replay_parsed n={parsed} " +
                 $"submission={submissionId} addr=0x{segment.Address:X16} " +
                 $"dwords={segment.Dwords} suspended={(suspended ? 1 : 0)}");
+
+            if (IsDbfzFirstDrawBridgeEnabledV7633())
+            {
+                var replay = Interlocked.Increment(
+                    ref _dbfzFirstDrawReplayCountV7633);
+                if (replay <= 32 || (replay & (replay - 1)) == 0)
+                {
+                    Console.Error.WriteLine(
+                        $"[DBFZ-FIRST-DRAW][V76.3.3] replay={replay} " +
+                        $"submission={submissionId} addr=0x{segment.Address:X16} " +
+                        $"dwords={segment.Dwords} packets={segment.PacketCount} " +
+                        $"suspended={(suspended ? 1 : 0)}");
+                }
+            }
 
             // WAIT/REWIND/INDIRECT_BUFFER packets were excluded during candidate
             // selection. A suspension here means the segment was not safe to
@@ -1221,6 +1390,33 @@ public static partial class AgcExports
     // scheduling hint: does this logical queue contain a still-planned
     // producer whose range is watched right now? A nonzero submission id
     // narrows the query to that exact parser submission.
+    // V76.3.21.1_PLANNED_PRODUCER_QUERY_DEPTH
+    // The previous 64-entry read-only provenance window can miss a
+    // still-planned WRITE_DATA/RELEASE_MEM when the producer history
+    // is larger than the window. Expand discovery without changing
+    // PM4 FIFO, label values or producer completion semantics.
+    private static readonly int _plannedProducerQueryScanV763211 =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_PLANNED_PRODUCER_QUERY_SCAN"),
+                out var plannedProducerQueryScanV763211) &&
+                plannedProducerQueryScanV763211 > 0
+                ? plannedProducerQueryScanV763211
+                : 64,
+            64,
+            4096);
+    private static readonly int _agedProducerQueryScanV763211 =
+        Math.Clamp(
+            int.TryParse(
+                Environment.GetEnvironmentVariable(
+                    "SHARPEMU_AGED_PRODUCER_QUERY_SCAN"),
+                out var agedProducerQueryScanV763211) &&
+                agedProducerQueryScanV763211 > 0
+                ? agedProducerQueryScanV763211
+                : 64,
+            64,
+            4096);
     public static long V11714PlannedProducerQueryCount;
     public static long V11714PlannedProducerQueryHits;
     // SHARPEMU_V74_0_29_1_KYTY_ACCUMULATED_KNOWN_PRODUCER_VISIBILITY
@@ -1551,6 +1747,23 @@ public static partial class AgcExports
         Environment.GetEnvironmentVariable("SHARPEMU_NO_TEXTURE_SKIP"),
         "1",
         StringComparison.Ordinal);
+
+    // SHARPEMU_V76_2_9_BINK_TILED_YUV_FRESHNESS
+    // Bink's intermediate integer Y/UV surfaces (not the final tile-5 ping-pong
+    // planes) can reuse a sampled-image cache identity while guest memory has
+    // already advanced to the next decode stage/frame. The generic pre-copy skip
+    // then emits an empty GuestDrawTexture, which prevents the Vulkan alias
+    // refresh path from seeing fresh texels and leaves the old VkImage sampled.
+    // Keep the optimization for normal textures and final GPU-owned tile-5 YUV,
+    // but force a fresh guest read + detile for active Bink intermediate YUV.
+    // Set SHARPEMU_BINK_TILED_YUV_FRESHNESS=0 for an exact A/B rollback.
+    private static readonly bool _binkTiledYuvFreshnessV7629 =
+        !string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_BINK_TILED_YUV_FRESHNESS"),
+            "0",
+            StringComparison.Ordinal);
+    private static long _v7629BinkTiledYuvFreshCopyCount;
     // SHARPEMU_V74_0_74_SAMPLER_PRECOPY_SKIP
     // Default ON. Explicit =0 restores V73 exact-key-only submit behavior.
     private static readonly bool _samplerPrecopySkipV74074 =
@@ -2641,6 +2854,51 @@ public static partial class AgcExports
              ((GcrControl >> Gl2RangeShift) & Gl2RangeMask) == 0);
     }
 
+    // V76.3.17.0_ASYNC_AGC_COMMAND_PROCESSOR
+    //
+    // The PS5 guest submits DCB/ACB command streams to a hardware command
+    // processor; the submitting CPU thread does not synchronously decode every
+    // PM4 packet, evaluate shader resources and compile host shaders before the
+    // submit call can return.  SharpEmu historically did exactly that under
+    // SubmittedGpuState.Gate.
+    //
+    // Keep all existing PM4 parsing, WAIT_REG_MEM/WRITE_DATA/RELEASE_MEM,
+    // resource/hazard and completion semantics intact, but move that existing
+    // parser behind a dedicated per-process-memory command-processor ingress.
+    // The guest syscall only publishes immutable submission descriptors.
+    private static readonly bool _asyncAgcCommandProcessorV763170 =
+        string.Equals(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_AGC_ASYNC_COMMAND_PROCESSOR"),
+            "1",
+            StringComparison.Ordinal);
+
+    private static readonly int _asyncAgcCommandProcessorMaxIngressV763170 =
+        int.TryParse(
+            Environment.GetEnvironmentVariable(
+                "SHARPEMU_AGC_ASYNC_CP_MAX_INGRESS"),
+            out var asyncAgcCommandProcessorMaxIngressV763170)
+            ? Math.Clamp(asyncAgcCommandProcessorMaxIngressV763170, 64, 8192)
+            : 1024;
+
+    private enum AsyncAgcSubmissionKindV763170 : byte
+    {
+        GraphicsDcb = 0,
+        ComputeAcb = 1,
+        MultiGraphicsDcb = 2,
+    }
+
+    private readonly record struct AsyncAgcSubmissionV763170(
+        AsyncAgcSubmissionKindV763170 Kind,
+        uint OwnerHandle,
+        ulong CommandAddress,
+        uint DwordCount,
+        bool TracePackets,
+        ulong[]? MultiCommandAddresses,
+        uint[]? MultiDwordCounts,
+        long EnqueuedTicks,
+        ulong IngressSequence);
+
     private sealed class SubmittedDcbState
     {
         public readonly record struct PendingSubmission(
@@ -2735,6 +2993,27 @@ public static partial class AgcExports
         public uint NextResource { get; set; } = 1;
         public ulong WorkSequence { get; set; }
         public ulong SubmissionSequence { get; set; }
+
+        // V76.3.17.0: producer-only ingress used by guest submit syscalls.
+        // It is intentionally independent from Gate, which can remain owned by
+        // the PM4 command processor for a long packet stream without stalling
+        // the guest CPU that is publishing a later submission.
+        public object AsyncCommandProcessorIngressGateV763170 { get; } = new();
+        public ConcurrentQueue<AsyncAgcSubmissionV763170>
+            AsyncCommandProcessorIngressV763170 { get; } = new();
+        public System.Threading.AutoResetEvent
+            AsyncCommandProcessorSignalV763170 { get; } = new(false);
+        public CpuContext? AsyncCommandProcessorContextV763170;
+        public System.Threading.Thread? AsyncCommandProcessorThreadV763170;
+        public int AsyncCommandProcessorStartedV763170;
+        public int AsyncCommandProcessorFaultedV763170;
+        public ulong AsyncCommandProcessorIngressSequenceV763170;
+        public long AsyncCommandProcessorEnqueuedV763170;
+        public long AsyncCommandProcessorProcessedV763170;
+        public long AsyncCommandProcessorBackpressureV763170;
+        public long AsyncCommandProcessorMaxDepthV763170;
+        public long AsyncCommandProcessorBusyTicksV763170;
+
         public bool WaitMonitorRunning { get; set; }
         public object WaitMonitorSignalGate { get; } = new();
         public long WaitMonitorSignalVersion { get; set; }
@@ -3987,6 +4266,7 @@ public static partial class AgcExports
         return ReturnPointer(ctx, commandAddress);
     }
 
+
     [SysAbiExport(
         Nid = "wr23dPKyWc0",
         ExportName = "sceAgcCbReleaseMem",
@@ -4243,6 +4523,12 @@ public static partial class AgcExports
             return ReturnPointer(ctx, 0);
         }
 
+        CaptureBuiltDrawStreamV1830(
+            ctx,
+            commandBufferAddress,
+            drawCommand,
+            6);
+
         TraceAgc(
             $"agc.dcb_draw_index buf=0x{commandBufferAddress:X16} " +
             $"base=0x{baseCommand:X16} draw=0x{drawCommand:X16} " +
@@ -4302,6 +4588,12 @@ public static partial class AgcExports
 
             return ReturnPointer(ctx, 0);
         }
+
+        CaptureBuiltDrawStreamV1830(
+            ctx,
+            commandBufferAddress,
+            drawCommand,
+            5);
 
         TraceAgc(
             $"agc.dcb_draw_indirect buf=0x{commandBufferAddress:X16} " +
@@ -4368,6 +4660,12 @@ public static partial class AgcExports
             return ReturnPointer(ctx, 0);
         }
 
+        CaptureBuiltDrawStreamV1830(
+            ctx,
+            commandBufferAddress,
+            commandAddress,
+            5);
+
         TraceAgc(
             $"agc.dcb_draw_index_indirect buf=0x{commandBufferAddress:X16} " +
             $"cmd=0x{commandAddress:X16} offset=0x{dataOffset:X8} modifier=0x{modifier:X8}");
@@ -4399,6 +4697,12 @@ public static partial class AgcExports
         {
             return ReturnPointer(ctx, 0);
         }
+
+        CaptureBuiltDrawStreamV1830(
+            ctx,
+            commandBufferAddress,
+            commandAddress,
+            8);
 
         TraceAgc(
             $"agc.dcb_draw_index_indirect_multi buf=0x{commandBufferAddress:X16} " +
@@ -5398,6 +5702,12 @@ public static partial class AgcExports
             return ReturnPointer(ctx, 0);
         }
 
+        CaptureBuiltDrawStreamV1830(
+            ctx,
+            commandBufferAddress,
+            commandAddress,
+            5);
+
         TraceAgc($"agc.dcb_draw_index_offset buf=0x{commandBufferAddress:X16} cmd=0x{commandAddress:X16} offset={indexOffset} count={indexCount} flags=0x{flags:X8}");
         return ReturnPointer(ctx, commandAddress);
     }
@@ -5509,6 +5819,385 @@ public static partial class AgcExports
         return SetReturn(ctx, OrbisGen2Result.ORBIS_GEN2_OK);
     }
 
+    private static void EnsureAsyncAgcCommandProcessorV763170(
+        CpuContext submitContext,
+        SubmittedGpuState gpuState)
+    {
+        if (!_asyncAgcCommandProcessorV763170 ||
+            Volatile.Read(
+                ref gpuState.AsyncCommandProcessorStartedV763170) != 0)
+        {
+            return;
+        }
+
+        lock (gpuState.AsyncCommandProcessorIngressGateV763170)
+        {
+            if (gpuState.AsyncCommandProcessorStartedV763170 != 0)
+            {
+                return;
+            }
+
+            var workerContext = new CpuContext(
+                submitContext.Memory,
+                submitContext.TargetGeneration);
+            gpuState.AsyncCommandProcessorContextV763170 = workerContext;
+
+            var worker = new System.Threading.Thread(
+                () => RunAsyncAgcCommandProcessorV763170(gpuState))
+            {
+                IsBackground = true,
+                Name = "SharpEmu AGC Command Processor",
+                Priority = System.Threading.ThreadPriority.AboveNormal,
+            };
+            gpuState.AsyncCommandProcessorThreadV763170 = worker;
+            Volatile.Write(
+                ref gpuState.AsyncCommandProcessorStartedV763170,
+                1);
+            worker.Start();
+
+            Console.Error.WriteLine(
+                "[V76.3.17.0][AGC_ASYNC_CP] phase=start " +
+                $"max_ingress={_asyncAgcCommandProcessorMaxIngressV763170} " +
+                "priority=above-normal parser=dedicated-thread " +
+                "guest_submit=publish-only global_agc_gate=worker-only");
+        }
+    }
+
+    private static bool QueueAsyncAgcSubmissionV763170(
+        CpuContext submitContext,
+        SubmittedGpuState gpuState,
+        AsyncAgcSubmissionKindV763170 kind,
+        uint ownerHandle,
+        ulong commandAddress,
+        uint dwordCount,
+        bool tracePackets,
+        ulong[]? multiCommandAddresses = null,
+        uint[]? multiDwordCounts = null)
+    {
+        if (!_asyncAgcCommandProcessorV763170 ||
+            Volatile.Read(
+                ref gpuState.AsyncCommandProcessorFaultedV763170) != 0)
+        {
+            return false;
+        }
+
+        EnsureAsyncAgcCommandProcessorV763170(
+            submitContext,
+            gpuState);
+
+        // Bounded ingress.  Normal gameplay should remain far below this cap;
+        // if the host frontend falls more than 1024 submissions behind, apply
+        // real backpressure rather than growing managed memory without bound.
+        var backpressureRecorded = false;
+        while (gpuState.AsyncCommandProcessorIngressV763170.Count >=
+               _asyncAgcCommandProcessorMaxIngressV763170)
+        {
+            if (!backpressureRecorded)
+            {
+                Interlocked.Increment(
+                    ref gpuState.AsyncCommandProcessorBackpressureV763170);
+                backpressureRecorded = true;
+            }
+
+            gpuState.AsyncCommandProcessorSignalV763170.Set();
+            System.Threading.Thread.Sleep(1);
+
+            if (Volatile.Read(
+                    ref gpuState.AsyncCommandProcessorFaultedV763170) != 0)
+            {
+                return false;
+            }
+        }
+
+        AsyncAgcSubmissionV763170 submission;
+        int depth;
+        lock (gpuState.AsyncCommandProcessorIngressGateV763170)
+        {
+            var ingressSequence =
+                ++gpuState.AsyncCommandProcessorIngressSequenceV763170;
+            submission = new AsyncAgcSubmissionV763170(
+                kind,
+                ownerHandle,
+                commandAddress,
+                dwordCount,
+                tracePackets,
+                multiCommandAddresses,
+                multiDwordCounts,
+                System.Diagnostics.Stopwatch.GetTimestamp(),
+                ingressSequence);
+            gpuState.AsyncCommandProcessorIngressV763170.Enqueue(
+                submission);
+            depth = gpuState.AsyncCommandProcessorIngressV763170.Count;
+        }
+
+        var enqueueCount = Interlocked.Increment(
+            ref gpuState.AsyncCommandProcessorEnqueuedV763170);
+        UpdateMaxAsyncAgcIngressDepthV763170(
+            gpuState,
+            depth);
+        gpuState.AsyncCommandProcessorSignalV763170.Set();
+
+        if (enqueueCount <= 32 ||
+            (enqueueCount & (enqueueCount - 1)) == 0)
+        {
+            Console.Error.WriteLine(
+                $"[V76.3.17.0][AGC_ASYNC_CP] phase=enqueue " +
+                $"count={enqueueCount} ingress={submission.IngressSequence} " +
+                $"kind={kind} depth={depth} " +
+                $"command=0x{commandAddress:X16} dwords={dwordCount}");
+        }
+
+        return true;
+    }
+
+    private static void UpdateMaxAsyncAgcIngressDepthV763170(
+        SubmittedGpuState gpuState,
+        int depth)
+    {
+        while (true)
+        {
+            var previous = Volatile.Read(
+                ref gpuState.AsyncCommandProcessorMaxDepthV763170);
+            if (depth <= previous)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(
+                    ref gpuState.AsyncCommandProcessorMaxDepthV763170,
+                    depth,
+                    previous) == previous)
+            {
+                return;
+            }
+        }
+    }
+
+    private static void RunAsyncAgcCommandProcessorV763170(
+        SubmittedGpuState gpuState)
+    {
+        var ctx = gpuState.AsyncCommandProcessorContextV763170;
+        if (ctx is null)
+        {
+            Volatile.Write(
+                ref gpuState.AsyncCommandProcessorFaultedV763170,
+                1);
+            return;
+        }
+
+        while (true)
+        {
+            gpuState.AsyncCommandProcessorSignalV763170.WaitOne();
+
+            while (gpuState.AsyncCommandProcessorIngressV763170.TryDequeue(
+                       out var submission))
+            {
+                var beginTicks =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+
+                try
+                {
+                    lock (gpuState.Gate)
+                    {
+                        ProcessAsyncAgcSubmissionV763170(
+                            ctx,
+                            gpuState,
+                            submission);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Volatile.Write(
+                        ref gpuState.AsyncCommandProcessorFaultedV763170,
+                        1);
+                    Console.Error.WriteLine(
+                        $"[V76.3.17.0][AGC_ASYNC_CP_FAULT] " +
+                        $"ingress={submission.IngressSequence} " +
+                        $"kind={submission.Kind} " +
+                        $"type={ex.GetType().Name} message={ex.Message}");
+                    return;
+                }
+
+                var endTicks =
+                    System.Diagnostics.Stopwatch.GetTimestamp();
+                var busyTicks = Math.Max(0L, endTicks - beginTicks);
+                Interlocked.Add(
+                    ref gpuState.AsyncCommandProcessorBusyTicksV763170,
+                    busyTicks);
+
+                var processed = Interlocked.Increment(
+                    ref gpuState.AsyncCommandProcessorProcessedV763170);
+                if (processed <= 32 ||
+                    (processed & (processed - 1)) == 0)
+                {
+                    var ageMs =
+                        (beginTicks - submission.EnqueuedTicks) *
+                        1000.0 /
+                        System.Diagnostics.Stopwatch.Frequency;
+                    var processMs =
+                        busyTicks *
+                        1000.0 /
+                        System.Diagnostics.Stopwatch.Frequency;
+                    var depth =
+                        gpuState.AsyncCommandProcessorIngressV763170.Count;
+                    var totalBusyMs =
+                        Volatile.Read(
+                            ref gpuState.AsyncCommandProcessorBusyTicksV763170) *
+                        1000.0 /
+                        System.Diagnostics.Stopwatch.Frequency;
+
+                    Console.Error.WriteLine(
+                        $"[V76.3.17.0][AGC_ASYNC_CP] phase=processed " +
+                        $"count={processed} ingress={submission.IngressSequence} " +
+                        $"kind={submission.Kind} age_ms={ageMs:F3} " +
+                        $"process_ms={processMs:F3} depth={depth} " +
+                        $"max_depth={Volatile.Read(ref gpuState.AsyncCommandProcessorMaxDepthV763170)} " +
+                        $"busy_ms={totalBusyMs:F1} " +
+                        $"backpressure={Volatile.Read(ref gpuState.AsyncCommandProcessorBackpressureV763170)}");
+                }
+            }
+        }
+    }
+
+    private static void ProcessAsyncAgcSubmissionV763170(
+        CpuContext ctx,
+        SubmittedGpuState gpuState,
+        AsyncAgcSubmissionV763170 submission)
+    {
+        GuestGpu.Current.AttachGuestMemory(ctx.Memory);
+
+        switch (submission.Kind)
+        {
+            case AsyncAgcSubmissionKindV763170.GraphicsDcb:
+            {
+                gpuState.Graphics.QueueName = "dcb.graphics";
+                var submissionId = ++gpuState.SubmissionSequence;
+
+                ReplayBuiltDcbSegmentsV1828(
+                    ctx,
+                    gpuState,
+                    gpuState.Graphics,
+                    submission.CommandAddress,
+                    submission.DwordCount,
+                    submissionId);
+
+                EnqueueSubmittedDcb(
+                    ctx,
+                    gpuState,
+                    gpuState.Graphics,
+                    submission.CommandAddress,
+                    submission.DwordCount,
+                    submissionId,
+                    submission.TracePackets);
+                DrainAfterGuestSubmitV74099(
+                    ctx,
+                    gpuState,
+                    submission.TracePackets);
+                break;
+            }
+
+            case AsyncAgcSubmissionKindV763170.ComputeAcb:
+            {
+                if (!gpuState.ComputeQueues.TryGetValue(
+                        submission.OwnerHandle,
+                        out var queueState))
+                {
+                    queueState = new SubmittedDcbState();
+                    gpuState.ComputeQueues.Add(
+                        submission.OwnerHandle,
+                        queueState);
+                }
+
+                queueState.QueueName =
+                    $"acb.compute[{submission.OwnerHandle}]";
+                queueState.CompletionEventId =
+                    submission.OwnerHandle;
+
+                EnqueueSubmittedDcb(
+                    ctx,
+                    gpuState,
+                    queueState,
+                    submission.CommandAddress,
+                    submission.DwordCount,
+                    ++gpuState.SubmissionSequence,
+                    submission.TracePackets);
+                DrainAfterGuestSubmitV74099(
+                    ctx,
+                    gpuState,
+                    submission.TracePackets);
+                break;
+            }
+
+            case AsyncAgcSubmissionKindV763170.MultiGraphicsDcb:
+            {
+                var commandAddresses =
+                    submission.MultiCommandAddresses ?? [];
+                var dwordCounts =
+                    submission.MultiDwordCounts ?? [];
+                var count = Math.Min(
+                    commandAddresses.Length,
+                    dwordCounts.Length);
+
+                Gen5ShaderScalarEvaluator.BeginGlobalMemoryReadScope();
+                try
+                {
+                    for (var index = 0; index < count; index++)
+                    {
+                        if (commandAddresses[index] == 0 ||
+                            dwordCounts[index] == 0)
+                        {
+                            continue;
+                        }
+
+                        PreindexSubmittedProducerIntents(
+                            ctx,
+                            gpuState.Graphics,
+                            commandAddresses[index],
+                            dwordCounts[index],
+                            gpuState.Graphics.ActiveSubmissionId);
+                    }
+
+                    for (var index = 0; index < count; index++)
+                    {
+                        if (commandAddresses[index] == 0 ||
+                            dwordCounts[index] == 0)
+                        {
+                            continue;
+                        }
+
+                        if (submission.TracePackets)
+                        {
+                            TraceAgc(
+                                $"agc.driver_submit_multi_dcbs " +
+                                $"index={index}/{count} " +
+                                $"addr=0x{commandAddresses[index]:X16} " +
+                                $"dwords={dwordCounts[index]}");
+                        }
+
+                        ParseSubmittedDcb(
+                            ctx,
+                            gpuState,
+                            gpuState.Graphics,
+                            commandAddresses[index],
+                            dwordCounts[index],
+                            submission.TracePackets);
+                    }
+
+                    DrainAfterGuestSubmitV74099(
+                        ctx,
+                        gpuState,
+                        submission.TracePackets);
+                }
+                finally
+                {
+                    Gen5ShaderScalarEvaluator.EndGlobalMemoryReadScope();
+                }
+
+                break;
+            }
+        }
+    }
+
     [SysAbiExport(
         Nid = "UglJIZjGssM",
         ExportName = "sceAgcDriverSubmitDcb",
@@ -5540,6 +6229,20 @@ public static partial class AgcExports
 
         GuestGpu.Current.AttachGuestMemory(ctx.Memory);
         var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+
+        if (QueueAsyncAgcSubmissionV763170(
+                ctx,
+                gpuState,
+                AsyncAgcSubmissionKindV763170.GraphicsDcb,
+                ownerHandle: 0,
+                commandAddress,
+                dwordCount,
+                tracePackets))
+        {
+            ctx[CpuRegister.Rax] = 0;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
         lock (gpuState.Gate)
         {
             gpuState.Graphics.QueueName = "dcb.graphics";
@@ -5604,6 +6307,20 @@ public static partial class AgcExports
 
         GuestGpu.Current.AttachGuestMemory(ctx.Memory);
         var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+
+        if (QueueAsyncAgcSubmissionV763170(
+                ctx,
+                gpuState,
+                AsyncAgcSubmissionKindV763170.ComputeAcb,
+                ownerHandle,
+                commandAddress,
+                dwordCount,
+                tracePackets))
+        {
+            ctx[CpuRegister.Rax] = 0;
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        }
+
         lock (gpuState.Gate)
         {
             if (!gpuState.ComputeQueues.TryGetValue(ownerHandle, out var queueState))
@@ -6853,7 +7570,9 @@ public static partial class AgcExports
 
                     if (hasCurrentFrameDisplayWriter &&
                         !_replayTargetlessComposites &&
-                        preferValidatedDirectWriterV7405628)
+                        preferValidatedDirectWriterV7405628 &&
+                        !SharpEmu.Libs.VideoOut.BlackScreenRecoveryV7624
+                            .ShouldSkipDirectScanoutSuppress())
                     {
                         var pendingBeforeSuppressV7405628 =
                             state.PendingTargetlessDraws.Count;
@@ -9050,7 +9769,7 @@ private static void TryDrainPendingWaitersOnGateOwnerV74072(
         // the live waiter index. This is a scheduling hint only; false simply
         // keeps the established conservative path.
         var nextIndex = int.MaxValue;
-        for (var probe = 0; probe < 64; probe++)
+        for (var probe = 0; probe < _plannedProducerQueryScanV763211; probe++)
         {
             object? memory = null;
             ulong address = 0;
@@ -9103,6 +9822,92 @@ private static void TryDrainPendingWaitersOnGateOwnerV74072(
 
             watchedRanges = count;
             Interlocked.Increment(ref V11714PlannedProducerQueryHits);
+            return true;
+        }
+
+        return false;
+    }
+
+    // SHARPEMU_V76_3_8_0_AGED_PRODUCER_DEPENDENCY_QUERY
+    // V76.3.7.6 showed that unconditionally promoting any planned producer can
+    // hurt median FPS.  Expose a narrower query for producers whose intent has
+    // remained live long enough to prove a real critical-path stall.  The
+    // presenter drains only that producer queue in FIFO order; this method never
+    // reorders packets and never mutates the wait registry.
+    public static bool TryGetAgedLivePlannedWaitProducerV76380(
+        string queueName,
+        long minAgeTicks,
+        out ulong producerSubmissionId,
+        out int watchedRanges,
+        out double ageMs)
+    {
+        producerSubmissionId = 0;
+        watchedRanges = 0;
+        ageMs = 0;
+
+        if (string.IsNullOrEmpty(queueName) ||
+            minAgeTicks < 0 ||
+            GpuWaitRegistry.Count == 0)
+        {
+            return false;
+        }
+
+        var nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        var nextIndex = int.MaxValue;
+        for (var probe = 0; probe < _agedProducerQueryScanV763211; probe++)
+        {
+            object? memory = null;
+            ulong address = 0;
+            ulong length = 0;
+            ulong submissionId = 0;
+            long createdTicks = 0;
+            var found = false;
+
+            lock (_labelProducerGate)
+            {
+                nextIndex = Math.Min(nextIndex, _labelProducers.Count - 1);
+                while (nextIndex >= 0)
+                {
+                    var candidate = _labelProducers[nextIndex--];
+                    if (!candidate.Planned ||
+                        candidate.Completed ||
+                        !string.Equals(candidate.QueueName, queueName, StringComparison.Ordinal) ||
+                        candidate.Address == 0 ||
+                        candidate.Length == 0 ||
+                        candidate.CreatedTicks == 0 ||
+                        nowTicks - candidate.CreatedTicks < minAgeTicks)
+                    {
+                        continue;
+                    }
+
+                    memory = candidate.Memory;
+                    address = candidate.Address;
+                    length = candidate.Length;
+                    submissionId = candidate.SubmissionId;
+                    createdTicks = candidate.CreatedTicks;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found || memory is null)
+            {
+                return false;
+            }
+
+            var count = GpuWaitRegistry.CountWatchedAddressesInRange(
+                memory,
+                address,
+                length);
+            if (count <= 0)
+            {
+                continue;
+            }
+
+            producerSubmissionId = submissionId;
+            watchedRanges = count;
+            ageMs = Math.Max(0, nowTicks - createdTicks) *
+                1000.0 / System.Diagnostics.Stopwatch.Frequency;
             return true;
         }
 
@@ -11689,6 +12494,17 @@ private static void TryDrainPendingWaitersOnGateOwnerV74072(
         }
     }
 
+    // V76.3.6: producer latches normally pulse the monitor immediately, but
+    // direct/late guest writes can land between exponential-backoff polls.
+    // Keep the legacy 16 ms default globally; title envelopes may request a
+    // smaller cap without force-satisfying or mutating watched labels.
+    private static readonly int _waitMonitorMaxDelayMsV7636 =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("SHARPEMU_WAIT_MONITOR_MAX_MS"),
+            out var waitMonitorMaxDelayMsV7636)
+            ? Math.Clamp(waitMonitorMaxDelayMsV7636, 1, 16)
+            : 16;
+
     private static void EnsureGpuWaitMonitor(
         CpuContext submitContext,
         SubmittedGpuState gpuState)
@@ -11791,7 +12607,9 @@ private static void TryDrainPendingWaitersOnGateOwnerV74072(
 
             delayMilliseconds = resumed != 0
                 ? 1
-                : Math.Min(delayMilliseconds * 2, 16);
+                : Math.Min(
+                    delayMilliseconds * 2,
+                    _waitMonitorMaxDelayMsV7636);
             lock (gpuState.WaitMonitorSignalGate)
             {
                 if (gpuState.WaitMonitorSignalVersion == observedSignal)
@@ -13079,6 +13897,48 @@ if (tracePackets)
         var hasPsInputEna = state.CxRegisters.TryGetValue(SpiPsInputEna, out var psInputEna);
         var hasPsInputAddr = state.CxRegisters.TryGetValue(SpiPsInputAddr, out var psInputAddr);
         state.UcRegisters.TryGetValue(VgtPrimitiveType, out var primitiveType);
+
+        // V76.3.4: title-scoped state audit at the exact AGC -> translated-draw
+        // boundary. This distinguishes a missing ES/PS bind from a downstream
+        // shader/compiler/Vulkan failure without inventing PS5 shader state.
+        if (IsDbfzFirstDrawBridgeEnabledV7633())
+        {
+            var trace = Interlocked.Increment(
+                ref _dbfzFirstDrawStateTraceCountV7634);
+            if (trace <= 32)
+            {
+                var hasGsProgram = TryGetShaderAddress(
+                    state.ShRegisters,
+                    SpiShaderPgmLoGs,
+                    SpiShaderPgmHiGs,
+                    out var gsProgramAddress);
+                var hasVsProgram = TryGetShaderAddress(
+                    state.ShRegisters,
+                    SpiShaderPgmLoVs,
+                    SpiShaderPgmHiVs,
+                    out var vsProgramAddress);
+                var hasLsProgram = TryGetShaderAddress(
+                    state.ShRegisters,
+                    SpiShaderPgmLoLs,
+                    SpiShaderPgmHiLs,
+                    out var lsProgramAddress);
+
+                Console.Error.WriteLine(
+                    $"[DBFZ-FIRST-DRAW-STATE][V76.3.4] trace={trace} " +
+                    $"verts={vertexCount} indexed={(indexed ? 1 : 0)} " +
+                    $"es={(hasExportShader ? $"0x{exportShaderAddress:X16}" : "missing")} " +
+                    $"ps={(hasPixelShader ? $"0x{pixelShaderAddress:X16}" : "missing")} " +
+                    $"gs={(hasGsProgram ? $"0x{gsProgramAddress:X16}" : "missing")} " +
+                    $"vs={(hasVsProgram ? $"0x{vsProgramAddress:X16}" : "missing")} " +
+                    $"ls={(hasLsProgram ? $"0x{lsProgramAddress:X16}" : "missing")} " +
+                    $"ps_ena={(hasPsInputEna ? $"0x{psInputEna:X8}" : "missing")} " +
+                    $"ps_addr={(hasPsInputAddr ? $"0x{psInputAddr:X8}" : "missing")} " +
+                    $"prim=0x{primitiveType:X8} " +
+                    $"sh_regs={state.ShRegisters.Count} cx_regs={state.CxRegisters.Count} " +
+                    $"uc_regs={state.UcRegisters.Count}");
+            }
+        }
+
         // SHARPEMU_V73_17_MASKED_RT_IDENTITY
         // Preserve every programmed CB_COLORn surface as a resource identity.
         // CB_TARGET_MASK decides whether the current draw writes the surface; it
@@ -15646,11 +16506,44 @@ if (tracePackets)
     /// resolve to the live GPU image instead of guest RAM.
     /// </summary>
     // SHARPEMU_AGC_METADATA_FRAMEBUFFER_MATERIALIZATION_V1_8_31
-    private static readonly bool _metadataFramebufferClearV1831Enabled =
-        string.Equals(
-            Environment.GetEnvironmentVariable("SHARPEMU_AGC_METADATA_FB_CLEAR"),
-            "1",
-            StringComparison.Ordinal);
+    // V76.3.5: DBFZ reaches its first AGC work through CB_COLOR mode=2
+    // (EliminateFastClear) on the title framebuffer before any normal color
+    // pipeline exists.  The existing materializer already models the safe
+    // zero-clear subset, but it was opt-in only.  Enable that existing path
+    // automatically for PPSA09790 while preserving the historical opt-in
+    // behavior for every other title.  Explicit env=0 remains a kill switch.
+    private static long _dbfzMetadataFramebufferAutoTraceV7635;
+
+    private static bool IsMetadataFramebufferClearV1831EnabledV7635()
+    {
+        var setting = Environment.GetEnvironmentVariable(
+            "SHARPEMU_AGC_METADATA_FB_CLEAR");
+
+        if (string.Equals(setting, "1", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (string.Equals(setting, "0", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var dbfz = KernelMemoryCompatExports.IsConfiguredApplicationTitle(
+            DbfzFirstDrawTitleIdV7633);
+        if (dbfz &&
+            Interlocked.CompareExchange(
+                ref _dbfzMetadataFramebufferAutoTraceV7635,
+                1,
+                0) == 0)
+        {
+            Console.Error.WriteLine(
+                "[DBFZ-METADATA-FB][V76.3.5] auto_enable=1 " +
+                "mode=eliminate-fast-clear-zero scope=PPSA09790");
+        }
+
+        return dbfz;
+    }
 
     // SHARPEMU_V74_0_56_33_SCENE_METADATA_MATERIALIZATION
     // The old V1.8.31 materializer was restricted to registered display
@@ -15689,7 +16582,7 @@ if (tracePackets)
         ulong drawSequence,
         ulong exportShaderAddress)
     {
-        if (!_metadataFramebufferClearV1831Enabled)
+        if (!IsMetadataFramebufferClearV1831EnabledV7635())
         {
             return false;
         }
@@ -15796,6 +16689,16 @@ if (tracePackets)
             $"size={target.Width}x{target.Height} " +
             $"fmt={target.Format}/{target.NumberType} " +
             $"tile={target.TileMode} clear=zero");
+
+        if (KernelMemoryCompatExports.IsConfiguredApplicationTitle(
+                DbfzFirstDrawTitleIdV7633))
+        {
+            Console.Error.WriteLine(
+                $"[DBFZ-METADATA-FB][V76.3.5] materialized={count} " +
+                $"seq={drawSequence} slot={target.Slot} " +
+                $"rt=0x{target.Address:X16} size={target.Width}x{target.Height} " +
+                $"fmt={target.Format}/{target.NumberType} tile={target.TileMode}");
+        }
         return true;
     }
 
@@ -16823,10 +17726,16 @@ if (tracePackets)
                 // draw/dispatch. Presenter resolves textures in list order, so
                 // the first exact identity is materialized/cached before this
                 // duplicate. No reuse crosses a draw, queue, frame or write.
+                // SHARPEMU_V76_3_7_7_LOCAL_VIEW_PAYLOAD_DEDUP
+                // V74085LocalTexturePayloadKey intentionally excludes Sampler
+                // and DstSelect. Those fields describe the binding view, not the
+                // underlying guest storage. V76.3.7.5 already validated storage
+                // aliasing in the presenter; therefore an exact same-draw deferred
+                // storage payload can be reserved once even when another binding
+                // requests a different sampler/swizzle. This never crosses a draw,
+                // queue, frame or write generation.
                 if (firstV74085.DeferredTiledGuestRead &&
-                    firstV74085.DeferredTiledGuestSliceBytes > 0 &&
-                    firstV74085.DstSelect == dV74085.DstSelect &&
-                    firstV74085.Sampler.Equals(currentSamplerV740944))
+                    firstV74085.DeferredTiledGuestSliceBytes > 0)
                 {
                     var deferredBytesV740944 = checked(
                         (long)firstV74085.DeferredTiledGuestSliceBytes *
@@ -16846,25 +17755,22 @@ if (tracePackets)
                             Sampler = currentSamplerV740944,
                         });
 
-                        // SHARPEMU_V74_0_107_AGC_HOTPATH_DIAGNOSTIC_GATE
-                        if (_traceAgcHotpathDiagnosticsV740107)
+                        var deferredDedupCountV740944 =
+                            Interlocked.Increment(ref _v740944LocalDeferredTiledDedupCount);
+                        var deferredDedupBytesV740944 =
+                            Interlocked.Add(ref _v740944LocalDeferredTiledDedupBytes, deferredBytesV740944);
+                        if (deferredDedupCountV740944 <= 64 ||
+                            (deferredDedupCountV740944 & (deferredDedupCountV740944 - 1)) == 0)
                         {
-                            var deferredDedupCountV740944 =
-                                Interlocked.Increment(ref _v740944LocalDeferredTiledDedupCount);
-                            var deferredDedupBytesV740944 =
-                                Interlocked.Add(ref _v740944LocalDeferredTiledDedupBytes, deferredBytesV740944);
-                            if (deferredDedupCountV740944 <= 256 ||
-                                (deferredDedupCountV740944 & (deferredDedupCountV740944 - 1)) == 0)
-                            {
-                                Console.Error.WriteLine(
-                                    $"[V74.0.94.4][LOCAL_DEFERRED_TILED_DEDUP] " +
-                                    $"count={deferredDedupCountV740944} " +
-                                    $"addr=0x{dV74085.Address:X16} " +
-                                    $"size={dV74085.Width}x{dV74085.Height} " +
-                                    $"layers={firstV74085.ArrayLayers} " +
-                                    $"bytes={deferredBytesV740944} " +
-                                    $"skipped_mb={deferredDedupBytesV740944 / (1024 * 1024)}");
-                            }
+                            Console.Error.WriteLine(
+                                $"[V76.3.7.7][LOCAL_VIEW_PAYLOAD_DEDUP] " +
+                                $"count={deferredDedupCountV740944} " +
+                                $"addr=0x{dV74085.Address:X16} " +
+                                $"size={dV74085.Width}x{dV74085.Height} " +
+                                $"layers={firstV74085.ArrayLayers} " +
+                                $"bytes={deferredBytesV740944} " +
+                                $"dst=0x{dV74085.DstSelect:X3} " +
+                                $"skipped_mb={deferredDedupBytesV740944 / (1024 * 1024)}");
                         }
                         continue;
                     }
@@ -19243,7 +20149,39 @@ private static bool TryResolveDccMetadataAlias(
                 BcSwizzle: descriptor.BcSwizzle,
                 HasExtendedDescriptor: descriptor.HasExtendedDescriptor);
 
+        var forceFreshBinkTiledYuvV7629 =
+            _binkTiledYuvFreshnessV7629 &&
+            BinkGuestOwnedRuntimeV7600.IsGuestMovieActive &&
+            !isStorage &&
+            descriptor.Address != 0 &&
+            descriptor.MetadataAddress == 0 &&
+            !descriptor.DccCompressionEnabled &&
+            descriptor.TileMode != 0 &&
+            descriptor.TileMode != 5 &&
+            descriptor.NumberType == 4 &&
+            (descriptor.Format == 1 || descriptor.Format == 3);
+
+        if (forceFreshBinkTiledYuvV7629)
+        {
+            var freshCountV7629 = Interlocked.Increment(
+                ref _v7629BinkTiledYuvFreshCopyCount);
+            if (freshCountV7629 <= 64 ||
+                (freshCountV7629 & (freshCountV7629 - 1)) == 0)
+            {
+                Console.Error.WriteLine(
+                    "[BINK-GUEST][V76.2.9][TILED-YUV-FRESHNESS] " +
+                    $"count={freshCountV7629} " +
+                    $"plane={(descriptor.Format == 1 ? "Y" : "UV")} " +
+                    $"addr=0x{descriptor.Address:X16} " +
+                    $"size={descriptor.Width}x{descriptor.Height} " +
+                    $"pitch={sourceWidth} tile={descriptor.TileMode} " +
+                    $"fmt={descriptor.Format}/{descriptor.NumberType} " +
+                    "action=force-fresh-copy-detile");
+            }
+        }
+
         if (!_textureCopySkipDisabled &&
+            !forceFreshBinkTiledYuvV7629 &&
             descriptor.Address != 0 &&
             !SharpEmu.HLE.GuestImageWriteTracker.PeekDirty(descriptor.Address))
         {
@@ -20981,6 +21919,10 @@ if (dispatchEndX == 0 || dispatchEndY == 0 || dispatchEndZ == 0)
                 ref Gen5ShaderTranslator.V11710MetadataL2Hits);
             var metadataL2MissV11710 = Volatile.Read(
                 ref Gen5ShaderTranslator.V11710MetadataL2Misses);
+            var programL2EvictV7636 = Volatile.Read(
+                ref Gen5ShaderTranslator.V7636ProgramL2ConflictEvictions);
+            var metadataL2EvictV7636 = Volatile.Read(
+                ref Gen5ShaderTranslator.V7636MetadataL2ConflictEvictions);
             var scratchClonesV1179 = Volatile.Read(
                 ref Gen5ShaderScalarEvaluator.V1179ScalarScratchClones);
             var scratchFallbacksV1179 = Volatile.Read(
@@ -21003,6 +21945,8 @@ if (dispatchEndX == 0 || dispatchEndY == 0 || dispatchEndZ == 0)
                 $"program_shared={programSharedV1179} program_l2_miss={programL2MissV11710} " +
                 $"metadata_l1={metadataHotV1179} metadata_l2={metadataL2V11710} " +
                 $"metadata_shared={metadataSharedV1179} metadata_l2_miss={metadataL2MissV11710} " +
+                $"program_l2_conflict_evict={programL2EvictV7636} " +
+                $"metadata_l2_conflict_evict={metadataL2EvictV7636} " +
                 $"scalar_scratch_clones={scratchClonesV1179} " +
                 $"scalar_scratch_fallbacks={scratchFallbacksV1179} " +
                 $"global_reads={globalReadsV1179} " +
@@ -24620,6 +25564,46 @@ if (dispatchEndX == 0 || dispatchEndY == 0 || dispatchEndZ == 0)
             Environment.GetEnvironmentVariable("SHARPEMU_LOG_AGC"), "1", StringComparison.Ordinal);
 
         var gpuState = _submittedGpuStates.GetValue(CanonicalMemory(ctx.Memory), static _ => new SubmittedGpuState());
+
+        if (_asyncAgcCommandProcessorV763170)
+        {
+            var commandAddressesV763170 =
+                new ulong[checked((int)bufferCount)];
+            var dwordCountsV763170 =
+                new uint[checked((int)bufferCount)];
+
+            for (uint indexV763170 = 0;
+                 indexV763170 < bufferCount;
+                 indexV763170++)
+            {
+                if (!ctx.TryReadUInt64(
+                        addressArray + indexV763170 * 8,
+                        out commandAddressesV763170[indexV763170]) ||
+                    !ctx.TryReadUInt32(
+                        sizeArray + indexV763170 * 4,
+                        out dwordCountsV763170[indexV763170]))
+                {
+                    commandAddressesV763170[indexV763170] = 0;
+                    dwordCountsV763170[indexV763170] = 0;
+                }
+            }
+
+            if (QueueAsyncAgcSubmissionV763170(
+                    ctx,
+                    gpuState,
+                    AsyncAgcSubmissionKindV763170.MultiGraphicsDcb,
+                    ownerHandle: 0,
+                    commandAddress: 0,
+                    dwordCount: 0,
+                    tracePackets,
+                    commandAddressesV763170,
+                    dwordCountsV763170))
+            {
+                ctx[CpuRegister.Rax] = 0;
+                return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+            }
+        }
+
         lock (gpuState.Gate)
         {
             Gen5ShaderScalarEvaluator.BeginGlobalMemoryReadScope();

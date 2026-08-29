@@ -1,4 +1,0 @@
-            0xB0 => "DsStoreAddtidB32",
-            // GFX10/RDNA2 paired ADDTID LDS load.
-            0xB1 => "DsReadAddtidB32",
-            0xDE => "DsWriteB96",

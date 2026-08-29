@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -653,6 +654,22 @@ public sealed partial class DirectExecutionBackend
 			// Publish the NID last so readers cannot pair a new import name with
 			// the preceding import's argument snapshot.
 			Volatile.Write(ref activeGuestThreadState.LastImportNid, importStubEntry.Nid);
+
+			if (IsDbfzRuntimeSamplerEnabledV76310() &&
+				IsDbfzRuntimeSamplerTargetV76310(activeGuestThreadState.Name))
+			{
+				var trace = Interlocked.Increment(ref _dbfzRuntimeTargetImportTraceV76310);
+				if (trace <= 2048)
+				{
+					Console.Error.WriteLine(
+						$"[DBFZ-RUNTIME-IMPORT][V76.3.10] trace={trace} " +
+						$"thread=0x{activeGuestThreadState.ThreadHandle:X16} name='{activeGuestThreadState.Name}' " +
+						$"thread_import={Interlocked.Read(ref activeGuestThreadState.ImportCount)} " +
+						$"nid={importStubEntry.Nid} ret=0x{num7:X16} " +
+						$"rdi=0x{value:X16} rsi=0x{value2:X16} rdx=0x{num3:X16} rcx=0x{num4:X16} " +
+						$"r8=0x{num5:X16} r9=0x{num6:X16}");
+				}
+			}
 		}
 		if (_logStrlenBursts)
 		{
@@ -1911,13 +1928,113 @@ public sealed partial class DirectExecutionBackend
 			return false;
 		}
 
-		if (count != 0 && !cpuContext.Memory.TryCopy(destination, source, count))
+		if (count != 0)
 		{
-			return false;
+			if (KernelMemoryCompatExports.IsConfiguredApplicationTitle("PPSA01341"))
+			{
+				if (!TryCopyGuestMemoryChunkedV763151(
+						cpuContext,
+						destination,
+						source,
+						count))
+				{
+					var faultsV763151 = Interlocked.Increment(ref _dsSafeMemcpyFaultsV763151);
+					if (faultsV763151 <= 8 || (faultsV763151 & (faultsV763151 - 1)) == 0)
+					{
+						Console.Error.WriteLine(
+							$"[V76.3.15.1][SAFE_MEMCOPY_FAULT] count={faultsV763151} " +
+							$"dst=0x{destination:X16} src=0x{source:X16} bytes={count} " +
+							"action=suppress-invalid-guest-copy");
+					}
+
+					// A bad guest pointer must not escape through the old PVM
+					// pair-pointer Span.CopyTo path and terminate the host.
+					// libc memcpy/memmove return the destination pointer.
+					result = destination;
+					return true;
+				}
+
+				var callsV763151 = Interlocked.Increment(ref _dsSafeMemcpyCallsV763151);
+				if (callsV763151 <= 4 || (callsV763151 & (callsV763151 - 1)) == 0)
+				{
+					Console.Error.WriteLine(
+						$"[V76.3.15.1][SAFE_MEMCOPY] count={callsV763151} " +
+						$"dst=0x{destination:X16} src=0x{source:X16} bytes={count} mode=chunk64k");
+				}
+			}
+			else if (!cpuContext.Memory.TryCopy(destination, source, count))
+			{
+				return false;
+			}
 		}
 
 		result = destination;
 		return true;
+	}
+
+	private static int _dsSafeMemcpyCallsV763151;
+	private static int _dsSafeMemcpyFaultsV763151;
+
+	private static bool TryCopyGuestMemoryChunkedV763151(
+		CpuContext cpuContext,
+		ulong destination,
+		ulong source,
+		ulong count)
+	{
+		if (count == 0 || destination == source)
+		{
+			return true;
+		}
+		if (destination == 0 || source == 0 ||
+			source > ulong.MaxValue - count ||
+			destination > ulong.MaxValue - count)
+		{
+			return false;
+		}
+
+		const int CopyChunkV763151 = 64 * 1024;
+		var rentSize = (int)Math.Min((ulong)CopyChunkV763151, count);
+		var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, rentSize));
+		try
+		{
+			var backward = destination > source && destination - source < count;
+			if (backward)
+			{
+				var remaining = count;
+				while (remaining != 0)
+				{
+					var n = (int)Math.Min((ulong)CopyChunkV763151, remaining);
+					var offset = remaining - (ulong)n;
+					var span = buffer.AsSpan(0, n);
+					if (!cpuContext.Memory.TryRead(source + offset, span) ||
+						!cpuContext.Memory.TryWrite(destination + offset, span))
+					{
+						return false;
+					}
+					remaining = offset;
+				}
+			}
+			else
+			{
+				ulong offset = 0;
+				while (offset < count)
+				{
+					var n = (int)Math.Min((ulong)CopyChunkV763151, count - offset);
+					var span = buffer.AsSpan(0, n);
+					if (!cpuContext.Memory.TryRead(source + offset, span) ||
+						!cpuContext.Memory.TryWrite(destination + offset, span))
+					{
+						return false;
+					}
+					offset += (ulong)n;
+				}
+			}
+			return true;
+		}
+		finally
+		{
+			ArrayPool<byte>.Shared.Return(buffer);
+		}
 	}
 
 	private unsafe bool TryDispatchHotStringLeafV91(
@@ -2489,11 +2606,47 @@ public sealed partial class DirectExecutionBackend
 			"1G3lF1Gg1k8" or // sceKernelOpen
 			"gEpBkcwxUjw";   // sceKernelAprResolveFilepathsToIdsAndFileSizes
 
+	// V76.3.11: DBFZ RenderThread 1 repeatedly remains Running with its last
+	// completed import fixed at qj7QZpgr9Uw / ret 0x0000000800031488 while the
+	// per-thread import counter no longer advances. qj7 is the Gen5 graphics
+	// type-2 packet helper and was still classified as a leaf import. The existing
+	// leaf-trampoline warning below documents the same failure class: a compact
+	// leaf frame can leave the guest parked in the import stub when the return-slot
+	// sentinel is mistaken for the guest return RIP. Force only DBFZ through the
+	// normal import path for qj7; all other titles retain the historical leaf path.
+	// Kill switch: SHARPEMU_DBFZ_QJ7_NORMAL_IMPORT_COMPAT=0.
+	private static int _dbfzQj7NormalImportLoggedV76311;
+
+	private static bool IsDbfzQj7NormalImportCompatV76311()
+	{
+		var setting = Environment.GetEnvironmentVariable(
+			"SHARPEMU_DBFZ_QJ7_NORMAL_IMPORT_COMPAT");
+		if (string.Equals(setting, "0", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(setting, "false", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(setting, "off", StringComparison.OrdinalIgnoreCase))
+		{
+			return false;
+		}
+
+		return KernelMemoryCompatExports.IsConfiguredApplicationTitle("PPSA09790");
+	}
+
 	private bool IsLeafImport(string nid)
 	{
 		if (nid == "1jfXLRVzisc")
 		{
 			return !_logUsleep;
+		}
+
+		if (nid == "qj7QZpgr9Uw" && IsDbfzQj7NormalImportCompatV76311())
+		{
+			if (Interlocked.Exchange(ref _dbfzQj7NormalImportLoggedV76311, 1) == 0)
+			{
+				Console.Error.WriteLine(
+					"[DBFZ-QJ7-NORMAL][V76.3.11] active=1 nid=qj7QZpgr9Uw " +
+					"action=force-normal-import-path scope=PPSA09790");
+			}
+			return false;
 		}
 
 		// pthread/rwlock unlock exports must use the normal import path.
@@ -2719,6 +2872,194 @@ public sealed partial class DirectExecutionBackend
 			ActiveCpuContext.TryWriteUInt64(returnSlotAddress, hostExit);
 	}
 
+	// V76.3.9: DBFZ reaches a legitimate UE/libc gettimeofday polling site after
+	// RenderThread 0 / RTHeartBeat 0 have exited and the renderer restarts as
+	// RenderThread 1 / RTHeartBeat 1. The generic import-loop watchdog mistakes
+	// this single-NID/single-return-site poll for a dead loop and tears down an
+	// otherwise live process. Keep the global guard intact and exempt only the
+	// exact DBFZ PPSA09790 callsite proven by the V76.3.8 runtime.
+	private long _dbfzGettimeofdayLoopGuardBypassCountV7639;
+
+	// V76.3.10: diagnostic-only native RIP sampler for the DBFZ post-restart
+	// renderer phase. V76.3.9.2 proves the exact gettimeofday loop is live and
+	// must not be torn down, but RenderThread 1 stops crossing HLE after 389
+	// imports while the entry thread continues polling. Capture the actual host
+	// instruction pointer of the direct-executed guest threads once per second,
+	// using the same short suspend/GetThreadContext/resume primitive already used
+	// by the stall watchdog. No guest state, return value, wait, AGC packet, or
+	// scheduler decision is modified.
+	private int _dbfzRuntimeSamplerStartedV76310;
+	private Thread? _dbfzRuntimeSamplerV76310;
+	private long _dbfzRuntimeTargetImportTraceV76310;
+
+	private static bool IsDbfzRuntimeSamplerEnabledV76310()
+	{
+		var setting = Environment.GetEnvironmentVariable("SHARPEMU_DBFZ_RUNTIME_RIP_SAMPLER");
+		if (!string.Equals(setting, "1", StringComparison.OrdinalIgnoreCase) &&
+			!string.Equals(setting, "true", StringComparison.OrdinalIgnoreCase) &&
+			!string.Equals(setting, "on", StringComparison.OrdinalIgnoreCase))
+		{
+			return false;
+		}
+
+		return string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_TITLE_ID"),
+			"PPSA09790",
+			StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static bool IsDbfzRuntimeSamplerTargetV76310(string name) =>
+		name is "RenderThread 1" or "RTHeartBeat 1" or "RHIThread" or "FAsyncLoadingThread";
+
+	private void EnsureDbfzRuntimeSamplerV76310()
+	{
+		if (!IsDbfzRuntimeSamplerEnabledV76310() ||
+			Interlocked.CompareExchange(ref _dbfzRuntimeSamplerStartedV76310, 1, 0) != 0)
+		{
+			return;
+		}
+
+		_dbfzRuntimeSamplerV76310 = new Thread(() =>
+		{
+			long sample = 0;
+			while (!_readyDispatchStop && !Volatile.Read(ref _forcedGuestExit))
+			{
+				Thread.Sleep(1000);
+				if (_readyDispatchStop || Volatile.Read(ref _forcedGuestExit))
+				{
+					break;
+				}
+
+				try
+				{
+					sample++;
+					var memoryContext = _cpuContext;
+					var entryTid = Volatile.Read(ref _entryHostThreadId);
+					LogDbfzRuntimeHostContextV76310(
+						sample,
+						"entry",
+						0,
+						"Running",
+						0,
+						"n/a",
+						0,
+						entryTid,
+						memoryContext);
+
+					foreach (var guestThread in SnapshotGuestThreads())
+					{
+						if (!IsDbfzRuntimeSamplerTargetV76310(guestThread.Name))
+						{
+							continue;
+						}
+
+						LogDbfzRuntimeHostContextV76310(
+							sample,
+							guestThread.Name,
+							guestThread.ThreadHandle,
+							guestThread.State.ToString(),
+							Interlocked.Read(ref guestThread.ImportCount),
+							Volatile.Read(ref guestThread.LastImportNid) ?? "none",
+							Volatile.Read(ref guestThread.LastReturnRip),
+							Volatile.Read(ref guestThread.HostThreadId),
+							memoryContext);
+					}
+				}
+				catch (Exception ex)
+				{
+					Console.Error.WriteLine(
+						$"[DBFZ-RUNTIME-SAMPLE][V76.3.10] sample_error={ex.GetType().Name} msg='{ex.Message}'");
+				}
+			}
+		})
+		{
+			IsBackground = true,
+			Name = "SharpEmu-DBFZ-RipSampler-V76310",
+		};
+		_dbfzRuntimeSamplerV76310.Start();
+		Console.Error.WriteLine(
+			"[DBFZ-RUNTIME-SAMPLE][V76.3.10] sampler_started=1 interval_ms=1000 " +
+			"targets=entry,RenderThread_1,RTHeartBeat_1,RHIThread,FAsyncLoadingThread scope=PPSA09790");
+	}
+
+	private void LogDbfzRuntimeHostContextV76310(
+		long sample,
+		string role,
+		ulong guestHandle,
+		string state,
+		long imports,
+		string lastNid,
+		ulong lastRet,
+		int hostThreadId,
+		CpuContext? memoryContext)
+	{
+		if (hostThreadId == 0)
+		{
+			Console.Error.WriteLine(
+				$"[DBFZ-RUNTIME-SAMPLE][V76.3.10] sample={sample} role='{role}' " +
+				$"guest=0x{guestHandle:X16} state={state} imports={imports} nid={lastNid} " +
+				$"last_ret=0x{lastRet:X16} host_tid=0 host_ctx=inactive");
+			return;
+		}
+
+		if (!TryCaptureHostThreadContext(hostThreadId, out var hostContext))
+		{
+			Console.Error.WriteLine(
+				$"[DBFZ-RUNTIME-SAMPLE][V76.3.10] sample={sample} role='{role}' " +
+				$"guest=0x{guestHandle:X16} state={state} imports={imports} nid={lastNid} " +
+				$"last_ret=0x{lastRet:X16} host_tid={hostThreadId} host_ctx=unavailable");
+			return;
+		}
+
+		var bytes = "unmapped";
+		var stack = "unmapped";
+		if (memoryContext is not null)
+		{
+			Span<byte> code = stackalloc byte[16];
+			if (memoryContext.Memory.TryRead(hostContext.Rip, code))
+			{
+				bytes = BitConverter.ToString(code.ToArray()).Replace("-", string.Empty);
+			}
+
+			if (memoryContext.TryReadUInt64(hostContext.Rsp, out var stack0) &&
+				memoryContext.TryReadUInt64(hostContext.Rsp + 8, out var stack1))
+			{
+				stack = $"0x{stack0:X16},0x{stack1:X16}";
+			}
+		}
+
+		Console.Error.WriteLine(
+			$"[DBFZ-RUNTIME-SAMPLE][V76.3.10] sample={sample} role='{role}' " +
+			$"guest=0x{guestHandle:X16} state={state} imports={imports} nid={lastNid} " +
+			$"last_ret=0x{lastRet:X16} host_tid={hostThreadId} host_rip=0x{hostContext.Rip:X16} " +
+			$"host_rsp=0x{hostContext.Rsp:X16} host_rbp=0x{hostContext.Rbp:X16} " +
+			$"host_rax=0x{hostContext.Rax:X16} host_rbx=0x{hostContext.Rbx:X16} " +
+			$"host_rcx=0x{hostContext.Rcx:X16} host_rdx=0x{hostContext.Rdx:X16} " +
+			$"guest_bytes={bytes} stack={stack}");
+	}
+
+	private static bool IsDbfzGettimeofdayLoopGuardBypassV7639(string nid, ulong returnRip)
+	{
+		if (nid != "n88vx3C5nW8" || returnRip != 0x0000000800BECAC7UL)
+		{
+			return false;
+		}
+
+		var setting = Environment.GetEnvironmentVariable(
+			"SHARPEMU_DBFZ_GETTIMEOFDAY_LOOP_GUARD_COMPAT");
+		if (string.Equals(setting, "0", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(setting, "false", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(setting, "off", StringComparison.OrdinalIgnoreCase))
+		{
+			return false;
+		}
+
+		return string.Equals(
+			Environment.GetEnvironmentVariable("SHARPEMU_TITLE_ID"),
+			"PPSA09790",
+			StringComparison.OrdinalIgnoreCase);
+	}
+
 	private bool ShouldForceGuestExitOnImportLoop(in ImportStubEntry entry, ulong returnRip, long dispatchIndex, ulong arg0, ulong arg1)
 	{
 		if (dispatchIndex < 1200)
@@ -2744,6 +3085,24 @@ public sealed partial class DirectExecutionBackend
 		{
 			return false;
 		}
+
+		// V76.3.9: title + NID + exact return-site scoped exemption. This is
+		// intentionally evaluated only on the existing 1/256 watchdog sample, so
+		// gettimeofday stays on the normal import hot path with no per-call env cost.
+		if (IsDbfzGettimeofdayLoopGuardBypassV7639(entry.Nid, returnRip))
+		{
+			EnsureDbfzRuntimeSamplerV76310();
+			ResetImportLoopPattern();
+			var n = Interlocked.Increment(ref _dbfzGettimeofdayLoopGuardBypassCountV7639);
+			if (n <= 16 || (n & (n - 1)) == 0)
+			{
+				Console.Error.WriteLine(
+					$"[DBFZ-IMPORT-LOOP][V76.3.9] bypass={n} nid={entry.Nid} " +
+					$"ret=0x{returnRip:X16} action=keep-guest-running scope=PPSA09790");
+			}
+			return false;
+		}
+
 		if (!HasRepeatingImportLoopPattern())
 		{
 			if (_importLoopPatternHits > 0)
